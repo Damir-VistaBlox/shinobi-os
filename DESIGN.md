@@ -105,7 +105,25 @@ dispatcher work resolves the engagements directory correctly to
 `~/.local/share/kaliai/engagements/` on an installed (non-checkout) system,
 exactly as designed.
 
-`kaliai` (the full desktop) hasn't been build-tested yet — that's next.
+**Update**: `kaliai` (the full desktop) has now been built and verified too —
+succeeded on the first build attempt with zero package or hook errors
+(Hyprland/waybar/wofi/SDDM/hyprlock/hypridle, the GitHub-fetched Nerd Font,
+the dotfiles hook, all confirmed present via a mounted-squashfs inspection;
+the `mcp<2` fix carried over correctly). The SDDM login-theme hook correctly
+took its fail-open path (logged "no SDDM Current= theme configured" instead
+of guessing) — expected, not a bug.
+
+The only real friction was infrastructure, not the build itself: the build
+VM's host (a loaded daily-driver desktop, other work running concurrently)
+didn't have reliable headroom for a 4GB VM, and the QEMU process was OOM-
+killed twice before dropping to a 3GB headless VM (no GTK window — SSH only,
+once key auth was set up) resolved it. Worth remembering if this needs
+rebuilding on a similarly-loaded machine.
+
+Not yet done: actually *booting* `kaliai` into a live Hyprland session
+(needs a GUI, unlike the squashfs-mount verification above) to confirm SDDM
+comes up, Hyprland starts, waybar renders with the Nerd Font, and the
+keybindings work.
 
 ## Omarchy subsystem inventory
 
