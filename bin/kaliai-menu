@@ -1,0 +1,103 @@
+#!/usr/bin/env bash
+# kaliai:summary=Open the wofi command palette
+# kaliai:args=[route]
+# kaliai:examples=kaliai menu
+#
+# Ported from Omarchy's omarchy-menu. Simpler than the original — Omarchy's
+# menu is a route in a persistent shell IPC daemon (toggle/summon/close); we
+# don't have that daemon, so this is a stateless script that re-execs itself
+# with a "route" argument for submenus, same idea without the always-on
+# process. Called bare (no route) from the keybinding; the other routes are
+# internal recursion targets, not meant to be typed by hand.
+set -euo pipefail
+
+picker() {
+  wofi --dmenu --prompt "$1" -i
+}
+
+notify() {
+  command -v notify-send >/dev/null 2>&1 && notify-send "kaliai" "$1" || echo "$1" >&2
+}
+
+route="${1:-root}"
+
+case "$route" in
+  root)
+    choice="$(
+      cat <<'EOF' | picker "kaliai"
+Launch agent
+Switch engagement
+New engagement
+Show active scope
+Set default agent
+Clipboard history
+Wi-Fi
+Bluetooth
+Theme
+Keybindings
+EOF
+    )"
+    case "$choice" in
+      "Launch agent") exec kaliai-menu agent-launch ;;
+      "Switch engagement") exec kaliai-menu engagement-switch ;;
+      "New engagement") exec kaliai-menu engagement-new ;;
+      "Show active scope") exec kaliai-menu scope-show ;;
+      "Set default agent") exec kaliai-agent --pick ;;
+      "Clipboard history") exec kaliai-menu clipboard ;;
+      "Wi-Fi") exec kaliai-network menu ;;
+      "Bluetooth") exec kaliai-bluetooth menu ;;
+      "Theme") exec kaliai-menu theme ;;
+      "Keybindings") exec kaliai-menu keybindings ;;
+      "") exit 0 ;;
+      *) notify "Unknown choice: $choice" ;;
+    esac
+    ;;
+
+  agent-launch)
+    exec kitty --title kaliai-agent -e kaliai-agent
+    ;;
+
+  engagement-switch)
+    name="$(kaliai-engagement list | sed -E 's/^\* //; s/^ +//; s/ \(active\)$//' | picker "engagement")"
+    [[ -z "$name" ]] && exit 0
+    kaliai-engagement use "$name"
+    notify "Active engagement: $name"
+    ;;
+
+  engagement-new)
+    name="$(printf '' | picker "new engagement name")"
+    [[ -z "$name" ]] && exit 0
+    kaliai-engagement new "$name"
+    notify "Created engagement: $name"
+    ;;
+
+  scope-show)
+    kaliai-scope show | picker "active scope" >/dev/null || true
+    ;;
+
+  clipboard)
+    if ! command -v cliphist >/dev/null 2>&1; then
+      notify "cliphist not installed"
+      exit 0
+    fi
+    sel="$(cliphist list | picker "clipboard")"
+    [[ -z "$sel" ]] && exit 0
+    cliphist decode <<<"$sel" | wl-copy
+    ;;
+
+  theme)
+    name="$(kaliai-theme list | picker "theme")"
+    [[ -z "$name" ]] && exit 0
+    kaliai-theme set "$name"
+    notify "Theme set: $name"
+    ;;
+
+  keybindings)
+    grep -E '^\s*bind' "$HOME/.config/hypr/hyprland.conf" 2>/dev/null | picker "keybindings" >/dev/null || true
+    ;;
+
+  *)
+    echo "kaliai-menu: unknown route '$route'" >&2
+    exit 1
+    ;;
+esac

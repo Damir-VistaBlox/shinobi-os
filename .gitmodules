@@ -1,0 +1,3 @@
+[submodule "distro/kali-live"]
+	path = distro/kali-live
+	url = https://gitlab.com/kalilinux/build-scripts/kali-live.git

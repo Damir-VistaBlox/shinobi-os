@@ -1,0 +1,8 @@
+{
+  "_comment": "Example MCP registration for Claude Code. Merge the 'mcpServers' entry below into your Claude Code MCP config (e.g. `claude mcp add-json kaliai-recon '{...}'` or the equivalent in .claude/settings.json). kaliai agent already exports KALIAI_ENGAGEMENT / KALIAI_ENGAGEMENT_DIR before launching the agent, so the server inherits them — no extra env config needed when launched via `kaliai agent`.",
+  "mcpServers": {
+    "kaliai-recon": {
+      "command": "kaliai-recon"
+    }
+  }
+}

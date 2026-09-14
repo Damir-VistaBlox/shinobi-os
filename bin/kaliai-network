@@ -1,0 +1,61 @@
+#!/usr/bin/env bash
+# kaliai:summary=Wi-Fi status/toggle/connect via nmcli
+# kaliai:args=<status|toggle|menu>
+# kaliai:examples=kaliai network menu | kaliai network toggle
+#
+# Ported from Omarchy's omarchy-network-*.
+set -euo pipefail
+
+usage() {
+  cat <<'USAGE'
+Usage: kaliai-network <status|toggle|menu>
+
+  status   Print the currently connected SSID, if any
+  toggle   Turn wifi radio on/off
+  menu     wofi picker: scan, pick an SSID, connect (prompts for password
+           if it's not a saved connection)
+USAGE
+}
+
+notify() {
+  command -v notify-send >/dev/null 2>&1 && notify-send "kaliai" "$1" || echo "$1" >&2
+}
+
+require_nmcli() {
+  command -v nmcli >/dev/null 2>&1 || { echo "kaliai-network: nmcli not installed" >&2; exit 1; }
+}
+
+action="${1:-status}"
+require_nmcli
+
+case "$action" in
+  status)
+    nmcli -t -f active,ssid dev wifi 2>/dev/null | awk -F: '$1=="yes"{print $2}'
+    ;;
+
+  toggle)
+    if [[ "$(nmcli radio wifi)" == "enabled" ]]; then
+      nmcli radio wifi off
+      notify "Wi-Fi off"
+    else
+      nmcli radio wifi on
+      notify "Wi-Fi on"
+    fi
+    ;;
+
+  menu)
+    command -v wofi >/dev/null 2>&1 || { echo "kaliai-network: wofi not installed" >&2; exit 1; }
+    nmcli device wifi rescan >/dev/null 2>&1 || true
+    ssid="$(nmcli -t -f ssid dev wifi 2>/dev/null | sed '/^$/d' | sort -u | wofi --dmenu --prompt "wifi" -i)"
+    [[ -z "$ssid" ]] && exit 0
+    if nmcli -t -f name connection show 2>/dev/null | grep -qxF "$ssid"; then
+      nmcli connection up "$ssid" && notify "Connected: $ssid"
+    else
+      pass="$(wofi --dmenu --prompt "password for $ssid" --password 2>/dev/null || true)"
+      nmcli device wifi connect "$ssid" password "$pass" && notify "Connected: $ssid"
+    fi
+    ;;
+
+  -h | --help | help) usage ;;
+  *) usage >&2; exit 1 ;;
+esac

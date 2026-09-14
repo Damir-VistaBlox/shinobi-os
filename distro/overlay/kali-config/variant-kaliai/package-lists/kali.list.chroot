@@ -1,0 +1,63 @@
+## Live image with a lean Hyprland (Wayland) desktop + KaliAI agent tooling
+##
+## Built via: distro/build.sh --variant kaliai
+##
+## Package availability confirmed against pkg.kali.org for hyprland (0.56.2),
+## hypridle (0.1.8), hyprlock (0.9.6) in kali-rolling as of 2026-09. The rest
+## of this list has NOT been build-tested — verify with `apt-cache policy`
+## in a real Kali chroot/VM before a production build.
+
+## Live images always want these
+kali-linux-core
+kali-desktop-live
+
+## Graphical desktop — Hyprland (Wayland compositor). No kali-desktop-hyprland
+## metapackage exists upstream (unlike xfce/gnome/kde/i3/...), so the stack
+## is listed explicitly instead of pulling in one meta-package.
+hyprland
+xdg-desktop-portal-hyprland
+waybar
+wofi
+hypridle
+hyprlock
+lxqt-policykit
+swaybg
+grim
+slurp
+wl-clipboard
+cliphist
+mako-notifier
+libnotify-bin
+kitty
+sddm
+pipewire
+wireplumber
+pipewire-pulse
+bluez
+network-manager
+
+## Fonts — a Nerd Font is fetched directly from upstream by
+## hooks/live/0030-fonts.chroot (see that file for why); these are just its
+## build-time dependencies.
+curl
+unzip
+fontconfig
+
+## kaliai-hypr-toggle (gaps/opacity toggles) parses `hyprctl -j` output.
+jq
+
+## Metapackages
+##   You can customize the set of Kali metapackages (groups of tools) to install
+##   For the complete list see: https://www.kali.org/tools/kali-meta/
+kali-linux-default
+
+## KaliAI runtime deps — the kaliai CLI itself is installed by
+## variant-kaliai/hooks/live/0020-kaliai-tooling.chroot, not apt.
+python3-venv
+python3-pip
+rsync
+
+## Extra Kali packages/tools/applications
+##   For the complete list see: https://www.kali.org/tools/
+##                              https://pkg.kali.org/
+#<package>

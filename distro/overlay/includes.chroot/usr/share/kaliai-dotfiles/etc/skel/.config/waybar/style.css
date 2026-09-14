@@ -1,0 +1,31 @@
+/* kaliai-theme set <name> repoints colors.css; this file only ever
+   references the @define-color names, never a literal color. */
+@import "colors.css";
+
+* {
+  font-family: "JetBrainsMono Nerd Font Mono";
+  font-size: 13px;
+}
+
+window#waybar {
+  background: @bg;
+  color: @fg;
+}
+
+#workspaces button {
+  padding: 0 8px;
+  color: @fg;
+}
+
+#workspaces button.active {
+  color: @accent;
+}
+
+#custom-kaliai-engagement {
+  padding: 0 10px;
+  color: @good;
+}
+
+#clock, #network, #pulseaudio, #battery, #tray {
+  padding: 0 8px;
+}

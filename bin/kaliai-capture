@@ -1,0 +1,51 @@
+#!/usr/bin/env bash
+# kaliai:summary=Screenshot into the active engagement's evidence dir
+# kaliai:args=<full|region>
+# kaliai:examples=kaliai capture full | kaliai capture region
+#
+# Screenshots that land in the active engagement's evidence trail — this is
+# the KaliAI-specific twist on Omarchy's generic
+# omarchy-capture-screenshot/region: a screenshot taken mid-engagement is
+# evidence, so it's saved under engagements/<name>/evidence/, not ~/Pictures,
+# whenever an engagement is active.
+set -euo pipefail
+source "$(dirname -- "$(readlink -f -- "${BASH_SOURCE[0]}")")/_kaliai-common.sh"
+
+ENGAGEMENTS_DIR="$(kaliai_engagements_dir)"
+
+usage() {
+  cat <<'USAGE'
+Usage: kaliai-capture <full|region>
+
+Saves a PNG into the active engagement's evidence/ dir (or ~/Pictures/kaliai
+if no engagement is active) and copies it to the clipboard.
+USAGE
+}
+
+notify() {
+  command -v notify-send >/dev/null 2>&1 && notify-send "kaliai" "$1" || echo "$1" >&2
+}
+
+mode="${1:-}"
+[[ "$mode" != "full" && "$mode" != "region" ]] && { usage >&2; exit 1; }
+
+engagement="$(kaliai_current_engagement)"
+if [[ -n "$engagement" && -d "$ENGAGEMENTS_DIR/$engagement" ]]; then
+  out_dir="$ENGAGEMENTS_DIR/$engagement/evidence"
+else
+  out_dir="$HOME/Pictures/kaliai"
+fi
+mkdir -p "$out_dir"
+
+out_file="$out_dir/$(date +%Y%m%d-%H%M%S).png"
+
+if [[ "$mode" == "full" ]]; then
+  grim "$out_file"
+else
+  region="$(slurp)" || exit 0
+  grim -g "$region" "$out_file"
+fi
+
+command -v wl-copy >/dev/null 2>&1 && wl-copy <"$out_file"
+notify "Saved: $out_file"
+echo "$out_file"

@@ -1,0 +1,102 @@
+#!/usr/bin/env bash
+# kaliai:summary=Launch the AI agent with the active engagement's MCP config
+# kaliai:args=[--pick] [prompt <text...>]
+# kaliai:examples=kaliai agent | kaliai agent --pick | kaliai agent prompt "review this scope"
+set -euo pipefail
+source "$(dirname -- "$(readlink -f -- "${BASH_SOURCE[0]}")")/_kaliai-common.sh"
+
+ENGAGEMENTS_DIR="$(kaliai_engagements_dir)"
+
+usage() {
+  cat <<'USAGE'
+Usage: kaliai-agent [--pick] [prompt <text...>]
+
+  --pick          Choose and save a default agent first (wofi, or a terminal
+                   menu with no display), then launch it
+  prompt <text>   Launch the agent with an initial prompt
+
+Default agent resolution order: $KALIAI_AGENT_CMD env var, then
+`kaliai-default-agent` (see that command), then "claude".
+USAGE
+}
+
+pick_agent() {
+  local candidates="claude
+codex
+gemini
+aider
+opencode"
+  local choice
+  if [[ -n "${WAYLAND_DISPLAY:-}" ]] && command -v wofi >/dev/null 2>&1; then
+    choice="$(printf '%s\n' "$candidates" | wofi --dmenu --prompt "default agent" -i)"
+  else
+    echo "Pick a default agent:" >&2
+    select choice in $candidates "other (type it)"; do
+      if [[ "$choice" == "other (type it)" ]]; then
+        read -r -p "Agent command: " choice
+      fi
+      break
+    done
+  fi
+  [[ -n "$choice" ]] && echo "$choice"
+}
+
+resolve_agent() {
+  if [[ -n "${KALIAI_AGENT_CMD:-}" ]]; then
+    echo "$KALIAI_AGENT_CMD"
+    return
+  fi
+  local configured
+  configured="$(kaliai-default-agent 2>/dev/null || true)"
+  echo "${configured:-claude}"
+}
+
+case "${1:-}" in
+  -h | --help | help) usage; exit 0 ;;
+esac
+
+pick=false
+prompt=""
+while (($#)); do
+  case "$1" in
+    --pick) pick=true; shift ;;
+    prompt)
+      shift
+      prompt="$*"
+      break
+      ;;
+    *)
+      echo "kaliai-agent: unknown argument '$1'" >&2
+      exit 1
+      ;;
+  esac
+done
+
+name="$(kaliai_current_engagement)"
+if [[ -z "$name" ]]; then
+  echo "kaliai-agent: no active engagement. Run 'kaliai-engagement new <name>' first." >&2
+  exit 1
+fi
+dir="$ENGAGEMENTS_DIR/$name"
+
+if [[ "$pick" == "true" ]]; then
+  agent="$(pick_agent)"
+  [[ -z "$agent" ]] && { echo "kaliai-agent: no agent picked" >&2; exit 1; }
+  kaliai-default-agent "$agent"
+else
+  agent="$(resolve_agent)"
+fi
+
+if ! command -v "$agent" >/dev/null 2>&1; then
+  echo "kaliai-agent: agent command '$agent' not found. Run 'kaliai agent --pick', or set KALIAI_AGENT_CMD." >&2
+  exit 1
+fi
+
+echo "Launching '$agent' for engagement '$name' (scope: $dir/scope.yaml)"
+export KALIAI_ENGAGEMENT="$name"
+export KALIAI_ENGAGEMENT_DIR="$dir"
+cd "$dir"
+if [[ -n "$prompt" ]]; then
+  exec "$agent" "$prompt"
+fi
+exec "$agent"

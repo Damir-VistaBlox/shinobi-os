@@ -1,0 +1,15 @@
+# Engagement data is client-confidential — never committed.
+engagements/*/
+!engagements/.gitkeep
+
+__pycache__/
+*.pyc
+.venv/
+*.egg-info/
+
+# Generated at build time by distro/build.sh (copied from bin/ and
+# mcp-servers/) — not a second source of truth.
+distro/overlay/includes.chroot/opt/kaliai/
+
+# distro/kali-live/ is a submodule with its own .gitignore covering its
+# build output (images/, chroot/, cache/, ...) — nothing to add here.

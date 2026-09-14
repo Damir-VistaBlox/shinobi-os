@@ -1,0 +1,44 @@
+#!/usr/bin/env bash
+# kaliai:summary=Lock/logout/suspend/reboot/shutdown
+# kaliai:args=<menu|lock|logout|suspend|reboot|shutdown>
+# kaliai:examples=kaliai power menu | kaliai power lock
+#
+# Session/power actions, ported from Omarchy's
+# omarchy-system-{lock,logout,reboot,shutdown} family. `reboot`/`shutdown`
+# call systemctl directly — whether that needs a password depends on the
+# install's polkit rules; this doesn't ship one.
+set -euo pipefail
+
+usage() {
+  cat <<'USAGE'
+Usage: kaliai-power <menu|lock|logout|suspend|reboot|shutdown>
+
+  menu       wofi picker for the actions below
+  lock       hyprlock
+  logout     exit the Hyprland session
+  suspend    systemctl suspend
+  reboot     systemctl reboot
+  shutdown   systemctl poweroff
+USAGE
+}
+
+action="${1:-menu}"
+
+case "$action" in
+  menu)
+    choice="$(printf 'Lock\nLogout\nSuspend\nReboot\nShutdown\n' | wofi --dmenu --prompt "power" -i)"
+    [[ -z "$choice" ]] && exit 0
+    exec kaliai-power "$(tr '[:upper:]' '[:lower:]' <<<"$choice")"
+    ;;
+  lock) exec hyprlock ;;
+  logout) exec hyprctl dispatch exit ;;
+  suspend) exec systemctl suspend ;;
+  reboot) exec systemctl reboot ;;
+  shutdown) exec systemctl poweroff ;;
+  -h | --help | help) usage ;;
+  *)
+    echo "kaliai-power: unknown action '$action'" >&2
+    usage >&2
+    exit 1
+    ;;
+esac

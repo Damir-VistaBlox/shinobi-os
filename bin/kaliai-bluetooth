@@ -1,0 +1,55 @@
+#!/usr/bin/env bash
+# kaliai:summary=Bluetooth power toggle + device connect via bluetoothctl
+# kaliai:args=<status|toggle|menu>
+# kaliai:examples=kaliai bluetooth menu | kaliai bluetooth toggle
+#
+# Ported from Omarchy's omarchy-bluetooth-*.
+set -euo pipefail
+
+usage() {
+  cat <<'USAGE'
+Usage: kaliai-bluetooth <status|toggle|menu>
+USAGE
+}
+
+notify() {
+  command -v notify-send >/dev/null 2>&1 && notify-send "kaliai" "$1" || echo "$1" >&2
+}
+
+require_bluetoothctl() {
+  command -v bluetoothctl >/dev/null 2>&1 || { echo "kaliai-bluetooth: bluetoothctl not installed" >&2; exit 1; }
+}
+
+powered() {
+  bluetoothctl show | awk -F': ' '/Powered/{print $2}'
+}
+
+action="${1:-status}"
+require_bluetoothctl
+
+case "$action" in
+  status) powered ;;
+
+  toggle)
+    if [[ "$(powered)" == "yes" ]]; then
+      bluetoothctl power off
+      notify "Bluetooth off"
+    else
+      bluetoothctl power on
+      notify "Bluetooth on"
+    fi
+    ;;
+
+  menu)
+    command -v wofi >/dev/null 2>&1 || { echo "kaliai-bluetooth: wofi not installed" >&2; exit 1; }
+    choice="$(bluetoothctl devices | sed -E 's/^Device ([0-9A-Fa-f:]+) (.*)$/\2\t\1/' | wofi --dmenu --prompt "bluetooth" -i)"
+    [[ -z "$choice" ]] && exit 0
+    mac="${choice##*$'\t'}"
+    name="${choice%%$'\t'*}"
+    [[ -z "$mac" ]] && exit 0
+    bluetoothctl connect "$mac" && notify "Connected: $name"
+    ;;
+
+  -h | --help | help) usage ;;
+  *) usage >&2; exit 1 ;;
+esac

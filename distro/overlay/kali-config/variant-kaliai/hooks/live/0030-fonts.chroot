@@ -1,0 +1,18 @@
+#!/bin/sh
+# Installs a Nerd Font (patched glyphs waybar/wofi icons need — Debian's
+# fonts-jetbrains-mono package is the *unpatched* upstream font, no icon
+# glyphs). Fetched directly from upstream since Kali/Debian doesn't package
+# a pre-patched Nerd Font under a reliable name. Pinned version + verified
+# the asset URL resolves as of 2026-09; bump both together if it 404s later.
+set -e
+
+NERD_FONT_VERSION="v3.5.1"
+NERD_FONT_NAME="JetBrainsMono"
+DEST="/usr/share/fonts/kaliai-nerd-font"
+
+mkdir -p "$DEST"
+curl -fsSL -o /tmp/nerd-font.zip \
+  "https://github.com/ryanoasis/nerd-fonts/releases/download/${NERD_FONT_VERSION}/${NERD_FONT_NAME}.zip"
+unzip -o -q /tmp/nerd-font.zip -d "$DEST" '*.ttf'
+rm -f /tmp/nerd-font.zip
+fc-cache -f "$DEST"

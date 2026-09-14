@@ -1,0 +1,19 @@
+#!/bin/sh
+# Installs the kaliai CLI (all bin/kaliai* scripts), themes, and the
+# kaliai-recon MCP server that distro/build.sh staged into /opt/kaliai (see
+# that script — /opt/kaliai/{bin,mcp-servers,themes} are a generated copy of
+# the repo's top-level bin/, mcp-servers/, themes/, not duplicated source).
+set -e
+
+chmod +x /opt/kaliai/bin/kaliai*
+for script in /opt/kaliai/bin/kaliai*; do
+  ln -sf "$script" "/usr/local/bin/$(basename "$script")"
+done
+chmod +x /usr/local/bin/kaliai-waybar-engagement
+
+mkdir -p /usr/share/kaliai
+cp -r /opt/kaliai/themes /usr/share/kaliai/themes
+
+python3 -m venv /opt/kaliai/venv
+/opt/kaliai/venv/bin/pip install --no-cache-dir --quiet /opt/kaliai/mcp-servers/kaliai-recon
+ln -sf /opt/kaliai/venv/bin/kaliai-recon /usr/local/bin/kaliai-recon
