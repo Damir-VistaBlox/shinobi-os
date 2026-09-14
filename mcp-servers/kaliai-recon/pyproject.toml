@@ -4,7 +4,12 @@ version = "0.1.0"
 description = "MCP server exposing scope-gated, audit-logged Kali recon tools to an AI agent"
 requires-python = ">=3.10"
 dependencies = [
-    "mcp>=1.2.0",
+    # mcp 2.x renamed FastMCP to MCPServer and changed the import path
+    # (server.py uses `from mcp.server.fastmcp import FastMCP`, the v1 API).
+    # Caught by actually booting a build — an unpinned >= install quietly
+    # pulled 2.x and broke kaliai-recon at runtime. Migrating to the v2
+    # MCPServer API is a reasonable follow-up, not done here.
+    "mcp>=1.2.0,<2",
     "pyyaml>=6.0",
 ]
 

@@ -93,8 +93,18 @@ Kali live build is commonly 15-30GB of scratch space and takes a while.
 `kali-live/build.sh` checks for a Debian-based OS and refuses to run
 otherwise.
 
+Two variants, picked via `KALIAI_VARIANT` (default `kaliai`, the full
+desktop). **Build `kaliai-min` first** — console only, no desktop, far less
+that can go wrong — before attempting `kaliai`, since neither has actually
+been build-tested yet (see DESIGN.md's "staged build-out").
+
 ```
 git submodule update --init distro/kali-live
+
+# Stage B: console only — proves kaliai CLI + kaliai-recon bake correctly
+KALIAI_VARIANT=kaliai-min ./distro/build.sh --verbose
+
+# Stage C: full Hyprland desktop, once the above works
 ./distro/build.sh --verbose
 ```
 

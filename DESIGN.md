@@ -74,6 +74,39 @@ config also surfaces the active engagement name directly in the bar, reading
 the same state file `kaliai engagement use` writes — so it's always visible
 which `scope.yaml` is currently gating tool calls.
 
+### Staged build-out, not one big untested build
+
+`distro/` has two variants, picked via `KALIAI_VARIANT`:
+
+- **`kaliai-min`** — console only, no desktop at all. Just
+  `kali-linux-core` + `kali-linux-default` + the kaliai tooling hook. Build
+  this first: it isolates "does the kaliai CLI + kaliai-recon MCP server
+  bake correctly into a real Kali chroot" from every desktop-specific risk
+  (Hyprland/waybar/wofi package availability, a font fetched from GitHub at
+  build time, SDDM theme detection) — and a GUI was never required for
+  KaliAI's actual point (safe, scope-gated tool access), so this variant is
+  arguably a legitimate end state on its own, not just a stepping stone.
+- **`kaliai`** — the full Hyprland desktop, built once `kaliai-min` is
+  confirmed working.
+
+This ordering paid off immediately: the first real `kaliai-min` build (in a
+QEMU/KVM VM, Kali's own pre-built QEMU image as the build host) succeeded on
+the first attempt, but booting the resulting ISO surfaced a real bug —
+`pyproject.toml` declared `mcp>=1.2.0` with no upper bound, so pip installed
+`mcp` 2.x, which renamed `FastMCP` to `MCPServer` and broke `kaliai-recon` at
+import time. Fixed by pinning `mcp>=1.2.0,<2`. Verified end-to-end on the
+booted image afterward: `kaliai help` lists all commands correctly, an
+in-scope `nmap_scan` runs and logs `"verdict": "allowed"`, an out-of-scope
+target is refused *before* nmap runs and logs `"verdict": "refused"` — the
+core safety mechanism this whole project exists for, confirmed working on a
+real built-and-booted system, not just the earlier host-side unit tests.
+Also confirmed on that same real system: the symlink-safety fix from the CLI
+dispatcher work resolves the engagements directory correctly to
+`~/.local/share/kaliai/engagements/` on an installed (non-checkout) system,
+exactly as designed.
+
+`kaliai` (the full desktop) hasn't been build-tested yet — that's next.
+
 ## Omarchy subsystem inventory
 
 Omarchy is ~15 distinct subsystems, not just "Hyprland + an agent" —
