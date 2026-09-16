@@ -54,11 +54,6 @@ fontconfig
 jq
 btop
 
-## Metapackages
-##   You can customize the set of Kali metapackages (groups of tools) to install
-##   For the complete list see: https://www.kali.org/tools/kali-meta/
-kali-linux-default
-
 ## Shinobi OS runtime deps — the shinobi CLI itself is installed by
 ## variant-shinobi/hooks/live/0020-shinobi-tooling.chroot, not apt.
 python3-venv
