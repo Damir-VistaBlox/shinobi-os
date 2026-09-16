@@ -13,11 +13,10 @@
 
 ## Live images always want these
 kali-linux-core
-kali-desktop-live
 
 ## Graphical desktop — Hyprland (Wayland compositor). No kali-desktop-hyprland
 ## metapackage exists upstream (unlike xfce/gnome/kde/i3/...), so the stack
-## is listed explicitly instead of pulling in one meta-package.
+## is listed explicitly instead of pulling in Kali's desktop metapackage.
 hyprland
 xdg-desktop-portal
 xdg-desktop-portal-hyprland
