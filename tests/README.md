@@ -13,8 +13,9 @@ Run the complete suite against a built ISO:
 ```
 
 The suite checks package-profile policy, shell syntax, systemd unit syntax,
-ISO El Torito metadata and boot files, then boots the image through both BIOS
-and UEFI in a disposable QEMU snapshot. QEMU boot logs are written to
+ISO El Torito metadata and boot files, extracts the live SquashFS to verify
+installed files, package policy, and compression, then boots the image through
+both BIOS and UEFI in a disposable QEMU snapshot. QEMU boot logs are written to
 `qemu-test-logs/` (the directory is intentionally suitable for CI artifacts).
 
 Host requirements for the full suite are `xorriso`, `qemu-system-x86_64`,

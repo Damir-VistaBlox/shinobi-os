@@ -7,6 +7,7 @@ cd "$ROOT"
 
 ./tests/test-static.sh
 ./tests/test-iso-structure.sh "$ISO"
+./tests/test-image-content.sh "$ISO"
 ./tests/test-qemu-boot.sh "$ISO" bios
 ./tests/test-qemu-boot.sh "$ISO" uefi
 echo "Shinobi OS automated test suite: PASS"

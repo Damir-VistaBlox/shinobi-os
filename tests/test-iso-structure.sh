@@ -8,7 +8,9 @@ command -v xorriso >/dev/null 2>&1 || { echo "iso-test: xorriso is required" >&2
 
 echo "== ISO metadata =="
 report="$(mktemp)"
-trap 'rm -f "$report"' EXIT
+listing=""
+cleanup() { rm -f "$report" "${listing:-}"; }
+trap cleanup EXIT
 xorriso -indev "$ISO" -report_el_torito plain | tee "$report"
 
 grep -Eqi 'El Torito|Boot catalog|boot image' "$report" || {
@@ -18,7 +20,6 @@ grep -Eqi 'El Torito|Boot catalog|boot image' "$report" || {
 
 echo "== ISO boot files =="
 listing="$(mktemp)"
-trap 'rm -f "$listing"' EXIT
 xorriso -indev "$ISO" -find / -type f -print >"$listing"
 grep -Eqi '/(isolinux|syslinux)/.*(isolinux|menu|ldlinux)|/EFI/BOOT/.*(BOOT|grub)' "$listing" \
   || { echo "iso-test: expected BIOS/UEFI boot files not found" >&2; exit 1; }
