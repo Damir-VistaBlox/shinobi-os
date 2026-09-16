@@ -52,6 +52,7 @@ fontconfig
 
 ## shinobi-hypr-toggle (gaps/opacity toggles) parses `hyprctl -j` output.
 jq
+btop
 
 ## Metapackages
 ##   You can customize the set of Kali metapackages (groups of tools) to install
