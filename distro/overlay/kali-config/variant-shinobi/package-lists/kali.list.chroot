@@ -1,0 +1,72 @@
+## Live image with a lean Hyprland (Wayland) desktop + Shinobi OS agent tooling
+##
+## Built via: distro/build.sh --variant shinobi
+##
+## The pre-Quickshell desktop baseline built successfully on 2026-09-14. A
+## fresh full-image build is required before releasing this revised package
+## set. One real bug found and fixed by that build: lxqt-policykit has a hard
+## `Depends: lxqt-session`, not just a
+## recommendation, which registered a second, competing session with SDDM
+## and made it possible to end up in an LXQt session instead of Hyprland.
+## Replaced with hyprpolkitagent — a Hyprland-native polkit agent with no
+## session dependency at all (just Qt6/QML libs).
+
+## Live images always want these
+kali-linux-core
+kali-desktop-live
+
+## Graphical desktop — Hyprland (Wayland compositor). No kali-desktop-hyprland
+## metapackage exists upstream (unlike xfce/gnome/kde/i3/...), so the stack
+## is listed explicitly instead of pulling in one meta-package.
+hyprland
+xdg-desktop-portal
+xdg-desktop-portal-hyprland
+xdg-desktop-portal-gtk
+quickshell
+wofi
+hypridle
+hyprlock
+hyprpolkitagent
+swaybg
+grim
+slurp
+wl-clipboard
+cliphist
+mako-notifier
+libnotify-bin
+kitty
+sddm
+plymouth
+pipewire
+wireplumber
+pipewire-pulse
+bluez
+network-manager
+
+## Fonts — a Nerd Font is fetched directly from upstream by
+## hooks/live/0030-fonts.chroot (see that file for why); these are just its
+## build-time dependencies.
+curl
+unzip
+fontconfig
+
+## shinobi-hypr-toggle (gaps/opacity toggles) parses `hyprctl -j` output.
+jq
+
+## Metapackages
+##   You can customize the set of Kali metapackages (groups of tools) to install
+##   For the complete list see: https://www.kali.org/tools/kali-meta/
+kali-linux-default
+
+## Shinobi OS runtime deps — the shinobi CLI itself is installed by
+## variant-shinobi/hooks/live/0020-shinobi-tooling.chroot, not apt.
+python3-venv
+python3-pip
+rsync
+dbus-user-session
+
+
+## Extra Kali packages/tools/applications
+##   For the complete list see: https://www.kali.org/tools/
+##                              https://pkg.kali.org/
+#<package>

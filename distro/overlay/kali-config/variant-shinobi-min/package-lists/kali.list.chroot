@@ -1,0 +1,23 @@
+## Console-only Shinobi OS build: no desktop at all. This is Stage B of the
+## staged build-out (see DESIGN.md) — proves the shinobi CLI + shinobi-recon
+## MCP server bake correctly into a real Kali image before layering the
+## Hyprland desktop (variant-shinobi) back on top and debugging that
+## separately. `shinobi agent` and shinobi-recon don't need a GUI to work.
+##
+## Built via: distro/build.sh --variant shinobi-min
+
+## Live images always want this (kali-desktop-live is the desktop-specific
+## one and is deliberately NOT included here — confirmed via Kali's own
+## variant-minimal, which ships no package list at all, that a desktop meta-
+## package isn't structurally required for a bootable live image).
+kali-linux-core
+
+## Metapackages
+##   For the complete list see: https://www.kali.org/tools/kali-meta/
+kali-linux-default
+
+## Shinobi OS runtime deps — the shinobi CLI itself is installed by
+## variant-shinobi-min/hooks/live/0020-shinobi-tooling.chroot, not apt.
+python3-venv
+python3-pip
+rsync

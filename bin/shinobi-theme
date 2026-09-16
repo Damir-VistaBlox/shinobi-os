@@ -1,0 +1,84 @@
+#!/usr/bin/env bash
+# shinobi:summary=Switch theme across Hyprland/Quickshell/wofi/kitty
+# shinobi:args=<list|current|set <name>>
+# shinobi:examples=shinobi theme list | shinobi theme set matrix
+#
+# Ported from Omarchy's omarchy-theme-set family — scoped down to the small
+# set of apps this repo actually configures, not Omarchy's full per-app
+# catalog (browser, GNOME, VSCode, keyboard RGB, ...).
+#
+# Mechanism: each app's config sources/imports a fixed-path colors file
+# (~/.config/<app>/colors.{conf,css}); `set` just repoints those symlinks at
+# the chosen theme directory and nudges running apps to pick it up.
+set -euo pipefail
+
+THEMES_DIR="${SHINOBI_THEMES_DIR:-/usr/share/shinobi/themes}"
+CURRENT_FILE="$HOME/.config/shinobi/theme"
+
+usage() {
+  cat <<'USAGE'
+Usage: shinobi-theme <list|current|set <name>>
+
+  list          List available themes
+  current       Print the active theme name
+  set <name>    Switch to <name> and reload Quickshell/hyprland
+USAGE
+}
+
+cmd_list() {
+  if [[ ! -d "$THEMES_DIR" ]]; then
+    echo "shinobi-theme: no themes dir at $THEMES_DIR" >&2
+    exit 1
+  fi
+  for dir in "$THEMES_DIR"/*/; do
+    [[ -d "$dir" ]] && basename "$dir"
+  done
+}
+
+cmd_current() {
+  [[ -f "$CURRENT_FILE" ]] && cat "$CURRENT_FILE" || true
+}
+
+cmd_set() {
+  local name="${1:?usage: shinobi-theme set <name>}"
+  local theme_dir="$THEMES_DIR/$name"
+  if [[ ! -d "$theme_dir" ]]; then
+    echo "shinobi-theme: no such theme '$name' (looked in $theme_dir)" >&2
+    echo "Available: $(cmd_list | tr '\n' ' ')" >&2
+    exit 1
+  fi
+
+  mkdir -p "$HOME/.config/hypr" "$HOME/.config/quickshell" "$HOME/.config/wofi" "$HOME/.config/kitty" "$(dirname "$CURRENT_FILE")"
+  ln -sfn "$theme_dir/hypr.conf" "$HOME/.config/hypr/colors.conf"
+  ln -sfn "$theme_dir/quickshell.qml" "$HOME/.config/quickshell/Theme.qml"
+  ln -sfn "$theme_dir/wofi.css" "$HOME/.config/wofi/colors.css"
+  ln -sfn "$theme_dir/kitty.conf" "$HOME/.config/kitty/colors.conf"
+  echo "$name" >"$CURRENT_FILE"
+
+  if command -v hyprctl >/dev/null 2>&1 && [[ -n "${HYPRLAND_INSTANCE_SIGNATURE:-}" ]]; then
+    hyprctl reload >/dev/null 2>&1 || true
+  fi
+  if command -v systemctl >/dev/null 2>&1 && [[ -n "${WAYLAND_DISPLAY:-}" ]]; then
+    systemctl --user restart shinobi-shell.service >/dev/null 2>&1 || true
+  fi
+
+  echo "Theme set to: $name (new kitty windows pick it up; existing ones don't hot-reload)"
+}
+
+main() {
+  local cmd="${1:-help}"
+  shift || true
+  case "$cmd" in
+    list) cmd_list ;;
+    current) cmd_current ;;
+    set) cmd_set "$@" ;;
+    help | -h | --help) usage ;;
+    *)
+      echo "shinobi-theme: unknown command '$cmd'" >&2
+      usage >&2
+      exit 1
+      ;;
+  esac
+}
+
+main "$@"

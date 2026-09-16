@@ -9,7 +9,16 @@ __pycache__/
 
 # Generated at build time by distro/build.sh (copied from bin/ and
 # mcp-servers/) — not a second source of truth.
-distro/overlay/includes.chroot/opt/kaliai/
+distro/overlay/includes.chroot/opt/shinobi/
+
+# Local QEMU base images, build overlays, and checksums.
+.vm/
+
+# Release/build artifacts are generated locally and published separately.
+*.iso
+*.img
+*.qcow2
+*.log
 
 # distro/kali-live/ is a submodule with its own .gitignore covering its
 # build output (images/, chroot/, cache/, ...) — nothing to add here.

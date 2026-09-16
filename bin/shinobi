@@ -1,0 +1,149 @@
+#!/usr/bin/env bash
+# shinobi: unified CLI dispatcher, ported from Omarchy's `omarchy` entrypoint.
+# Every shinobi-* script next to this one is auto-discovered and routed as
+# `shinobi <group> [<name>] [args...]`, derived from its filename (the part
+# after `shinobi-`, split on the first `-`) and documented via the same
+# leading-comment convention Omarchy uses — `# shinobi:summary=`, `:args=`,
+# `:examples=`, `:hidden=` — instead of a hardcoded command table. Adding
+# bin/shinobi-foo-bar makes `shinobi foo bar` work with no change to this file.
+#
+# Scoped down from Omarchy's ~1100-line dispatcher (built for ~250 commands
+# across ~80 groups): no --json output, no alias system, no requires-sudo
+# tracking, no metadata-error validation. At shinobi's scale (about a dozen
+# commands) longest-prefix routing plus a generated help listing is the
+# whole job.
+#
+# This file has no logic of its own beyond routing — same as `omarchy`,
+# real behavior lives in the leaf shinobi-* scripts, each independently
+# callable directly too (hyprland.conf's keybindings do exactly that, to
+# skip the routing step in a hot path).
+set -euo pipefail
+
+SHINOBI_BIN_DIR="$(cd -- "$(dirname -- "$(readlink -f -- "${BASH_SOURCE[0]}")")" && pwd)"
+
+declare -A ROUTE_TO_BINARY
+declare -A ROUTE_TO_SUMMARY
+declare -A ROUTE_TO_USAGE
+declare -A ROUTE_TO_EXAMPLES
+declare -A ROUTE_TO_HIDDEN
+ROUTES_IN_ORDER=()
+
+parse_command() {
+  local file="$1"
+  local binary
+  binary="$(basename -- "$file")"
+  local summary="" args="" examples="" hidden="false"
+  local line line_count=0
+
+  while IFS= read -r line && ((line_count < 40)); do
+    line_count=$((line_count + 1))
+    if ((line_count == 1)) && [[ $line == "#!"* ]]; then continue; fi
+    [[ $line =~ ^[[:space:]]*$ ]] && continue
+    [[ ! $line =~ ^[[:space:]]*# ]] && break
+
+    if [[ $line =~ ^[[:space:]]*#[[:space:]]*shinobi:([[:alnum:]_-]+)=(.*)$ ]]; then
+      case "${BASH_REMATCH[1]}" in
+        summary) summary="${BASH_REMATCH[2]}" ;;
+        args) args="${BASH_REMATCH[2]}" ;;
+        examples) examples="${BASH_REMATCH[2]}" ;;
+        hidden) hidden="${BASH_REMATCH[2]}" ;;
+      esac
+    fi
+  done <"$file"
+
+  local stem="${binary#shinobi-}"
+  local route="shinobi ${stem//-/ }"
+  [[ -z $summary ]] && summary="Run $binary"
+
+  ROUTE_TO_BINARY["$route"]="$binary"
+  ROUTE_TO_SUMMARY["$route"]="$summary"
+  ROUTE_TO_USAGE["$route"]="${route}${args:+ $args}"
+  ROUTE_TO_EXAMPLES["$route"]="$examples"
+  ROUTE_TO_HIDDEN["$route"]="$hidden"
+  ROUTES_IN_ORDER+=("$route")
+}
+
+load_commands() {
+  local file
+  for file in "$SHINOBI_BIN_DIR"/shinobi-*; do
+    [[ -f $file && -x $file ]] || continue
+    parse_command "$file"
+  done
+}
+
+print_help() {
+  echo "Usage: shinobi <command> [args]"
+  echo
+  echo "Commands:"
+  local route
+  for route in "${ROUTES_IN_ORDER[@]}"; do
+    [[ "${ROUTE_TO_HIDDEN[$route]}" == "true" ]] && continue
+    printf '  %-34s %s\n' "${ROUTE_TO_USAGE[$route]}" "${ROUTE_TO_SUMMARY[$route]}"
+  done
+}
+
+print_command_help() {
+  local route="$1"
+  echo "Usage: ${ROUTE_TO_USAGE[$route]}"
+  echo
+  echo "${ROUTE_TO_SUMMARY[$route]}"
+  if [[ -n "${ROUTE_TO_EXAMPLES[$route]}" ]]; then
+    echo
+    echo "Examples:"
+    local old_ifs="$IFS"
+    IFS='|'
+    local example
+    for example in ${ROUTE_TO_EXAMPLES[$route]}; do
+      example="${example# }"
+      example="${example% }"
+      echo "  $example"
+    done
+    IFS="$old_ifs"
+  fi
+}
+
+# Longest-prefix match: try consuming as many leading args as possible into
+# the route before falling back to a shorter one, so "shinobi hypr toggle
+# gaps" resolves to the "shinobi hypr toggle" binary with "gaps" left over
+# for it, not a nonexistent "shinobi hypr" route.
+resolve_route() {
+  local n=$#
+  local i
+  for ((i = n; i >= 1; i--)); do
+    local candidate="shinobi"
+    local j
+    for ((j = 1; j <= i; j++)); do
+      candidate+=" ${!j}"
+    done
+    if [[ -n "${ROUTE_TO_BINARY[$candidate]:-}" ]]; then
+      echo "$i"
+      return 0
+    fi
+  done
+  return 1
+}
+
+load_commands
+
+if (($# == 0)) || [[ "$1" == "help" ]]; then
+  print_help
+  exit 0
+fi
+
+if consumed="$(resolve_route "$@")"; then
+  route="shinobi"
+  for ((k = 1; k <= consumed; k++)); do route+=" ${!k}"; done
+  binary="${ROUTE_TO_BINARY[$route]}"
+  shift "$consumed"
+
+  if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
+    print_command_help "$route"
+    exit 0
+  fi
+
+  exec "$SHINOBI_BIN_DIR/$binary" "$@"
+fi
+
+echo "shinobi: unknown command '$*'" >&2
+print_help >&2
+exit 1

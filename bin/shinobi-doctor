@@ -1,0 +1,47 @@
+#!/usr/bin/env bash
+# shinobi:summary=Check that the local Shinobi OS runtime is ready
+# shinobi:args=
+# shinobi:examples=shinobi doctor
+
+set -euo pipefail
+
+source "$(dirname -- "$(readlink -f -- "${BASH_SOURCE[0]}")")/_shinobi-common.sh"
+
+missing=()
+for required in python3 nmap shinobi-recon; do
+  command -v "$required" >/dev/null 2>&1 || missing+=("$required")
+done
+
+if ((${#missing[@]})); then
+  printf 'Shinobi OS is missing: %s\n' "${missing[*]}" >&2
+  exit 1
+fi
+
+active="$(shinobi_current_engagement)"
+if [[ -n "$active" ]]; then
+  scope_file="$(shinobi_engagements_dir)/$active/scope.yaml"
+  if [[ -f "$scope_file" ]]; then
+    printf 'Shinobi OS ready — active engagement: %s\n' "$active"
+    printf 'Scope: %s\n' "$scope_file"
+  else
+    printf 'Shinobi OS ready — active engagement %q has no scope.yaml\n' "$active" >&2
+    exit 1
+  fi
+else
+  printf 'Shinobi OS ready — no active engagement. Start with: shinobi engagement new <name>\n'
+fi
+
+# The console-only image intentionally has no Quickshell. Check it only from
+# the graphical Hyprland session, where a missing panel otherwise looks like a
+# silent desktop failure.
+if [[ "${XDG_CURRENT_DESKTOP:-}" == *Hyprland* ]]; then
+  if ! command -v quickshell >/dev/null 2>&1; then
+    printf 'Desktop check failed — quickshell is not installed.\n' >&2
+    exit 1
+  fi
+  if ! systemctl --user is-active --quiet shinobi-shell.service; then
+    printf 'Desktop check failed — Quickshell is not active. Inspect: journalctl --user -u shinobi-shell.service\n' >&2
+    exit 1
+  fi
+  printf 'Desktop: Quickshell service active.\n'
+fi

@@ -1,8 +1,0 @@
-#!/bin/sh
-# Same pattern Kali's own variant-i3 uses (rsync from a static path staged by
-# includes.chroot into /etc/skel and /root), just without a separate Debian
-# package to hold the dotfiles.
-set -e
-
-rsync -a /usr/share/kaliai-dotfiles/etc/skel/ /etc/skel/
-rsync -a /usr/share/kaliai-dotfiles/etc/skel/ /root/

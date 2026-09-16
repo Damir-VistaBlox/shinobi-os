@@ -1,0 +1,11 @@
+#!/bin/sh
+set -eu
+attempt=0
+until dbus-update-activation-environment --systemd WAYLAND_DISPLAY XDG_CURRENT_DESKTOP XDG_SESSION_TYPE XDG_SESSION_DESKTOP; do
+  attempt=$((attempt + 1))
+  [ "$attempt" -ge 20 ] && break
+  sleep 0.1
+done
+systemctl --user import-environment WAYLAND_DISPLAY XDG_CURRENT_DESKTOP XDG_SESSION_TYPE XDG_SESSION_DESKTOP || true
+systemctl --user start shinobi-migrate.service
+systemctl --user start shinobi-shell.service || echo "shinobi-session: Quickshell did not start" >&2

@@ -1,0 +1,17 @@
+#!/bin/sh
+# Shinobi OS is a Hyprland image. Keep stray sessions contributed by indirect
+# dependencies out of SDDM without purging shared libraries or applications.
+set -eu
+
+wayland_sessions=/usr/share/wayland-sessions
+if [ -f "$wayland_sessions/hyprland.desktop" ]; then
+  find "$wayland_sessions" -mindepth 1 -maxdepth 1 -type f ! -name hyprland.desktop -delete
+fi
+
+# Shinobi ships no X11 desktop. Removing only session launchers prevents an
+# accidental fallback to a competing display environment while preserving
+# Xwayland compatibility for individual applications.
+x_sessions=/usr/share/xsessions
+if [ -d "$x_sessions" ]; then
+  find "$x_sessions" -mindepth 1 -maxdepth 1 -type f -delete
+fi

@@ -1,0 +1,11 @@
+[Unit]
+Description=Shinobi OS desktop configuration migrations
+Before=shinobi-shell.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/lib/shinobi/shinobi-migrate
+RemainAfterExit=yes
+
+[Install]
+WantedBy=graphical-session.target

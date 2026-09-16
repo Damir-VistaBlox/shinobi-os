@@ -1,0 +1,103 @@
+#!/usr/bin/env bash
+# shinobi:summary=Open the wofi command palette
+# shinobi:args=[route]
+# shinobi:examples=shinobi menu
+#
+# Ported from Omarchy's omarchy-menu. Simpler than the original — Omarchy's
+# menu is a route in a persistent shell IPC daemon (toggle/summon/close); we
+# don't have that daemon, so this is a stateless script that re-execs itself
+# with a "route" argument for submenus, same idea without the always-on
+# process. Called bare (no route) from the keybinding; the other routes are
+# internal recursion targets, not meant to be typed by hand.
+set -euo pipefail
+
+picker() {
+  wofi --dmenu --prompt "$1" -i
+}
+
+notify() {
+  command -v notify-send >/dev/null 2>&1 && notify-send "shinobi" "$1" || echo "$1" >&2
+}
+
+route="${1:-root}"
+
+case "$route" in
+  root)
+    choice="$(
+      cat <<'EOF' | picker "shinobi"
+Launch agent
+Switch engagement
+New engagement
+Show active scope
+Set default agent
+Clipboard history
+Wi-Fi
+Bluetooth
+Theme
+Keybindings
+EOF
+    )"
+    case "$choice" in
+      "Launch agent") exec shinobi-menu agent-launch ;;
+      "Switch engagement") exec shinobi-menu engagement-switch ;;
+      "New engagement") exec shinobi-menu engagement-new ;;
+      "Show active scope") exec shinobi-menu scope-show ;;
+      "Set default agent") exec shinobi-agent --pick ;;
+      "Clipboard history") exec shinobi-menu clipboard ;;
+      "Wi-Fi") exec shinobi-network menu ;;
+      "Bluetooth") exec shinobi-bluetooth menu ;;
+      "Theme") exec shinobi-menu theme ;;
+      "Keybindings") exec shinobi-menu keybindings ;;
+      "") exit 0 ;;
+      *) notify "Unknown choice: $choice" ;;
+    esac
+    ;;
+
+  agent-launch)
+    exec kitty --title shinobi-agent -e shinobi-agent
+    ;;
+
+  engagement-switch)
+    name="$(shinobi-engagement list | sed -E 's/^\* //; s/^ +//; s/ \(active\)$//' | picker "engagement")"
+    [[ -z "$name" ]] && exit 0
+    shinobi-engagement use "$name"
+    notify "Active engagement: $name"
+    ;;
+
+  engagement-new)
+    name="$(printf '' | picker "new engagement name")"
+    [[ -z "$name" ]] && exit 0
+    shinobi-engagement new "$name"
+    notify "Created engagement: $name"
+    ;;
+
+  scope-show)
+    shinobi-scope show | picker "active scope" >/dev/null || true
+    ;;
+
+  clipboard)
+    if ! command -v cliphist >/dev/null 2>&1; then
+      notify "cliphist not installed"
+      exit 0
+    fi
+    sel="$(cliphist list | picker "clipboard")"
+    [[ -z "$sel" ]] && exit 0
+    cliphist decode <<<"$sel" | wl-copy
+    ;;
+
+  theme)
+    name="$(shinobi-theme list | picker "theme")"
+    [[ -z "$name" ]] && exit 0
+    shinobi-theme set "$name"
+    notify "Theme set: $name"
+    ;;
+
+  keybindings)
+    grep -E '^\s*bind' "$HOME/.config/hypr/hyprland.conf" 2>/dev/null | picker "keybindings" >/dev/null || true
+    ;;
+
+  *)
+    echo "shinobi-menu: unknown route '$route'" >&2
+    exit 1
+    ;;
+esac

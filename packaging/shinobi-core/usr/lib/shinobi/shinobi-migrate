@@ -1,0 +1,12 @@
+#!/bin/sh
+set -eu
+state_dir="${XDG_STATE_HOME:-$HOME/.local/state}/shinobi"
+state_file="$state_dir/config-version"
+current_version=1
+mkdir -p "$state_dir"
+previous_version=0
+[ -r "$state_file" ] && previous_version=$(cat "$state_file" 2>/dev/null || printf '0')
+if [ "$previous_version" -lt 1 ]; then
+  mkdir -p "${XDG_CONFIG_HOME:-$HOME/.config}/shinobi"
+fi
+printf '%s\n' "$current_version" >"$state_file"

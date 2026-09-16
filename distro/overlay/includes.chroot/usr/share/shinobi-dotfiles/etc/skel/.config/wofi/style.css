@@ -1,0 +1,33 @@
+/* shinobi-theme set <name> repoints colors.css; this file only ever
+   references the @define-color names, never a literal color. */
+@import "colors.css";
+
+window {
+  font-family: "JetBrainsMono Nerd Font Mono";
+  background-color: @bg;
+  color: @fg;
+  border: 2px solid @accent;
+  border-radius: 14px;
+}
+
+#input {
+  margin: 12px;
+  padding: 10px;
+  background-color: @bg;
+  color: @fg;
+  border: 2px solid @accent;
+  border-radius: 8px;
+}
+
+#outer-box { margin: 8px; }
+#inner-box { margin: 0 8px 8px; }
+
+#entry {
+  padding: 10px;
+  border-radius: 8px;
+}
+
+#entry:selected {
+  background-color: @accent;
+  color: @bg;
+}

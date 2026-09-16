@@ -1,0 +1,40 @@
+#!/bin/sh
+# Sets Shinobi's wallpaper on the active SDDM theme through its
+# theme.conf.user override. SDDM loads this file after the packaged defaults,
+# so the image stays local to the live image and package updates are not
+# modified in place.
+#
+# Plymouth boot-splash theming is NOT done here — authoring a from-scratch
+# Plymouth theme is script-based and only verifiable with an actual boot
+# test, which isn't possible from this dev environment either. Confirm on a
+# real build before investing in one; not worth shipping unverified.
+set -e
+
+# SDDM merges /usr/lib/sddm/sddm.conf.d/*.conf (package defaults), then
+# /etc/sddm.conf.d/*.conf, then /etc/sddm.conf, each overriding the last —
+# `sddm --example-config` prints SDDM's built-in template, not what's
+# actually configured, so it's not used here. Best-effort: takes the last
+# Current= line across all of them in that rough order.
+sddm_theme_name="$(cat /usr/lib/sddm/sddm.conf.d/*.conf /etc/sddm.conf.d/*.conf /etc/sddm.conf 2>/dev/null | awk -F= '/^Current=/{v=$2} END{print v}')"
+
+if [ -z "$sddm_theme_name" ]; then
+  echo "shinobi: no SDDM Current= theme configured, skipping login theme override" >&2
+  exit 0
+fi
+
+theme_dir="/usr/share/sddm/themes/$sddm_theme_name"
+theme_override="$theme_dir/theme.conf.user"
+if [ ! -f "$theme_override" ]; then
+  echo "shinobi: SDDM theme '$sddm_theme_name' has no theme.conf.user override at $theme_dir, skipping" >&2
+  exit 0
+fi
+
+if ! grep -q '^background=' "$theme_override" 2>/dev/null; then
+  echo "shinobi: SDDM theme '$sddm_theme_name' has no image background override, skipping" >&2
+  exit 0
+fi
+
+# Verified on the image's active Kali Breeze theme: `background` is an image
+# path. Only replace that exact setting; all theme-specific defaults remain.
+sed -i 's|^background=.*|background=/usr/share/backgrounds/shinobi-os/shinobi-night.png|' "$theme_override"
+echo "shinobi: set SDDM theme '$sddm_theme_name' background to the Shinobi wallpaper"

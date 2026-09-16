@@ -1,0 +1,29 @@
+#!/bin/sh
+# Installs the shinobi CLI (all bin/shinobi* scripts), themes, and the
+# shinobi-recon MCP server that distro/build.sh staged into /opt/shinobi (see
+# that script — /opt/shinobi/{bin,mcp-servers,themes} are a generated copy of
+# the repo's top-level bin/, mcp-servers/, themes/, not duplicated source).
+set -e
+
+# Install the integration layer as a real Debian package so systemd units,
+# session helpers, and migration logic have explicit ownership and upgrades
+# can replace them cleanly.
+if [ -d /opt/shinobi/packaging/shinobi-core ]; then
+  chmod 0755 /opt/shinobi/packaging/shinobi-core/usr/bin/* \
+    /opt/shinobi/packaging/shinobi-core/usr/lib/shinobi/*
+  dpkg-deb --build /opt/shinobi/packaging/shinobi-core /tmp/shinobi-core.deb >/dev/null
+  dpkg -i /tmp/shinobi-core.deb >/dev/null
+  rm -f /tmp/shinobi-core.deb
+fi
+
+chmod +x /opt/shinobi/bin/shinobi*
+for script in /opt/shinobi/bin/shinobi*; do
+  ln -sf "$script" "/usr/local/bin/$(basename "$script")"
+done
+
+mkdir -p /usr/share/shinobi
+cp -r /opt/shinobi/themes /usr/share/shinobi/themes
+
+python3 -m venv /opt/shinobi/venv
+/opt/shinobi/venv/bin/pip install --no-cache-dir --quiet /opt/shinobi/mcp-servers/shinobi-recon
+ln -sf /opt/shinobi/venv/bin/shinobi-recon /usr/local/bin/shinobi-recon

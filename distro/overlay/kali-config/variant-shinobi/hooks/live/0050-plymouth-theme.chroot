@@ -1,0 +1,7 @@
+#!/bin/sh
+# Activate the compact Shinobi boot splash after its assets have been copied
+# into the chroot. -R rebuilds the initramfs so the theme is available before
+# the live root filesystem is mounted.
+set -eu
+
+plymouth-set-default-theme -R shinobi

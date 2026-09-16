@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+# A one-time, non-blocking orientation message for the live desktop. Wait for
+# the actual shell service instead of an arbitrary delay, so the notification
+# arrives after the visual shell is ready on fast and slow hardware alike.
+attempt=0
+until systemctl --user is-active --quiet shinobi-shell.service; do
+  attempt=$((attempt + 1))
+  [ "$attempt" -ge 30 ] && exit 0
+  sleep 0.2
+done
+
+command -v notify-send >/dev/null 2>&1 || exit 0
+notify-send --app-name=shinobi --icon=dialog-information \
+  'Shinobi OS ready' 'Open the command palette with Super+Space. Run shinobi doctor for a runtime check.'

@@ -1,0 +1,90 @@
+#!/usr/bin/env bash
+# shinobi:summary=Scaffold, list, or switch the active engagement
+# shinobi:args=<new|list|use> [name]
+# shinobi:examples=shinobi engagement new acme-pentest | shinobi engagement use acme-pentest
+set -euo pipefail
+source "$(dirname -- "$(readlink -f -- "${BASH_SOURCE[0]}")")/_shinobi-common.sh"
+
+ENGAGEMENTS_DIR="$(shinobi_engagements_dir)"
+STATE_FILE="$(shinobi_state_file)"
+
+usage() {
+  cat <<'USAGE'
+Usage: shinobi-engagement <new|list|use> [name]
+
+  new <name>    Scaffold a new engagement (scope file + log dir), make it active
+  list          List known engagements
+  use <name>    Set the active engagement for `shinobi-agent`
+USAGE
+}
+
+cmd_new() {
+  local name="${1:?usage: shinobi-engagement new <name>}"
+  local dir="$ENGAGEMENTS_DIR/$name"
+  if [[ -e "$dir" ]]; then
+    echo "shinobi-engagement: engagement '$name' already exists at $dir" >&2
+    exit 1
+  fi
+  mkdir -p "$dir"
+  cat >"$dir/scope.yaml" <<YAML
+# Authorized scope for this engagement. Every shinobi-recon tool call is
+# checked against this file before it runs — out-of-scope targets are
+# refused, not warned about. Edit before running anything.
+client: "CHANGE ME"
+authorized_by: "CHANGE ME (name + date of written authorization)"
+window:
+  start: "CHANGE ME (YYYY-MM-DD)"
+  end: "CHANGE ME (YYYY-MM-DD)"
+targets:
+  # - 10.10.10.0/24
+  # - app.client-example.com
+YAML
+  : >"$dir/log.jsonl"
+  mkdir -p "$(dirname "$STATE_FILE")"
+  echo "$name" >"$STATE_FILE"
+  echo "Created engagement '$name' at $dir"
+  echo "Edit $dir/scope.yaml before running any tools."
+}
+
+cmd_list() {
+  local active
+  active="$(shinobi_current_engagement)"
+  if [[ ! -d "$ENGAGEMENTS_DIR" ]] || [[ -z "$(ls -A "$ENGAGEMENTS_DIR" 2>/dev/null)" ]]; then
+    echo "No engagements yet. Create one with: shinobi-engagement new <name>"
+    return
+  fi
+  for dir in "$ENGAGEMENTS_DIR"/*/; do
+    local name
+    name="$(basename "$dir")"
+    if [[ "$name" == "$active" ]]; then
+      echo "* $name (active)"
+    else
+      echo "  $name"
+    fi
+  done
+}
+
+cmd_use() {
+  local name="${1:?usage: shinobi-engagement use <name>}"
+  if [[ ! -d "$ENGAGEMENTS_DIR/$name" ]]; then
+    echo "shinobi-engagement: no such engagement '$name'" >&2
+    exit 1
+  fi
+  mkdir -p "$(dirname "$STATE_FILE")"
+  echo "$name" >"$STATE_FILE"
+  echo "Active engagement: $name"
+}
+
+sub="${1:-}"
+shift || true
+case "$sub" in
+  new) cmd_new "$@" ;;
+  list) cmd_list "$@" ;;
+  use) cmd_use "$@" ;;
+  -h | --help | help | "") usage ;;
+  *)
+    echo "shinobi-engagement: unknown subcommand '$sub'" >&2
+    usage >&2
+    exit 1
+    ;;
+esac

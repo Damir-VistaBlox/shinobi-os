@@ -1,0 +1,38 @@
+#!/usr/bin/env bash
+# shinobi:summary=Print the scope file for the active (or named) engagement
+# shinobi:args=show [name]
+# shinobi:examples=shinobi scope show | shinobi scope show acme-pentest
+set -euo pipefail
+source "$(dirname -- "$(readlink -f -- "${BASH_SOURCE[0]}")")/_shinobi-common.sh"
+
+ENGAGEMENTS_DIR="$(shinobi_engagements_dir)"
+
+usage() {
+  echo "Usage: shinobi-scope show [name]"
+}
+
+cmd_show() {
+  local name="${1:-$(shinobi_current_engagement)}"
+  if [[ -z "$name" ]]; then
+    echo "shinobi-scope: no active engagement. Run 'shinobi-engagement use <name>' first." >&2
+    exit 1
+  fi
+  local scope_file="$ENGAGEMENTS_DIR/$name/scope.yaml"
+  if [[ ! -f "$scope_file" ]]; then
+    echo "shinobi-scope: no scope file for '$name' at $scope_file" >&2
+    exit 1
+  fi
+  cat "$scope_file"
+}
+
+sub="${1:-}"
+shift || true
+case "$sub" in
+  show) cmd_show "$@" ;;
+  -h | --help | help | "") usage ;;
+  *)
+    echo "shinobi-scope: unknown subcommand '$sub'" >&2
+    usage >&2
+    exit 1
+    ;;
+esac

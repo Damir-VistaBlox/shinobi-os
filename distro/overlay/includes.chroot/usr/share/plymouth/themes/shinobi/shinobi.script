@@ -1,0 +1,29 @@
+# Shinobi OS Plymouth theme: static art plus a small honest progress bar.
+Window.SetBackgroundTopColor(0.039, 0.063, 0.106);
+Window.SetBackgroundBottomColor(0.039, 0.063, 0.106);
+
+splash.image = Image("splash.png").Scale(Window.GetWidth(), Window.GetHeight());
+splash.sprite = Sprite(splash.image);
+splash.sprite.SetX(Window.GetWidth() / 2 - splash.image.GetWidth() / 2);
+splash.sprite.SetY(Window.GetHeight() / 2 - splash.image.GetHeight() / 2);
+
+progress.track.image = Image("progress-track.png");
+progress.track.sprite = Sprite(progress.track.image);
+progress.track.x = Window.GetWidth() / 2 - progress.track.image.GetWidth() / 2;
+progress.track.y = Window.GetHeight() * 0.76;
+progress.track.sprite.SetPosition(progress.track.x, progress.track.y, 1);
+
+progress.fill.original_image = Image("progress-fill.png");
+progress.fill.sprite = Sprite();
+progress.fill.sprite.SetPosition(progress.track.x, progress.track.y, 2);
+
+fun progress_callback(duration, percent) {
+  width = Math.Int(progress.fill.original_image.GetWidth() * percent);
+  if (width < 1) {
+    width = 1;
+  }
+  progress.fill.image = progress.fill.original_image.Scale(width, progress.fill.original_image.GetHeight());
+  progress.fill.sprite.SetImage(progress.fill.image);
+}
+
+Plymouth.SetBootProgressFunction(progress_callback);

@@ -1,0 +1,27 @@
+#!/bin/sh
+# Establish the user-session environment before any D-Bus-activated desktop
+# component (portals, file choosers, Quickshell) is allowed to start. SDDM can
+# launch Hyprland before the user bus has accepted environment updates, so a
+# short bounded retry avoids a login-time race without delaying the desktop.
+set -eu
+
+attempt=0
+until dbus-update-activation-environment --systemd \
+  WAYLAND_DISPLAY XDG_CURRENT_DESKTOP XDG_SESSION_TYPE XDG_SESSION_DESKTOP
+do
+  attempt=$((attempt + 1))
+  if [ "$attempt" -ge 20 ]; then
+    echo "shinobi-session: D-Bus environment was not ready; starting shell with current systemd environment" >&2
+    break
+  fi
+  sleep 0.1
+done
+
+# Keep systemd --user's environment in sync with Hyprland. This is what
+# D-Bus-activated portals and the Quickshell service inherit.
+systemctl --user import-environment \
+  WAYLAND_DISPLAY XDG_CURRENT_DESKTOP XDG_SESSION_TYPE XDG_SESSION_DESKTOP || \
+  echo "shinobi-session: could not import the Hyprland environment into systemd --user" >&2
+
+systemctl --user start shinobi-shell.service || \
+  echo "shinobi-session: Quickshell did not start; inspect: journalctl --user -u shinobi-shell.service" >&2
