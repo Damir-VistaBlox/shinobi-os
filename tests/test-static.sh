@@ -23,6 +23,15 @@ for package in kali-linux-core hyprland sddm quickshell network-manager pipewire
     || fail "required package missing from desktop profile: $package"
 done
 
+echo "== Checking Hyprland theme bootstrap =="
+colors_file="$ROOT/distro/overlay/includes.chroot/usr/share/shinobi-dotfiles/etc/skel/.config/hypr/colors.conf"
+[[ -f "$colors_file" && ! -L "$colors_file" ]] \
+  || fail "default Hyprland colors.conf must be a regular fallback file"
+grep -Fq '$active_border = rgba(' "$colors_file" \
+  || fail "default active border color is missing"
+grep -Fq '$inactive_border = rgba(' "$colors_file" \
+  || fail "default inactive border color is missing"
+
 echo "== Checking shell syntax =="
 while IFS= read -r -d '' script; do
   case "$script" in
