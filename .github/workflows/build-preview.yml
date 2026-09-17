@@ -49,6 +49,9 @@ jobs:
       - name: Run source regression tests
         run: ./tests/test-static.sh
 
+      - name: Run source integrity tests
+        run: ./tests/test-source-integrity.sh
+
       - name: Validate ISO structure
         run: ./tests/test-iso-structure.sh distro/kali-live/images/kali-linux-rolling-live-shinobi-amd64.iso
 

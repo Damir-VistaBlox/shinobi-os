@@ -13,6 +13,8 @@ Run the complete suite against a built ISO:
 ```
 
 The suite checks package-profile policy, shell syntax, systemd unit syntax,
+theme completeness, overlay links and permissions, service ownership, and
+the theme-switch contract,
 ISO El Torito metadata and boot files, extracts the live SquashFS to verify
 installed files, package policy, and compression, then boots the image through
 both BIOS and UEFI in a disposable QEMU snapshot. QEMU boot logs are written to

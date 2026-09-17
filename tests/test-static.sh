@@ -31,6 +31,14 @@ grep -Fq '$active_border = rgba(' "$colors_file" \
   || fail "default active border color is missing"
 grep -Fq '$inactive_border = rgba(' "$colors_file" \
   || fail "default inactive border color is missing"
+for fallback in \
+  "$ROOT/distro/overlay/includes.chroot/usr/share/shinobi-dotfiles/etc/skel/.config/kitty/colors.conf" \
+  "$ROOT/distro/overlay/includes.chroot/usr/share/shinobi-dotfiles/etc/skel/.config/wofi/colors.css" \
+  "$ROOT/distro/overlay/includes.chroot/usr/share/shinobi-dotfiles/etc/skel/.config/quickshell/Theme.qml"
+do
+  [[ -f "$fallback" && ! -L "$fallback" ]] \
+    || fail "desktop fallback must be a regular file: ${fallback#$ROOT/}"
+done
 
 echo "== Checking shell syntax =="
 while IFS= read -r -d '' script; do
