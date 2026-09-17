@@ -22,3 +22,9 @@ Host requirements for the full suite are `xorriso`, `qemu-system-x86_64`,
 UEFI firmware (OVMF), and `systemd-analyze`. The static suite only requires
 Bash; image-only executable checks are deferred until the package is installed
 inside the image.
+
+The QEMU checks are deliberately disposable: they use `-snapshot`, never
+write to the ISO, and retain serial output under `qemu-test-logs/` for CI
+diagnosis. A boot that exits early fails; a graphical-only guest with no serial
+console is recorded as a survival check rather than being misreported as a
+full in-guest health check.

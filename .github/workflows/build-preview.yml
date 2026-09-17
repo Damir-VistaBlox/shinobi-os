@@ -46,6 +46,31 @@ jobs:
           du -h "$iso" > shinobi-os-amd64.size
           printf 'version=%s\n' "preview-${GITHUB_RUN_NUMBER}" >> "$GITHUB_OUTPUT"
 
+      - name: Run source regression tests
+        run: ./tests/test-static.sh
+
+      - name: Validate ISO structure
+        run: ./tests/test-iso-structure.sh distro/kali-live/images/kali-linux-rolling-live-shinobi-amd64.iso
+
+      - name: Inspect installed image contents
+        run: ./tests/test-image-content.sh distro/kali-live/images/kali-linux-rolling-live-shinobi-amd64.iso
+
+      - name: Boot-test BIOS image
+        run: ./tests/test-qemu-boot.sh distro/kali-live/images/kali-linux-rolling-live-shinobi-amd64.iso bios qemu-test-logs
+
+      - name: Boot-test UEFI image
+        run: ./tests/test-qemu-boot.sh distro/kali-live/images/kali-linux-rolling-live-shinobi-amd64.iso uefi qemu-test-logs
+
+      - name: Upload automated test logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: shinobi-os-${{ github.run_number }}-test-logs
+          if-no-files-found: warn
+          path: |
+            qemu-test-logs/
+            distro/kali-live/images/kali-linux-rolling-live-shinobi-amd64.log
+
       - name: Publish checksum and build log
         uses: actions/upload-artifact@v4
         with:

@@ -39,7 +39,8 @@ for path in \
   /usr/lib/shinobi/shinobi-migrate \
   /usr/lib/systemd/user/shinobi-migrate.service \
   /usr/lib/systemd/user/shinobi-shell.service \
-  /usr/share/plymouth/themes/shinobi/shinobi.script
+  /usr/share/plymouth/themes/shinobi/shinobi.script \
+  /usr/share/shinobi-dotfiles/etc/skel/.config/hypr/colors.conf
 do
   grep -Fq " $path" "$listing" || { echo "image-test: missing image path: $path" >&2; exit 1; }
 done
@@ -54,6 +55,11 @@ for package in kali-linux-core hyprland sddm quickshell btop pipewire wireplumbe
     END { exit(ok ? 0 : 1) }
   ' "$status" || { echo "image-test: package not installed: $package" >&2; exit 1; }
 done
+awk -v package="shinobi-core" '
+  $1 == "Package:" { found = ($2 == package) }
+  found && $1 == "Maintainer:" { ok = 1 }
+  END { exit(ok ? 0 : 1) }
+' "$status" || { echo "image-test: shinobi-core Maintainer metadata missing" >&2; exit 1; }
 for package in kali-linux-default kali-desktop-live; do
   if awk -v package="$package" '$1 == "Package:" && $2 == package { found = 1 } END { exit(found ? 0 : 1) }' "$status"; then
     echo "image-test: deferred package unexpectedly installed: $package" >&2

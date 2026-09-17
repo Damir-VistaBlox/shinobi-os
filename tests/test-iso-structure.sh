@@ -21,7 +21,13 @@ grep -Eqi 'El Torito|Boot catalog|boot image' "$report" || {
 echo "== ISO boot files =="
 listing="$(mktemp)"
 xorriso -indev "$ISO" -find / -type f -print >"$listing"
-grep -Eqi '/(isolinux|syslinux)/.*(isolinux|menu|ldlinux)|/EFI/BOOT/.*(BOOT|grub)' "$listing" \
-  || { echo "iso-test: expected BIOS/UEFI boot files not found" >&2; exit 1; }
+grep -Eqi '/(isolinux|syslinux)/.*(isolinux|menu|ldlinux)' "$listing" \
+  || { echo "iso-test: BIOS boot files not found" >&2; exit 1; }
+grep -Eqi '/EFI/BOOT/.*(BOOT|grub)' "$listing" \
+  || { echo "iso-test: UEFI boot files not found" >&2; exit 1; }
+grep -Eqi '/(isolinux|syslinux)/.*(shinobi|menu)' "$listing" \
+  || { echo "iso-test: Shinobi BIOS menu overlay not found" >&2; exit 1; }
+grep -Eqi '/EFI/BOOT/.*(shinobi|theme|grub)' "$listing" \
+  || { echo "iso-test: Shinobi UEFI theme files not found" >&2; exit 1; }
 
 echo "iso-structure-test: PASS"
