@@ -3,6 +3,7 @@ Version: 0.1.0
 Section: x11
 Priority: optional
 Architecture: all
+Maintainer: Shinobi OS Maintainers <maintainers@shinobi-os.local>
 Depends: systemd, dbus-user-session, bash
 Description: Shinobi OS desktop integration layer
  Native systemd user services, session environment integration, and
