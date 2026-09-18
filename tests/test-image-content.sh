@@ -10,12 +10,17 @@ for tool in xorriso unsquashfs; do
   }
 done
 
-tmp="$(mktemp -d)"
+tmp_root="${RUNNER_TEMP:-${TMPDIR:-$PWD}}"
+mkdir -p "$tmp_root"
+tmp="$(mktemp -d "$tmp_root/shinobi-image-content.XXXXXX")"
 cleanup() { rm -rf "$tmp"; }
 trap cleanup EXIT
 
 echo "== Locating live SquashFS =="
-squash_path="$(xorriso -indev "$ISO" -find / -type f -name filesystem.squashfs -print 2>/dev/null | head -n1)"
+# `-print` is not supported by the xorriso version on the self-hosted runner.
+# `lsdl` is portable; extract the quoted ISO path from its long listing.
+squash_path=$(xorriso -indev "$ISO" -find / -type f -name filesystem.squashfs -exec lsdl 2>/dev/null \
+  | awk -F"'" '/filesystem\.squashfs/ { print $2; exit }')
 [[ -n "$squash_path" ]] || { echo "image-test: filesystem.squashfs not found in ISO" >&2; exit 1; }
 xorriso -osirrox on -indev "$ISO" -extract "$squash_path" "$tmp/filesystem.squashfs" >/dev/null
 [[ -s "$tmp/filesystem.squashfs" ]] || { echo "image-test: failed to extract SquashFS" >&2; exit 1; }
@@ -32,7 +37,7 @@ echo "== Checking installed Shinobi files =="
 listing="$tmp/listing"
 unsquashfs -ll "$tmp/filesystem.squashfs" >"$listing"
 for path in \
-  /usr/bin/hyprland \
+  /usr/bin/Hyprland \
   /usr/bin/quickshell \
   /usr/bin/btop \
   /usr/local/bin/top \
@@ -42,7 +47,10 @@ for path in \
   /usr/share/plymouth/themes/shinobi/shinobi.script \
   /usr/share/shinobi-dotfiles/etc/skel/.config/hypr/colors.conf
 do
-  grep -Fq " $path" "$listing" || { echo "image-test: missing image path: $path" >&2; exit 1; }
+  grep -Fq "squashfs-root$path" "$listing" || {
+    echo "image-test: missing image path: $path" >&2
+    exit 1
+  }
 done
 
 echo "== Checking package database policy =="
