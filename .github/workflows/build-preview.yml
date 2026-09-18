@@ -64,6 +64,34 @@ jobs:
       - name: Boot-test UEFI image
         run: ./tests/test-qemu-boot.sh distro/kali-live/images/kali-linux-rolling-live-shinobi-amd64.iso uefi qemu-test-logs
 
+      - name: Prepare live USB preview artifact
+        run: |
+          iso="distro/kali-live/images/kali-linux-rolling-live-shinobi-amd64.iso"
+          mkdir -p preview-iso
+          # Keep each artifact file below GitHub's individual file limit while
+          # retaining the exact byte stream needed to restore the ISO.
+          split -b 1800M --numeric-suffixes=0 --suffix-length=3 "$iso" \
+            preview-iso/shinobi-os-amd64.iso.part.
+          sha256sum "$iso" > preview-iso/shinobi-os-amd64.iso.sha256
+          cat > preview-iso/README.txt <<'EOF'
+          Shinobi OS live USB preview
+
+          Reassemble the ISO on Linux/macOS:
+
+            cat shinobi-os-amd64.iso.part.* > shinobi-os-amd64.iso
+            sha256sum -c shinobi-os-amd64.iso.sha256
+
+          Write the resulting ISO to a USB device with a trusted image writer.
+          The image is a hybrid BIOS/UEFI live ISO; writing it erases the USB.
+          EOF
+
+      - name: Upload live USB preview artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: shinobi-os-${{ steps.metadata.outputs.version }}-live-usb
+          if-no-files-found: error
+          path: preview-iso/
+
       - name: Upload automated test logs
         if: always()
         uses: actions/upload-artifact@v4
