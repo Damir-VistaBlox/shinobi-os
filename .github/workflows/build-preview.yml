@@ -27,9 +27,23 @@ jobs:
     timeout-minutes: 360
     steps:
       - name: Check out Shinobi OS
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           submodules: recursive
+
+      - name: Set up Node.js 24
+        uses: actions/setup-node@v7
+        with:
+          node-version: 24.x
+          check-latest: true
+          package-manager-cache: false
+
+      - name: Verify Node.js runtime
+        shell: bash
+        run: |
+          node_version="$(node --version)"
+          printf 'Using Node.js %s\n' "$node_version"
+          [[ "$node_version" =~ ^v24\.[0-9]+\.[0-9]+$ ]]
 
       - name: Build the live ISO
         env:
@@ -86,7 +100,7 @@ jobs:
           EOF
 
       - name: Upload live USB preview artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: shinobi-os-${{ steps.metadata.outputs.version }}-live-usb
           if-no-files-found: error
@@ -94,7 +108,7 @@ jobs:
 
       - name: Upload automated test logs
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: shinobi-os-${{ github.run_number }}-test-logs
           if-no-files-found: warn
@@ -110,7 +124,7 @@ jobs:
           sudo chown -R "$(id -u):$(id -g)" "$GITHUB_WORKSPACE" || true
 
       - name: Publish checksum and build log
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: shinobi-os-${{ steps.metadata.outputs.version }}-metadata
           path: |
