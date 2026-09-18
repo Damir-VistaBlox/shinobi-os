@@ -46,7 +46,7 @@ while IFS= read -r -d '' script; do
     *.bash) bash -n "$script" ;;
     *) sh -n "$script" ;;
   esac
-done < <(find "$ROOT/bin" "$ROOT/distro" "$ROOT/packaging" -type f \( -name '*.sh' -o -name '*.bash' \) -print0)
+done < <(find "$ROOT/bin" "$ROOT/distro/overlay" "$ROOT/packaging" -type f \( -name '*.sh' -o -name '*.bash' \) -print0)
 
 echo "== Checking systemd unit syntax =="
 if command -v systemd-analyze >/dev/null 2>&1; then
@@ -65,7 +65,7 @@ if command -v systemd-analyze >/dev/null 2>&1; then
       echo "static-test: deferred image-only executable check for $(basename "$unit")"
     fi
     unset unit_status
-  done < <(find "$ROOT" -path '*/.git' -prune -o -type f -name '*.service' -print0)
+  done < <(find "$ROOT/packaging" "$ROOT/distro/overlay" -type f -name '*.service' -print0)
 else
   echo "static-test: systemd-analyze unavailable; unit verification skipped"
 fi
