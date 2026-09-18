@@ -20,7 +20,9 @@ grep -Eqi 'El Torito|Boot catalog|boot image' "$report" || {
 
 echo "== ISO boot files =="
 listing="$(mktemp)"
-xorriso -indev "$ISO" -find / -type f -print >"$listing"
+# `-print` is not a portable xorriso find action. `lsdl` is supported by the
+# runner's xorriso versions and includes each matched ISO path in its output.
+xorriso -indev "$ISO" -find / -type f -exec lsdl >"$listing"
 grep -Eqi '/(isolinux|syslinux)/.*(isolinux|menu|ldlinux)' "$listing" \
   || { echo "iso-test: BIOS boot files not found" >&2; exit 1; }
 grep -Eqi '/EFI/BOOT/.*(BOOT|grub)' "$listing" \
