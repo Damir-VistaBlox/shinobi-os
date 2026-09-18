@@ -74,6 +74,13 @@ jobs:
             qemu-test-logs/
             distro/kali-live/images/kali-linux-rolling-live-shinobi-amd64.log
 
+      - name: Normalize self-hosted workspace permissions
+        if: always()
+        run: |
+          # live-build creates root-owned files inside the checkout. Restore
+          # runner ownership so the next actions/checkout can cleanly reset it.
+          sudo chown -R "$(id -u):$(id -g)" "$GITHUB_WORKSPACE" || true
+
       - name: Publish checksum and build log
         uses: actions/upload-artifact@v4
         with:
