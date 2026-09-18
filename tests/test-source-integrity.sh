@@ -29,6 +29,15 @@ grep -Fq 'ln -sfn "$theme_dir/hypr.conf" "$HOME/.config/hypr/colors.conf"' "$ROO
 grep -Fq 'shinobi-theme set' "$ROOT/distro/overlay/includes.chroot/usr/local/bin/shinobi-session" \
   || fail "session bootstrap does not apply the persisted theme"
 
+echo "== Checking GRUB menu color syntax =="
+grub_theme="$ROOT/distro/overlay/bootloaders/bootloaders/grub-pc/theme.cfg"
+grep -Eq '^set color_normal=[[:alnum:]-]+/[[:alnum:]-]+$' "$grub_theme" \
+  || fail "GRUB normal color must use named foreground/background colors"
+grep -Eq '^set color_highlight=[[:alnum:]-]+/[[:alnum:]-]+$' "$grub_theme" \
+  || fail "GRUB highlight color must use named foreground/background colors"
+! grep -Eq '^set color_(normal|highlight)=#[0-9a-fA-F]{6}' "$grub_theme" \
+  || fail "GRUB menu colors must not use unsupported hex values"
+
 echo "== Checking service ownership contract =="
 for unit in shinobi-migrate.service shinobi-shell.service; do
   path="$ROOT/packaging/shinobi-core/usr/lib/systemd/user/$unit"
