@@ -9,13 +9,34 @@ case "$action" in
   status) apt list --upgradable 2>/dev/null | sed '1d' || true ;;
   check)
     shinobi_require_installed; shinobi_lock update
-    if [[ "${2:-}" == "--dry-run" || "${SHINOBI_DRY_RUN:-}" == 1 ]]; then apt-get -s dist-upgrade; else command -v pkexec >/dev/null 2>&1 && exec pkexec apt-get update || exec sudo apt-get update; fi
+    transaction="$(shinobi_transaction_start update.check apt-metadata)"
+    set +e
+    if [[ "${2:-}" == "--dry-run" || "${SHINOBI_DRY_RUN:-}" == 1 ]]; then apt-get -s dist-upgrade; else command -v pkexec >/dev/null 2>&1 && pkexec apt-get update || sudo apt-get update; fi
+    result=$?
+    set -e
+    shinobi_transaction_finish "$transaction" "$([[ "$result" -eq 0 ]] && echo completed || echo failed)" apt-metadata
+    exit "$result"
     ;;
   apply)
     shinobi_require_installed; shinobi_lock update
     if [[ "${2:-}" == "--dry-run" || "${SHINOBI_DRY_RUN:-}" == 1 ]]; then apt-get -s dist-upgrade; exit 0; fi
     [[ "${SHINOBI_CONFIRM:-}" == 1 ]] || { echo 'Set SHINOBI_CONFIRM=1 to confirm the update.' >&2; exit 77; }
-    command -v pkexec >/dev/null 2>&1 && exec pkexec apt-get dist-upgrade || exec sudo apt-get dist-upgrade
+    transaction="$(shinobi_transaction_start update.apply dist-upgrade)"
+    shinobi_emit_event package.transaction.started "{\"action\":\"update\",\"transaction\":\"$transaction\"}"
+    snapshot_name="pre-update-$transaction"
+    command -v shinobi-snapshot >/dev/null 2>&1 && shinobi-snapshot create "$snapshot_name" >/dev/null 2>&1 || true
+    set +e
+    if command -v pkexec >/dev/null 2>&1; then pkexec apt-get dist-upgrade; else sudo apt-get dist-upgrade; fi
+    result=$?
+    set -e
+    if [[ "$result" -eq 0 ]]; then
+      shinobi_transaction_finish "$transaction" completed dist-upgrade
+      shinobi_emit_event package.transaction.completed "{\"action\":\"update\",\"transaction\":\"$transaction\",\"status\":\"completed\"}"
+    else
+      shinobi_transaction_finish "$transaction" failed dist-upgrade
+      shinobi_emit_event package.transaction.completed "{\"action\":\"update\",\"transaction\":\"$transaction\",\"status\":\"failed\"}"
+    fi
+    exit "$result"
     ;;
   -h|--help|help) echo 'Usage: shinobi update <status|check|apply> [--dry-run]' ;;
   *) echo "shinobi-update: unknown action '$action'" >&2; exit 2 ;;

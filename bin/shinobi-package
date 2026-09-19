@@ -1,20 +1,37 @@
 #!/usr/bin/env bash
 # shinobi:summary=Inspect and manage Kali/Shinobi packages
-# shinobi:args=<list|search|sources|audit|install|remove> [package]
+# shinobi:args=<list|search|sources|audit|transactions|install|remove> [package]
 # shinobi:examples=shinobi package audit | shinobi package install nmap
 set -euo pipefail
+source "$(dirname -- "$(readlink -f -- "${BASH_SOURCE[0]}")")/_shinobi-common.sh"
 action="${1:-list}"
 case "$action" in
   list) dpkg-query -W -f='${binary:Package}\t${Version}\n' 'shinobi-*' 2>/dev/null || true ;;
   search) apt-cache search "${2:?usage: shinobi package search <term>}" ;;
   sources) grep -RhsE '^[[:space:]]*deb([[:space:]]|$)' /etc/apt/sources.list /etc/apt/sources.list.d 2>/dev/null || true ;;
   audit) apt-cache policy shinobi-core kali-linux-core hyprland quickshell ;;
+  transactions) find "$(shinobi_transaction_dir)" -maxdepth 1 -type f -name '*.json' -printf '%f\n' 2>/dev/null | sort ;;
   install|remove)
+    shinobi_require_installed
     package="${2:?usage: shinobi package $action <package>}"
     [[ "$package" =~ ^[a-z0-9][a-z0-9+.-]*$ ]] || { echo 'invalid package name' >&2; exit 2; }
-    command -v pkexec >/dev/null 2>&1 && exec pkexec apt-get "$action" "$package"
-    exec sudo apt-get "$action" "$package"
+    [[ "${SHINOBI_CONFIRM:-}" == 1 ]] || { echo 'Set SHINOBI_CONFIRM=1 to confirm package changes.' >&2; exit 77; }
+    shinobi_lock package
+    transaction="$(shinobi_transaction_start "package.$action" "$package")"
+    shinobi_emit_event package.transaction.started "{\"action\":\"$action\",\"package\":\"$package\"}"
+    set +e
+    if command -v pkexec >/dev/null 2>&1; then pkexec apt-get "$action" "$package"; else sudo apt-get "$action" "$package"; fi
+    result=$?
+    set -e
+    if [[ "$result" -eq 0 ]]; then
+      shinobi_transaction_finish "$transaction" completed "$package"
+      shinobi_emit_event package.transaction.completed "{\"action\":\"$action\",\"package\":\"$package\",\"status\":\"completed\"}"
+    else
+      shinobi_transaction_finish "$transaction" failed "$package"
+      shinobi_emit_event package.transaction.completed "{\"action\":\"$action\",\"package\":\"$package\",\"status\":\"failed\"}"
+    fi
+    exit "$result"
     ;;
-  -h|--help|help) echo 'Usage: shinobi package <list|search|sources|audit|install|remove> [package]' ;;
+  -h|--help|help) echo 'Usage: shinobi package <list|search|sources|audit|transactions|install|remove> [package]' ;;
   *) echo "shinobi-package: unknown action '$action'" >&2; exit 2 ;;
 esac

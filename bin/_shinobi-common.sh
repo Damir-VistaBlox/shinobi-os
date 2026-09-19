@@ -94,3 +94,26 @@ shinobi_emit_event() {
   command -v shinobi-event >/dev/null 2>&1 || return 0
   shinobi-event publish "$event" "$payload" >/dev/null 2>&1 || true
 }
+
+shinobi_transaction_dir() {
+  echo "${XDG_STATE_HOME:-$HOME/.local/state}/shinobi/transactions"
+}
+
+shinobi_transaction_start() {
+  local kind="${1:?transaction kind required}" detail="${2:-}"
+  local id="$(date +%Y%m%d-%H%M%S)-$$"
+  local dir
+  dir="$(shinobi_transaction_dir)"
+  mkdir -p "$dir"
+  printf '{"id":"%s","kind":"%s","state":"running","started_at":"%s","detail":"%s"}\n' \
+    "$id" "$kind" "$(date --iso-8601=seconds)" "$detail" >"$dir/$id.json"
+  echo "$id"
+}
+
+shinobi_transaction_finish() {
+  local id="${1:?transaction id required}" state="${2:?transaction state required}" detail="${3:-}"
+  local path="$(shinobi_transaction_dir)/$id.json"
+  [[ -f "$path" ]] || return 0
+  printf '{"id":"%s","state":"%s","finished_at":"%s","detail":"%s"}\n' \
+    "$id" "$state" "$(date --iso-8601=seconds)" "$detail" >"$path"
+}

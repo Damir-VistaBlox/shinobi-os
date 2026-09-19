@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # shinobi:summary=Create and inspect filesystem-agnostic Shinobi baselines
-# shinobi:args=<list|create|show> [name]
+# shinobi:args=<list|create|show|verify|delete> [name]
 # shinobi:examples=shinobi snapshot create before-upgrade
 set -euo pipefail
 source "$(dirname -- "$(readlink -f -- "${BASH_SOURCE[0]}")")/_shinobi-common.sh"
@@ -19,14 +19,33 @@ case "$action" in
     [[ "$name" =~ ^[a-zA-Z0-9._-]+$ ]] || { echo 'invalid snapshot name' >&2; exit 2; }
     target="$root/$name"; [[ ! -e "$target" ]] || { echo "snapshot exists: $name" >&2; exit 1; }
     mkdir -p "$target"
-    dpkg-query -W -f='${binary:Package}\t${Version}\n' >"$target/packages.tsv"
-    apt-mark showhold >"$target/held-packages.txt" 2>/dev/null || true
-    dpkg --get-selections >"$target/dpkg-selections.txt"
+    if command -v dpkg-query >/dev/null 2>&1; then dpkg-query -W -f='${binary:Package}\t${Version}\n' >"$target/packages.tsv"; else : >"$target/packages.tsv"; fi
+    if command -v apt-mark >/dev/null 2>&1; then apt-mark showhold >"$target/held-packages.txt" 2>/dev/null || true; else : >"$target/held-packages.txt"; fi
+    if command -v dpkg >/dev/null 2>&1; then dpkg --get-selections >"$target/dpkg-selections.txt"; else : >"$target/dpkg-selections.txt"; fi
     if [[ -d "${XDG_CONFIG_HOME:-$HOME/.config}/shinobi" ]]; then tar -C "${XDG_CONFIG_HOME:-$HOME/.config}" -czf "$target/user-config.tgz" shinobi; fi
-    printf 'created=%s\nfilesystem=%s\n' "$(date --iso-8601=seconds)" "$(findmnt -no FSTYPE / 2>/dev/null || echo unknown)" >"$target/metadata"
+    printf 'created=%s\nfilesystem=%s\nshinobi_version=%s\ntheme=%s\nprofile=%s\n' \
+      "$(date --iso-8601=seconds)" "$(findmnt -no FSTYPE / 2>/dev/null || echo unknown)" \
+      "$(cat /usr/share/shinobi/version 2>/dev/null || echo unknown)" \
+      "$(cat "${XDG_CONFIG_HOME:-$HOME/.config}/shinobi/theme" 2>/dev/null || echo default)" \
+      "$(cat "${XDG_STATE_HOME:-$HOME/.local/state}/shinobi/profile" 2>/dev/null || echo observer)" >"$target/metadata"
+    (cd "$target" && sha256sum packages.tsv held-packages.txt dpkg-selections.txt metadata > checksums.sha256)
+    shinobi_emit_event snapshot.created "{\"name\":\"$name\"}"
     echo "Created snapshot: $target"
     ;;
   show) name="${2:?usage: shinobi snapshot show <name>}"; cat "$root/$name/metadata" ;;
-  -h|--help|help) echo 'Usage: shinobi snapshot <list|create|show> [name]' ;;
+  verify)
+    name="${2:?usage: shinobi snapshot verify <name>}"
+    target="$root/$name"
+    [[ -f "$target/checksums.sha256" ]] || { echo "snapshot has no checksums: $name" >&2; exit 1; }
+    (cd "$target" && sha256sum -c checksums.sha256)
+    ;;
+  delete)
+    name="${2:?usage: shinobi snapshot delete <name>}"
+    [[ "$name" =~ ^[A-Za-z0-9._-]+$ ]] || { echo 'invalid snapshot name' >&2; exit 2; }
+    [[ "${SHINOBI_CONFIRM:-}" == 1 ]] || { echo 'Set SHINOBI_CONFIRM=1 to delete a snapshot.' >&2; exit 77; }
+    target="$root/$name"; [[ -d "$target" ]] || { echo "snapshot not found: $name" >&2; exit 1; }
+    rm -rf -- "$target"
+    ;;
+  -h|--help|help) echo 'Usage: shinobi snapshot <list|create|show|verify|delete> [name]' ;;
   *) echo "shinobi-snapshot: unknown action '$action'" >&2; exit 2 ;;
 esac
