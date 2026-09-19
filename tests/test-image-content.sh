@@ -37,6 +37,9 @@ echo "== Checking installed Shinobi files =="
 listing="$tmp/listing"
 unsquashfs -ll "$tmp/filesystem.squashfs" >"$listing"
 for path in \
+  /usr/bin/shinobi \
+  /usr/bin/shinobi-version \
+  /usr/bin/shinobi-config \
   /usr/bin/Hyprland \
   /usr/bin/quickshell \
   /usr/bin/btop \
