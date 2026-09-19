@@ -5,6 +5,30 @@
 # short bounded retry avoids a login-time race without delaying the desktop.
 set -eu
 
+# Hyprland parses its configuration before most user-session services start.
+# Keep login deterministic even if a theme symlink was lost or a previous
+# interrupted migration left colors.conf dangling. The regular-file fallback
+# is deliberately the same palette shipped in /etc/skel.
+colors_file="$HOME/.config/hypr/colors.conf"
+if [ ! -s "$colors_file" ]; then
+  mkdir -p "$HOME/.config/hypr"
+  cat >"$colors_file" <<'COLORS'
+# Shinobi fallback palette; shinobi-theme may replace this with a theme link.
+$active_border = rgba(89b4faee)
+$inactive_border = rgba(45475aaa)
+COLORS
+fi
+
+# Apply the persisted theme after the fallback is guaranteed. Theme failures
+# must never prevent Hyprland from reaching a usable desktop.
+if command -v shinobi-theme >/dev/null 2>&1 && [ -r "$HOME/.config/shinobi/theme" ]; then
+  theme_name="$(cat "$HOME/.config/shinobi/theme")"
+  if [ -n "$theme_name" ]; then
+    shinobi-theme set "$theme_name" >/dev/null 2>&1 || \
+      echo "shinobi-session: could not apply theme '$theme_name'; using fallback colors" >&2
+  fi
+fi
+
 attempt=0
 until dbus-update-activation-environment --systemd \
   WAYLAND_DISPLAY XDG_CURRENT_DESKTOP XDG_SESSION_TYPE XDG_SESSION_DESKTOP
@@ -23,5 +47,9 @@ systemctl --user import-environment \
   WAYLAND_DISPLAY XDG_CURRENT_DESKTOP XDG_SESSION_TYPE XDG_SESSION_DESKTOP || \
   echo "shinobi-session: could not import the Hyprland environment into systemd --user" >&2
 
-systemctl --user start shinobi-shell.service || \
-  echo "shinobi-session: Quickshell did not start; inspect: journalctl --user -u shinobi-shell.service" >&2
+if ! systemctl --user start shinobi-desktop.target; then
+  echo "shinobi-session: desktop target did not start; falling back to core services" >&2
+  systemctl --user start shinobi-migrate.service
+  systemctl --user start shinobi-shell.service || \
+    echo "shinobi-session: Quickshell did not start; inspect: journalctl --user -u shinobi-shell.service" >&2
+fi

@@ -1,0 +1,8 @@
+#!/bin/sh
+# Shinobi's interactive process monitor is btop. Keep procps installed because
+# ps, pgrep, free, and other system tools depend on it; non-interactive callers
+# still receive the compatible procps implementation.
+if [ -t 1 ] && [ -x /usr/bin/btop ]; then
+  exec /usr/bin/btop "$@"
+fi
+exec /usr/bin/top "$@"

@@ -1,0 +1,29 @@
+#!/usr/bin/env bash
+# shinobi:summary=Control the logged-in Shinobi desktop shell
+# shinobi:args=<status|reload|open-menu|close-menu|toggle-menu>
+# shinobi:examples=shinobi shellctl status | shinobi shellctl reload
+set -euo pipefail
+runtime="${XDG_RUNTIME_DIR:-/tmp}/shinobi"
+socket="$runtime/shell.sock"
+action="${1:-status}"
+case "$action" in
+  status) systemctl --user is-active shinobi-shell.service 2>/dev/null || true ;;
+  reload) systemctl --user restart shinobi-shell.service ;;
+  open-menu)
+    if [[ -S "$socket" ]] && command -v socat >/dev/null 2>&1; then
+      printf '%s\n' "$action" | socat - UNIX-CONNECT:"$socket"
+    else
+      exec shinobi-menu "${2:-root}"
+    fi
+    ;;
+  close-menu|toggle-menu)
+    if [[ -S "$socket" ]] && command -v socat >/dev/null 2>&1; then
+      printf '%s\n' "$action" | socat - UNIX-CONNECT:"$socket"
+    else
+      echo "shinobi shell IPC is not available; no persistent menu state to change" >&2
+      exit 78
+    fi
+    ;;
+  -h|--help|help) echo 'Usage: shinobi shellctl <status|reload|open-menu|close-menu|toggle-menu>' ;;
+  *) echo "shinobi-shellctl: unknown action '$action'" >&2; exit 2 ;;
+esac

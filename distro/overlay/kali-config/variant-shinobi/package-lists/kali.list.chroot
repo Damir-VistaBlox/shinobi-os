@@ -13,11 +13,10 @@
 
 ## Live images always want these
 kali-linux-core
-kali-desktop-live
 
 ## Graphical desktop — Hyprland (Wayland compositor). No kali-desktop-hyprland
 ## metapackage exists upstream (unlike xfce/gnome/kde/i3/...), so the stack
-## is listed explicitly instead of pulling in one meta-package.
+## is listed explicitly instead of pulling in Kali's desktop metapackage.
 hyprland
 xdg-desktop-portal
 xdg-desktop-portal-hyprland
@@ -52,11 +51,7 @@ fontconfig
 
 ## shinobi-hypr-toggle (gaps/opacity toggles) parses `hyprctl -j` output.
 jq
-
-## Metapackages
-##   You can customize the set of Kali metapackages (groups of tools) to install
-##   For the complete list see: https://www.kali.org/tools/kali-meta/
-kali-linux-default
+btop
 
 ## Shinobi OS runtime deps — the shinobi CLI itself is installed by
 ## variant-shinobi/hooks/live/0020-shinobi-tooling.chroot, not apt.

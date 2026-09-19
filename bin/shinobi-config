@@ -1,0 +1,28 @@
+#!/usr/bin/env bash
+# shinobi:summary=Inspect Shinobi configuration and state paths
+# shinobi:args=<paths|show>
+# shinobi:examples=shinobi config paths | shinobi config show
+set -euo pipefail
+source "$(dirname -- "$(readlink -f -- "${BASH_SOURCE[0]}")")/_shinobi-common.sh"
+
+action="${1:-paths}"
+case "$action" in
+  paths)
+    printf 'defaults=%s\nsystem=%s\nuser=%s\nstate=%s\nruntime=%s\nthemes=%s\n' \
+      "$(shinobi_defaults_home)" "$(shinobi_system_config_home)" "$(shinobi_config_home)" \
+      "$(shinobi_state_home)" "$(shinobi_runtime_home)" "${SHINOBI_THEMES_DIR:-/usr/share/shinobi/themes}"
+    ;;
+  show)
+    printf '%s\n' 'Configuration precedence:'
+    printf '  1. %s\n  2. %s\n  3. %s\n' "$(shinobi_defaults_home)" "$(shinobi_system_config_home)" "$(shinobi_config_home)"
+    if [[ -d "$(shinobi_config_home)" ]]; then
+      find "$(shinobi_config_home)" -maxdepth 2 -type f -print | sort
+    else
+      echo 'No user configuration has been created.'
+    fi
+    ;;
+  -h|--help|help)
+    echo 'Usage: shinobi config <paths|show>'
+    ;;
+  *) echo "shinobi-config: unknown action '$action'" >&2; exit 2 ;;
+esac

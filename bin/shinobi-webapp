@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+# shinobi:summary=Install and manage isolated HTTPS webapp wrappers
+# shinobi:args=<list|install|launch|remove> [name] [url]
+# shinobi:examples=shinobi webapp install bloodhound https://127.0.0.1:8080
+set -euo pipefail
+root="$(dirname -- "$(readlink -f -- "${BASH_SOURCE[0]}")")/../libexec/shinobi"
+export PYTHONPATH="$root${PYTHONPATH:+:$PYTHONPATH}"
+exec python3 -m shinobi_control.webappctl "$@"

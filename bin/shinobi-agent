@@ -5,6 +5,9 @@
 set -euo pipefail
 source "$(dirname -- "$(readlink -f -- "${BASH_SOURCE[0]}")")/_shinobi-common.sh"
 
+agent_ctl=/usr/lib/shinobi/shinobi-agentctl
+[[ -x "$agent_ctl" ]] || agent_ctl="$(dirname -- "$(readlink -f -- "${BASH_SOURCE[0]}")")/../libexec/shinobi/shinobi-agentctl"
+
 ENGAGEMENTS_DIR="$(shinobi_engagements_dir)"
 
 usage() {
@@ -14,6 +17,7 @@ Usage: shinobi-agent [--pick] [prompt <text...>]
   --pick          Choose and save a default agent first (wofi, or a terminal
                    menu with no display), then launch it
   prompt <text>   Launch the agent with an initial prompt
+  runs            List recorded agent launches
 
 Default agent resolution order: $SHINOBI_AGENT_CMD env var, then
 `shinobi-default-agent` (see that command), then "claude".
@@ -53,6 +57,18 @@ resolve_agent() {
 
 case "${1:-}" in
   -h | --help | help) usage; exit 0 ;;
+  status)
+    exec "$agent_ctl" agent.status
+    ;;
+  list | capabilities)
+    exec "$agent_ctl" agent.capabilities
+    ;;
+  doctor)
+    exec "$agent_ctl" agent.status
+    ;;
+  runs)
+    find "$(shinobi_state_home)/agent-runs" -maxdepth 1 -type f -name '*.json' -printf '%f\n' 2>/dev/null | sort
+    exit 0
 esac
 
 pick=false
@@ -95,6 +111,18 @@ fi
 echo "Launching '$agent' for engagement '$name' (scope: $dir/scope.yaml)"
 export SHINOBI_ENGAGEMENT="$name"
 export SHINOBI_ENGAGEMENT_DIR="$dir"
+export SHINOBI_API_VERSION=1
+export SHINOBI_AGENT_PROTOCOL=1
+export SHINOBI_AGENT_SOCKET="${SHINOBI_AGENT_SOCKET:-${XDG_RUNTIME_DIR:-/tmp}/shinobi/agent.sock}"
+export SHINOBI_CONTEXT_SOCKET="${SHINOBI_CONTEXT_SOCKET:-${XDG_RUNTIME_DIR:-/tmp}/shinobi/context.sock}"
+export SHINOBI_AGENT_PROFILE="$(cat "$(shinobi_state_home)/profile" 2>/dev/null || echo observer)"
+run_id="$(date +%Y%m%d-%H%M%S)-$$"
+run_dir="$(shinobi_state_home)/agent-runs"
+mkdir -p "$run_dir"
+printf '{"run_id":"%s","agent":"%s","engagement":"%s","profile":"%s","started_at":"%s","pid":%s}\n' \
+  "$run_id" "$agent" "$name" "$SHINOBI_AGENT_PROFILE" "$(date --iso-8601=seconds)" "$$" >"$run_dir/$run_id.json"
+chmod 0600 "$run_dir/$run_id.json"
+shinobi_emit_event agent.started "{\"run_id\":\"$run_id\",\"agent\":\"$agent\",\"engagement\":\"$name\"}"
 cd "$dir"
 if [[ -n "$prompt" ]]; then
   exec "$agent" "$prompt"

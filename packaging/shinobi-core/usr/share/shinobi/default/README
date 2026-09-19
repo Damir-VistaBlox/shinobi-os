@@ -1,0 +1,5 @@
+Shinobi OS packaged defaults.
+
+User configuration belongs under ~/.config/shinobi.
+System administrator overrides belong under /etc/shinobi.
+Do not edit this directory; package updates may replace it.

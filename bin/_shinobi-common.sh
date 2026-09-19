@@ -44,3 +44,76 @@ shinobi_current_engagement() {
   f="$(shinobi_state_file)"
   [[ -f "$f" ]] && cat "$f" || true
 }
+
+shinobi_config_home() {
+  echo "${XDG_CONFIG_HOME:-$HOME/.config}/shinobi"
+}
+
+shinobi_state_home() {
+  echo "${XDG_STATE_HOME:-$HOME/.local/state}/shinobi"
+}
+
+shinobi_runtime_home() {
+  echo "${XDG_RUNTIME_DIR:-/tmp}/shinobi"
+}
+
+shinobi_system_config_home() {
+  echo "${SHINOBI_SYSTEM_CONFIG:-/etc/shinobi}"
+}
+
+shinobi_defaults_home() {
+  echo "${SHINOBI_DEFAULTS_DIR:-/usr/share/shinobi/default}"
+}
+
+shinobi_is_live() {
+  [[ -f /run/live/medium/live/filesystem.squashfs || -f /run/live/medium/live/filesystem.squashfs ]] \
+    || [[ "${SHINOBI_LIVE_MODE:-}" == "1" ]]
+}
+
+shinobi_require_installed() {
+  if shinobi_is_live; then
+    echo "shinobi: this command is unavailable in the live preview; install Shinobi OS first" >&2
+    return 78
+  fi
+}
+
+shinobi_lock() {
+  local name="${1:?lock name required}"
+  local lock_dir="$(shinobi_runtime_home)/locks"
+  mkdir -p "$lock_dir"
+  exec 9>"$lock_dir/$name.lock"
+  flock -n 9 || {
+    echo "shinobi: another $name operation is already running" >&2
+    return 75
+  }
+}
+
+shinobi_emit_event() {
+  local event="${1:?event name required}"
+  local payload="${2:-{}}"
+  command -v shinobi-event >/dev/null 2>&1 || return 0
+  shinobi-event publish "$event" "$payload" >/dev/null 2>&1 || true
+}
+
+shinobi_transaction_dir() {
+  echo "${XDG_STATE_HOME:-$HOME/.local/state}/shinobi/transactions"
+}
+
+shinobi_transaction_start() {
+  local kind="${1:?transaction kind required}" detail="${2:-}"
+  local id="$(date +%Y%m%d-%H%M%S)-$$"
+  local dir
+  dir="$(shinobi_transaction_dir)"
+  mkdir -p "$dir"
+  printf '{"id":"%s","kind":"%s","state":"running","started_at":"%s","detail":"%s"}\n' \
+    "$id" "$kind" "$(date --iso-8601=seconds)" "$detail" >"$dir/$id.json"
+  echo "$id"
+}
+
+shinobi_transaction_finish() {
+  local id="${1:?transaction id required}" state="${2:?transaction state required}" detail="${3:-}"
+  local path="$(shinobi_transaction_dir)/$id.json"
+  [[ -f "$path" ]] || return 0
+  printf '{"id":"%s","state":"%s","finished_at":"%s","detail":"%s"}\n' \
+    "$id" "$state" "$(date --iso-8601=seconds)" "$detail" >"$path"
+}

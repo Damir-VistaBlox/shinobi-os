@@ -1,0 +1,3 @@
+Shinobi trust profiles are selected per user under $XDG_STATE_HOME/shinobi/profile.
+The default profile is observer. User policy may reduce permissions but may not
+grant privileged or exploit capabilities.

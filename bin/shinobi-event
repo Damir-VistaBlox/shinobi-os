@@ -1,0 +1,25 @@
+#!/usr/bin/env bash
+# shinobi:summary=Publish or inspect local Shinobi events
+# shinobi:args=<publish|recent> [event] [json-payload]
+# shinobi:examples=shinobi event publish theme.changed '{"theme":"matrix"}'
+set -euo pipefail
+root="$(dirname -- "$(readlink -f -- "${BASH_SOURCE[0]}")")/../libexec/shinobi"
+export PYTHONPATH="$root${PYTHONPATH:+:$PYTHONPATH}"
+action="${1:-recent}"
+shift || true
+python3 - "$action" "$@" <<'PY'
+import json, sys
+from shinobi_control import events
+action = sys.argv[1]
+if action == "recent":
+    print(json.dumps(events.recent(), indent=2, sort_keys=True))
+elif action == "publish":
+    if len(sys.argv) < 3:
+        raise SystemExit("usage: shinobi event publish <event> [json-payload]")
+    payload = json.loads(sys.argv[3]) if len(sys.argv) > 3 else {}
+    print(json.dumps(events.publish(sys.argv[2], payload), indent=2, sort_keys=True))
+elif action in {"help", "-h", "--help"}:
+    print("Usage: shinobi event <publish|recent> [event] [json-payload]")
+else:
+    raise SystemExit(f"unknown event action: {action}")
+PY

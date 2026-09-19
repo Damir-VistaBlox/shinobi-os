@@ -1,0 +1,47 @@
+#!/usr/bin/env bash
+# shinobi:summary=Show Shinobi OS and desktop component versions
+# shinobi:args=
+# shinobi:examples=shinobi version
+set -euo pipefail
+
+version_file="${SHINOBI_VERSION_FILE:-/usr/share/shinobi/version}"
+version="0.1.0-dev"
+[[ -r "$version_file" ]] && version="$(head -n1 "$version_file")"
+
+json=false
+[[ "${1:-}" == "--json" ]] && json=true
+
+value() {
+  local command_name="$1" fallback="$2"
+  if command -v "$command_name" >/dev/null 2>&1; then
+    "$command_name" --version 2>/dev/null | head -n1 | tr '\n' ' ' || printf '%s' "$fallback"
+  else
+    printf '%s' "$fallback"
+  fi
+}
+
+json_value() {
+  printf '%s' "$1" | tr '\n' ' ' | sed 's/\\/\\\\/g; s/"/\\"/g'
+}
+
+shinobi_version="$version"
+package_version="$(dpkg-query -W -f='${Version}' shinobi-core 2>/dev/null || printf '%s' unknown)"
+kali_version="$(. /etc/os-release 2>/dev/null; printf '%s' "${PRETTY_NAME:-unknown}")"
+kernel_version="$(uname -r)"
+hyprland_version="$(value Hyprland unknown)"
+quickshell_version="$(value quickshell unknown)"
+theme_file="${XDG_CONFIG_HOME:-$HOME/.config}/shinobi/theme"
+theme="$(cat "$theme_file" 2>/dev/null || printf '%s' default)"
+engagement="$(cat "${XDG_STATE_HOME:-$HOME/.local/state}/shinobi/current-engagement" 2>/dev/null || printf '%s' none)"
+channel="$(cat "${XDG_CONFIG_HOME:-$HOME/.config}/shinobi/channel" 2>/dev/null || printf '%s' stable)"
+session="${XDG_CURRENT_DESKTOP:-unknown}/${XDG_SESSION_TYPE:-unknown}"
+
+if $json; then
+  printf '{"shinobi":"%s","package":"%s","kali":"%s","kernel":"%s","hyprland":"%s","quickshell":"%s","theme":"%s","engagement":"%s","channel":"%s","session":"%s"}\n' \
+    "$(json_value "$shinobi_version")" "$(json_value "$package_version")" "$(json_value "$kali_version")" "$(json_value "$kernel_version")" \
+    "$(json_value "$hyprland_version")" "$(json_value "$quickshell_version")" "$(json_value "$theme")" "$(json_value "$engagement")" "$(json_value "$channel")" "$(json_value "$session")"
+else
+  printf 'Shinobi OS %s\nPackage: %s\nKali: %s\nKernel: %s\nHyprland: %s\nQuickshell: %s\nTheme: %s\nEngagement: %s\nChannel: %s\nSession: %s\n' \
+    "$shinobi_version" "$package_version" "$kali_version" "$kernel_version" \
+    "$hyprland_version" "$quickshell_version" "$theme" "$engagement" "$channel" "$session"
+fi

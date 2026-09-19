@@ -1,0 +1,9 @@
+id = "tool.passive.dns_lookup"
+name = "DNS lookup"
+binary = "getent"
+category = "network"
+risk = "passive"
+requires_scope = true
+requires_approval = false
+supports_live = true
+timeout_seconds = 30
