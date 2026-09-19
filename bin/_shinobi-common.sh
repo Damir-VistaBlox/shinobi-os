@@ -87,3 +87,10 @@ shinobi_lock() {
     return 75
   }
 }
+
+shinobi_emit_event() {
+  local event="${1:?event name required}"
+  local payload="${2:-{}}"
+  command -v shinobi-event >/dev/null 2>&1 || return 0
+  shinobi-event publish "$event" "$payload" >/dev/null 2>&1 || true
+}

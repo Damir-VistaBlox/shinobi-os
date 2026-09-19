@@ -58,6 +58,7 @@ cmd_current() {
 
 cmd_set() {
   local name="${1:?usage: shinobi-theme set <name>}"
+  [[ "$name" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$ ]] || { echo "shinobi-theme: invalid theme name" >&2; exit 2; }
   local theme_dir="$THEMES_DIR/$name"
   if [[ ! -d "$theme_dir" ]]; then
     echo "shinobi-theme: no such theme '$name' (looked in $theme_dir)" >&2
@@ -83,6 +84,7 @@ cmd_set() {
   if command -v shinobi-hook >/dev/null 2>&1; then
     SHINOBI_THEME="$name" shinobi-hook run theme-set || echo "shinobi-theme: theme hook failed" >&2
   fi
+  shinobi_emit_event theme.changed "{\"theme\":\"$name\"}"
   echo "Theme set to: $name (new kitty windows pick it up; existing ones don't hot-reload)"
 }
 
