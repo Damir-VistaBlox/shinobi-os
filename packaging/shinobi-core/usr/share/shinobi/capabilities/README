@@ -1,0 +1,3 @@
+Capability manifests describe the structured operations exposed by shinobi-agentd.
+Unknown capabilities are rejected and every request is written to the local audit
+journal. This directory is package-owned; user extensions belong in ~/.config/shinobi.

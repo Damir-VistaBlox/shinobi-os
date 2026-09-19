@@ -10,8 +10,11 @@ cp -a "$root/packaging/shinobi-core/." "$stage/"
 mkdir -p "$stage/usr/bin" "$stage/usr/share/shinobi/themes"
 cp -a "$root/bin/shinobi" "$root"/bin/shinobi-* "$stage/usr/bin/"
 cp -a "$root/bin/_shinobi-common.sh" "$stage/usr/bin/"
+mkdir -p "$stage/usr/lib/shinobi"
+cp -a "$root/libexec/shinobi/." "$stage/usr/lib/shinobi/"
 cp -a "$root/themes/." "$stage/usr/share/shinobi/themes/"
 chmod 0755 "$stage/usr/bin"/shinobi "$stage/usr/bin"/shinobi-* "$stage/usr/bin/_shinobi-common.sh" \
+  "$stage/usr/lib/shinobi/shinobi-agentd" "$stage/usr/lib/shinobi/shinobi-agentctl" \
   "$stage/usr/lib/shinobi"/* 2>/dev/null || true
 output="${1:-$root/shinobi-core.deb}"
 dpkg-deb --build "$stage" "$output" >/dev/null

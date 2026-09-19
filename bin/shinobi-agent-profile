@@ -1,0 +1,32 @@
+#!/usr/bin/env bash
+# shinobi:summary=Inspect or select the agent trust profile
+# shinobi:args=<list|show|use|reset> [name]
+# shinobi:examples=shinobi agent profile list | shinobi agent profile use analyst
+set -euo pipefail
+
+state_home="${XDG_STATE_HOME:-$HOME/.local/state}/shinobi"
+profile_file="$state_home/profile"
+profiles=(observer analyst operator administrator emergency)
+
+case "${1:-list}" in
+  list) printf '%s\n' "${profiles[@]}" ;;
+  show) if [[ -f "$profile_file" ]]; then cat "$profile_file"; else echo observer; fi ;;
+  use)
+    profile="${2:?usage: shinobi agent profile use <name>}"
+    valid=false
+    for known in "${profiles[@]}"; do [[ "$known" == "$profile" ]] && valid=true; done
+    $valid || { echo "unknown profile: $profile" >&2; exit 2; }
+    mkdir -p "$state_home"
+    printf '%s\n' "$profile" >"$profile_file"
+    chmod 0600 "$profile_file"
+    echo "Agent trust profile: $profile"
+    ;;
+  reset)
+    mkdir -p "$state_home"
+    printf '%s\n' observer >"$profile_file"
+    chmod 0600 "$profile_file"
+    echo 'Agent trust profile: observer'
+    ;;
+  -h|--help|help) echo 'Usage: shinobi agent profile <list|show|use|reset> [name]' ;;
+  *) echo "unknown profile action: $1" >&2; exit 2 ;;
+esac

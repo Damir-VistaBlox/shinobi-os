@@ -5,6 +5,9 @@
 set -euo pipefail
 source "$(dirname -- "$(readlink -f -- "${BASH_SOURCE[0]}")")/_shinobi-common.sh"
 
+agent_ctl=/usr/lib/shinobi/shinobi-agentctl
+[[ -x "$agent_ctl" ]] || agent_ctl="$(dirname -- "$(readlink -f -- "${BASH_SOURCE[0]}")")/../libexec/shinobi/shinobi-agentctl"
+
 ENGAGEMENTS_DIR="$(shinobi_engagements_dir)"
 
 usage() {
@@ -53,6 +56,15 @@ resolve_agent() {
 
 case "${1:-}" in
   -h | --help | help) usage; exit 0 ;;
+  status)
+    exec "$agent_ctl" agent.status
+    ;;
+  list | capabilities)
+    exec "$agent_ctl" agent.capabilities
+    ;;
+  doctor)
+    exec "$agent_ctl" agent.status
+    ;;
 esac
 
 pick=false

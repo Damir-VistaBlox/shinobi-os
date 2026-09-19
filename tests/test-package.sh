@@ -16,8 +16,13 @@ for path in \
   ./usr/bin/shinobi-version \
   ./usr/bin/shinobi-config \
   ./usr/lib/systemd/user/shinobi-desktop.target \
+  ./usr/lib/systemd/user/shinobi-agentd.service \
   ./usr/lib/systemd/user/shinobi-shell.service \
+  ./usr/lib/shinobi/shinobi-agentd \
+  ./usr/lib/shinobi/shinobi-agentctl \
   ./usr/share/shinobi/version \
+  ./usr/share/shinobi/policy/README \
+  ./usr/share/shinobi/capabilities/README \
   ./usr/share/shinobi/themes/kali-dark/theme.toml
 do
   grep -Fq "$path" <<<"$contents" || { echo "package-test: missing $path" >&2; exit 1; }
