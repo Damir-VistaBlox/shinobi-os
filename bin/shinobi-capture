@@ -47,5 +47,6 @@ else
 fi
 
 command -v wl-copy >/dev/null 2>&1 && wl-copy <"$out_file"
+command -v shinobi-evidence >/dev/null 2>&1 && shinobi-evidence add "$out_file" screenshot >/dev/null 2>&1 || true
 notify "Saved: $out_file"
 echo "$out_file"
