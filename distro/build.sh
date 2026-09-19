@@ -46,7 +46,7 @@ echo "== Staging shinobi CLI + MCP server into the overlay (generated, not commi
 STAGE="$OVERLAY/includes.chroot/opt/shinobi"
 rm -rf "$STAGE"
 mkdir -p "$STAGE"
-rsync -a "$ROOT/bin" "$ROOT/libexec" "$ROOT/mcp-servers" "$ROOT/themes" "$ROOT/packaging" "$STAGE/"
+rsync -a "$ROOT/bin" "$ROOT/libexec" "$ROOT/mcp-servers" "$ROOT/themes" "$ROOT/tools" "$ROOT/packaging" "$STAGE/"
 
 echo "== Linking variant-$SHINOBI_VARIANT into the kali-live checkout =="
 ln -sfn "$OVERLAY/kali-config/variant-$SHINOBI_VARIANT" "$SUBMODULE/kali-config/variant-$SHINOBI_VARIANT"

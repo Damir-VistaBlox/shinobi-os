@@ -24,7 +24,7 @@ for package in kali-linux-core hyprland sddm quickshell network-manager pipewire
 done
 
 echo "== Checking Shinobi control-plane commands =="
-for command in version config hook system package update snapshot bar shellctl plugin install agent-profile approval context event; do
+for command in version config hook system package update snapshot bar shellctl plugin install agent-profile approval context event tool; do
   [[ -x "$ROOT/bin/shinobi-$command" ]] || fail "missing control-plane command: shinobi $command"
 done
 

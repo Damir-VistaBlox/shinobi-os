@@ -26,6 +26,7 @@ for path in \
   ./usr/share/shinobi/version \
   ./usr/share/shinobi/policy/README \
   ./usr/share/shinobi/capabilities/README \
+  ./usr/share/shinobi/tools/nmap-scan.toml \
   ./usr/share/shinobi/themes/kali-dark/theme.toml
 do
   grep -Fq "$path" <<<"$contents" || { echo "package-test: missing $path" >&2; exit 1; }
