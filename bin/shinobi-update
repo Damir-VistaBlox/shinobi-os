@@ -1,0 +1,22 @@
+#!/usr/bin/env bash
+# shinobi:summary=Check or apply Kali/Shinobi updates
+# shinobi:args=<check|status|apply>
+# shinobi:examples=shinobi update check | shinobi update apply
+set -euo pipefail
+source "$(dirname -- "$(readlink -f -- "${BASH_SOURCE[0]}")")/_shinobi-common.sh"
+action="${1:-status}"
+case "$action" in
+  status) apt list --upgradable 2>/dev/null | sed '1d' || true ;;
+  check)
+    shinobi_require_installed; shinobi_lock update
+    if [[ "${2:-}" == "--dry-run" || "${SHINOBI_DRY_RUN:-}" == 1 ]]; then apt-get -s dist-upgrade; else command -v pkexec >/dev/null 2>&1 && exec pkexec apt-get update || exec sudo apt-get update; fi
+    ;;
+  apply)
+    shinobi_require_installed; shinobi_lock update
+    if [[ "${2:-}" == "--dry-run" || "${SHINOBI_DRY_RUN:-}" == 1 ]]; then apt-get -s dist-upgrade; exit 0; fi
+    [[ "${SHINOBI_CONFIRM:-}" == 1 ]] || { echo 'Set SHINOBI_CONFIRM=1 to confirm the update.' >&2; exit 77; }
+    command -v pkexec >/dev/null 2>&1 && exec pkexec apt-get dist-upgrade || exec sudo apt-get dist-upgrade
+    ;;
+  -h|--help|help) echo 'Usage: shinobi update <status|check|apply> [--dry-run]' ;;
+  *) echo "shinobi-update: unknown action '$action'" >&2; exit 2 ;;
+esac

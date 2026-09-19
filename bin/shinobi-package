@@ -1,0 +1,20 @@
+#!/usr/bin/env bash
+# shinobi:summary=Inspect and manage Kali/Shinobi packages
+# shinobi:args=<list|search|sources|audit|install|remove> [package]
+# shinobi:examples=shinobi package audit | shinobi package install nmap
+set -euo pipefail
+action="${1:-list}"
+case "$action" in
+  list) dpkg-query -W -f='${binary:Package}\t${Version}\n' 'shinobi-*' 2>/dev/null || true ;;
+  search) apt-cache search "${2:?usage: shinobi package search <term>}" ;;
+  sources) grep -RhsE '^[[:space:]]*deb([[:space:]]|$)' /etc/apt/sources.list /etc/apt/sources.list.d 2>/dev/null || true ;;
+  audit) apt-cache policy shinobi-core kali-linux-core hyprland quickshell ;;
+  install|remove)
+    package="${2:?usage: shinobi package $action <package>}"
+    [[ "$package" =~ ^[a-z0-9][a-z0-9+.-]*$ ]] || { echo 'invalid package name' >&2; exit 2; }
+    command -v pkexec >/dev/null 2>&1 && exec pkexec apt-get "$action" "$package"
+    exec sudo apt-get "$action" "$package"
+    ;;
+  -h|--help|help) echo 'Usage: shinobi package <list|search|sources|audit|install|remove> [package]' ;;
+  *) echo "shinobi-package: unknown action '$action'" >&2; exit 2 ;;
+esac

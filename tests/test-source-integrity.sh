@@ -10,6 +10,8 @@ for theme in "$ROOT"/themes/*; do
   for file in hypr.conf kitty.conf wofi.css quickshell.qml; do
     [[ -s "$theme/$file" ]] || fail "theme $(basename "$theme") is missing $file"
   done
+  [[ -s "$theme/theme.toml" ]] || fail "theme $(basename "$theme") is missing theme.toml"
+  grep -Eq '^id[[:space:]]*=' "$theme/theme.toml" || fail "theme $(basename "$theme") has no manifest id"
   grep -Eq '^\$active_border[[:space:]]*=[[:space:]]*rgba\(' "$theme/hypr.conf" \
     || fail "theme $(basename "$theme") has no active border color"
   grep -Eq '^\$inactive_border[[:space:]]*=[[:space:]]*rgba\(' "$theme/hypr.conf" \
@@ -48,6 +50,11 @@ done
 grep -Fq 'Requires=shinobi-migrate.service' \
   "$ROOT/packaging/shinobi-core/usr/lib/systemd/user/shinobi-shell.service" \
   || fail "shell service does not require migrations"
+[[ -s "$ROOT/packaging/shinobi-core/usr/lib/systemd/user/shinobi-desktop.target" ]] \
+  || fail "missing Shinobi desktop target"
+grep -Fq 'Wants=shinobi-migrate.service shinobi-shell.service' \
+  "$ROOT/packaging/shinobi-core/usr/lib/systemd/user/shinobi-desktop.target" \
+  || fail "desktop target does not group core services"
 
 echo "== Checking optional static analyzers =="
 if command -v qmllint >/dev/null 2>&1; then

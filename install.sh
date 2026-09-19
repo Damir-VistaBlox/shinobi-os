@@ -8,16 +8,13 @@ PREFIX="${PREFIX:-/usr/local}"
 
 echo "== Installing apt dependencies =="
 sudo apt-get update -y
-sudo apt-get install -y nmap python3-pip pipx
+sudo apt-get install -y nmap python3-pip pipx dpkg-dev
 
-echo "== Linking shinobi CLI into $PREFIX/bin =="
-for script in "$SHINOBI_ROOT"/bin/shinobi*; do
-  sudo ln -sf "$script" "$PREFIX/bin/$(basename "$script")"
-done
-
-echo "== Installing themes to /usr/share/shinobi/themes =="
-sudo mkdir -p /usr/share/shinobi
-sudo cp -r "$SHINOBI_ROOT/themes" /usr/share/shinobi/themes
+echo "== Building and installing canonical shinobi-core package =="
+package="$SHINOBI_ROOT/shinobi-core.deb"
+"$SHINOBI_ROOT/packaging/build-deb.sh" "$package"
+sudo dpkg -i "$package"
+rm -f "$package"
 
 echo "== Installing shinobi-recon MCP server (pipx) =="
 pipx install --force "$SHINOBI_ROOT/mcp-servers/shinobi-recon"

@@ -1,0 +1,29 @@
+#!/usr/bin/env bash
+# shinobi:summary=Inspect and control Shinobi system services
+# shinobi:args=<status|service> [name] [action]
+# shinobi:examples=shinobi system status | shinobi system service restart shell
+set -euo pipefail
+
+action="${1:-status}"
+case "$action" in
+  status)
+    printf 'mode=%s\n' "$([[ -f /run/live/medium/live/filesystem.squashfs ]] && echo live || echo installed)"
+    printf 'user_manager=%s\n' "$(systemctl --user is-active 2>/dev/null || true)"
+    for unit in shinobi-desktop.target shinobi-migrate.service shinobi-shell.service; do
+      printf '%s=%s\n' "$unit" "$(systemctl --user is-active "$unit" 2>/dev/null || echo unavailable)"
+    done
+    ;;
+  service)
+    name="${2:?usage: shinobi system service <name> [status|start|stop|restart]}"
+    operation="${3:-status}"
+    case "$name" in
+      shell) unit=shinobi-shell.service ;;
+      migrate) unit=shinobi-migrate.service ;;
+      desktop) unit=shinobi-desktop.target ;;
+      *) echo "unknown Shinobi service: $name" >&2; exit 2 ;;
+    esac
+    case "$operation" in status|start|stop|restart|is-active) systemctl --user "$operation" "$unit" ;; *) echo 'invalid service action' >&2; exit 2 ;; esac
+    ;;
+  -h|--help|help) echo 'Usage: shinobi system <status|service> [name] [action]' ;;
+  *) echo "shinobi-system: unknown action '$action'" >&2; exit 2 ;;
+esac

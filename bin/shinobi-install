@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+# shinobi:summary=Show supported optional Shinobi installation groups
+# shinobi:args=<group>
+# shinobi:examples=shinobi install dev
+set -euo pipefail
+case "${1:-help}" in
+  list|help|-h|--help) printf '%s\n' 'Supported groups: dev python node rust go containers' ;;
+  *) echo "shinobi-install: optional group '$1' is not enabled in this security-first build" >&2; exit 77 ;;
+esac

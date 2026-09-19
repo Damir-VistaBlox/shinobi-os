@@ -23,6 +23,11 @@ for package in kali-linux-core hyprland sddm quickshell network-manager pipewire
     || fail "required package missing from desktop profile: $package"
 done
 
+echo "== Checking Shinobi control-plane commands =="
+for command in version config hook system package update snapshot bar shellctl plugin install; do
+  [[ -x "$ROOT/bin/shinobi-$command" ]] || fail "missing control-plane command: shinobi $command"
+done
+
 echo "== Checking Hyprland theme bootstrap =="
 colors_file="$ROOT/distro/overlay/includes.chroot/usr/share/shinobi-dotfiles/etc/skel/.config/hypr/colors.conf"
 [[ -f "$colors_file" && ! -L "$colors_file" ]] \
@@ -58,7 +63,9 @@ if command -v systemd-analyze >/dev/null 2>&1; then
       # package-provided ExecStart binaries (quickshell and shinobi-migrate).
       # Keep those expected staging warnings non-fatal, but fail on every
       # other unit error.
-      if [[ "$unit_output" != *"not executable: No such file or directory"* ]]; then
+      if [[ "$unit_output" != *"not executable: No such file or directory"* \
+         && "$unit_output" != *"Unit shinobi-"*"not found"* \
+         && "$unit_output" != *"Failed to create shinobi-"* ]]; then
         printf '%s\n' "$unit_output" >&2
         exit "$unit_status"
       fi

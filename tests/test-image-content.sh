@@ -43,6 +43,7 @@ for path in \
   /usr/local/bin/top \
   /usr/lib/shinobi/shinobi-migrate \
   /usr/lib/systemd/user/shinobi-migrate.service \
+  /usr/lib/systemd/user/shinobi-desktop.target \
   /usr/lib/systemd/user/shinobi-shell.service \
   /usr/share/plymouth/themes/shinobi/shinobi.script \
   /usr/share/shinobi-dotfiles/etc/skel/.config/hypr/colors.conf

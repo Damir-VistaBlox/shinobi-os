@@ -7,6 +7,26 @@ set -euo pipefail
 
 source "$(dirname -- "$(readlink -f -- "${BASH_SOURCE[0]}")")/_shinobi-common.sh"
 
+if [[ "${1:-}" == "--json" ]]; then
+  status=0
+  missing_json=()
+  for required in python3 nmap shinobi-recon; do
+    command -v "$required" >/dev/null 2>&1 || { missing_json+=("\"$required\""); status=1; }
+  done
+  active_json="$(shinobi_current_engagement)"
+  shell_state="inactive"
+  if [[ "${XDG_CURRENT_DESKTOP:-}" == *Hyprland* ]]; then
+    systemctl --user is-active --quiet shinobi-shell.service && shell_state=active || status=1
+  else
+    shell_state=not-applicable
+  fi
+  missing_payload="$(IFS=,; echo "${missing_json[*]:-}")"
+  printf '{"status":"%s","missing":[%s],"engagement":"%s","shell":"%s","live":%s}\n' \
+    "$([[ $status -eq 0 ]] && echo pass || echo failed)" "$missing_payload" "$active_json" "$shell_state" \
+    "$([[ -f /run/live/medium/live/filesystem.squashfs ]] && echo true || echo false)"
+  exit "$status"
+fi
+
 missing=()
 for required in python3 nmap shinobi-recon; do
   command -v "$required" >/dev/null 2>&1 || missing+=("$required")

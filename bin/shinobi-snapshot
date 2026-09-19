@@ -1,0 +1,32 @@
+#!/usr/bin/env bash
+# shinobi:summary=Create and inspect filesystem-agnostic Shinobi baselines
+# shinobi:args=<list|create|show> [name]
+# shinobi:examples=shinobi snapshot create before-upgrade
+set -euo pipefail
+source "$(dirname -- "$(readlink -f -- "${BASH_SOURCE[0]}")")/_shinobi-common.sh"
+shinobi_require_installed
+shinobi_lock snapshot
+root="${SHINOBI_SNAPSHOT_DIR:-/var/lib/shinobi/snapshots}"
+if ! mkdir -p "$root" 2>/dev/null; then
+  root="${XDG_STATE_HOME:-$HOME/.local/state}/shinobi/snapshots"
+  mkdir -p "$root"
+fi
+action="${1:-list}"
+case "$action" in
+  list) find "$root" -mindepth 1 -maxdepth 1 -type d -printf '%f\n' 2>/dev/null | sort ;;
+  create)
+    name="${2:-manual-$(date +%Y%m%d-%H%M%S)}"
+    [[ "$name" =~ ^[a-zA-Z0-9._-]+$ ]] || { echo 'invalid snapshot name' >&2; exit 2; }
+    target="$root/$name"; [[ ! -e "$target" ]] || { echo "snapshot exists: $name" >&2; exit 1; }
+    mkdir -p "$target"
+    dpkg-query -W -f='${binary:Package}\t${Version}\n' >"$target/packages.tsv"
+    apt-mark showhold >"$target/held-packages.txt" 2>/dev/null || true
+    dpkg --get-selections >"$target/dpkg-selections.txt"
+    if [[ -d "${XDG_CONFIG_HOME:-$HOME/.config}/shinobi" ]]; then tar -C "${XDG_CONFIG_HOME:-$HOME/.config}" -czf "$target/user-config.tgz" shinobi; fi
+    printf 'created=%s\nfilesystem=%s\n' "$(date --iso-8601=seconds)" "$(findmnt -no FSTYPE / 2>/dev/null || echo unknown)" >"$target/metadata"
+    echo "Created snapshot: $target"
+    ;;
+  show) name="${2:?usage: shinobi snapshot show <name>}"; cat "$root/$name/metadata" ;;
+  -h|--help|help) echo 'Usage: shinobi snapshot <list|create|show> [name]' ;;
+  *) echo "shinobi-snapshot: unknown action '$action'" >&2; exit 2 ;;
+esac
