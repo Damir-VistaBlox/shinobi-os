@@ -14,15 +14,23 @@ if [[ "${1:-}" == "--json" ]]; then
     command -v "$required" >/dev/null 2>&1 || { missing_json+=("\"$required\""); status=1; }
   done
   active_json="$(shinobi_current_engagement)"
+  profile_json="observer"
+  [[ -f "$(shinobi_state_home)/profile" ]] && profile_json="$(cat "$(shinobi_state_home)/profile")"
   shell_state="inactive"
+  agent_state="inactive"
+  context_state="inactive"
   if [[ "${XDG_CURRENT_DESKTOP:-}" == *Hyprland* ]]; then
     systemctl --user is-active --quiet shinobi-shell.service && shell_state=active || status=1
+    systemctl --user is-active --quiet shinobi-agentd.service && agent_state=active || status=1
+    systemctl --user is-active --quiet shinobi-contextd.service && context_state=active || status=1
   else
     shell_state=not-applicable
+    agent_state=not-applicable
+    context_state=not-applicable
   fi
   missing_payload="$(IFS=,; echo "${missing_json[*]:-}")"
-  printf '{"status":"%s","missing":[%s],"engagement":"%s","shell":"%s","live":%s}\n' \
-    "$([[ $status -eq 0 ]] && echo pass || echo failed)" "$missing_payload" "$active_json" "$shell_state" \
+  printf '{"status":"%s","missing":[%s],"engagement":"%s","profile":"%s","shell":"%s","agent":"%s","context":"%s","live":%s}\n' \
+    "$([[ $status -eq 0 ]] && echo pass || echo failed)" "$missing_payload" "$active_json" "$profile_json" "$shell_state" "$agent_state" "$context_state" \
     "$([[ -f /run/live/medium/live/filesystem.squashfs ]] && echo true || echo false)"
   exit "$status"
 fi
@@ -64,4 +72,16 @@ if [[ "${XDG_CURRENT_DESKTOP:-}" == *Hyprland* ]]; then
     exit 1
   fi
   printf 'Desktop: Quickshell service active.\n'
+  if systemctl --user is-active --quiet shinobi-agentd.service; then
+    printf 'Agent control plane: active (profile: %s).\n' "$(cat "$(shinobi_state_home)/profile" 2>/dev/null || echo observer)"
+  else
+    printf 'Agent control plane: inactive.\n' >&2
+    exit 1
+  fi
+  if systemctl --user is-active --quiet shinobi-contextd.service; then
+    printf 'Desktop context service: active.\n'
+  else
+    printf 'Desktop context service: inactive.\n' >&2
+    exit 1
+  fi
 fi
