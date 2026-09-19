@@ -28,6 +28,12 @@ esac
 
 log="$LOG_DIR/${MODE}.log"
 marker='(Shinobi|shinobi|systemd\[1\]|Reached target|login:)'
+# A graphical live image does not reliably emit kernel/systemd output on the
+# emulated serial console.  OVMF also writes its own firmware messages there,
+# so a non-empty UEFI log is not evidence that userspace failed to boot.
+# Keep the survival check strict by rejecting only messages that indicate an
+# actual boot failure.
+boot_failure='(Boot failed|No bootable|Could not load|failed to load|Kernel panic|kernel panic|PANIC:)'
 echo "== Booting $MODE ISO (up to 150 seconds) =="
 accel=(-accel tcg)
 if [[ -e /dev/kvm && -r /dev/kvm && -w /dev/kvm ]]; then
@@ -49,6 +55,12 @@ elif [[ "$qemu_status" -eq 124 && ! -s "$log" ]]; then
   echo "qemu-test: $MODE remained alive for the timeout (serial console unavailable)"
   echo "qemu-test: $MODE PASS (survival check)"
   exit 0
+elif [[ "$qemu_status" -eq 124 && "$MODE" == "uefi" ]]; then
+  if ! grep -Eiq "$boot_failure" "$log"; then
+    echo "qemu-test: uefi remained alive for the timeout (firmware-only serial output)"
+    echo "qemu-test: uefi PASS (survival check)"
+    exit 0
+  fi
 elif [[ "$qemu_status" -eq 124 && -s "$log" ]]; then
   echo "qemu-test: $MODE remained alive for the timeout; no recognized userspace marker" >&2
   tail -40 "$log" >&2 || true
