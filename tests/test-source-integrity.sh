@@ -41,7 +41,7 @@ grep -Eq '^set color_highlight=[[:alnum:]-]+/[[:alnum:]-]+$' "$grub_theme" \
   || fail "GRUB menu colors must not use unsupported hex values"
 
 echo "== Checking service ownership contract =="
-for unit in shinobi-migrate.service shinobi-shell.service shinobi-agentd.service; do
+for unit in shinobi-migrate.service shinobi-shell.service shinobi-agentd.service shinobi-contextd.service; do
   path="$ROOT/packaging/shinobi-core/usr/lib/systemd/user/$unit"
   [[ -s "$path" ]] || fail "missing packaged user unit: $unit"
   grep -Eq '^Description=' "$path" || fail "$unit has no Description"
@@ -52,7 +52,7 @@ grep -Fq 'Requires=shinobi-migrate.service' \
   || fail "shell service does not require migrations"
 [[ -s "$ROOT/packaging/shinobi-core/usr/lib/systemd/user/shinobi-desktop.target" ]] \
   || fail "missing Shinobi desktop target"
-grep -Fq 'Wants=shinobi-migrate.service shinobi-shell.service shinobi-agentd.service' \
+grep -Fq 'Wants=shinobi-migrate.service shinobi-shell.service shinobi-agentd.service shinobi-contextd.service' \
   "$ROOT/packaging/shinobi-core/usr/lib/systemd/user/shinobi-desktop.target" \
   || fail "desktop target does not group core services"
 

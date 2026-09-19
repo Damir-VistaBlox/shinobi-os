@@ -20,6 +20,7 @@ class AgentDaemon:
         self.socket_path = socket_path
         self.capabilities = builtin_capabilities()
         self.server: asyncio.AbstractServer | None = None
+        self.dbus_bus: Any = None
 
     async def start(self) -> None:
         self.socket_path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
@@ -29,11 +30,18 @@ class AgentDaemon:
             pass
         self.server = await asyncio.start_unix_server(self.handle, path=str(self.socket_path))
         os.chmod(self.socket_path, 0o600)
+        try:
+            from .dbus_adapter import attach
+            self.dbus_bus = await attach(self)
+        except Exception:
+            self.dbus_bus = None
 
     async def close(self) -> None:
         if self.server:
             self.server.close()
             await self.server.wait_closed()
+        if self.dbus_bus is not None:
+            self.dbus_bus.disconnect()
         try:
             self.socket_path.unlink()
         except FileNotFoundError:

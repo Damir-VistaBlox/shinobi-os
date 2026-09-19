@@ -17,9 +17,12 @@ for path in \
   ./usr/bin/shinobi-config \
   ./usr/lib/systemd/user/shinobi-desktop.target \
   ./usr/lib/systemd/user/shinobi-agentd.service \
+  ./usr/lib/systemd/user/shinobi-contextd.service \
   ./usr/lib/systemd/user/shinobi-shell.service \
   ./usr/lib/shinobi/shinobi-agentd \
   ./usr/lib/shinobi/shinobi-agentctl \
+  ./usr/lib/shinobi/shinobi-contextd \
+  ./usr/lib/shinobi/shinobi-contextctl \
   ./usr/share/shinobi/version \
   ./usr/share/shinobi/policy/README \
   ./usr/share/shinobi/capabilities/README \

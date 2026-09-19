@@ -24,14 +24,17 @@ for package in kali-linux-core hyprland sddm quickshell network-manager pipewire
 done
 
 echo "== Checking Shinobi control-plane commands =="
-for command in version config hook system package update snapshot bar shellctl plugin install agent-profile approval; do
+for command in version config hook system package update snapshot bar shellctl plugin install agent-profile approval context event; do
   [[ -x "$ROOT/bin/shinobi-$command" ]] || fail "missing control-plane command: shinobi $command"
 done
 
 [[ -f "$ROOT/libexec/shinobi/shinobi-agentd" ]] || fail 'missing agent daemon'
 [[ -f "$ROOT/libexec/shinobi/shinobi-agentctl" ]] || fail 'missing agent client'
+[[ -f "$ROOT/libexec/shinobi/shinobi-contextd" ]] || fail 'missing context daemon'
+[[ -f "$ROOT/libexec/shinobi/shinobi-contextctl" ]] || fail 'missing context client'
 python3 -m py_compile "$ROOT"/libexec/shinobi/shinobi_control/*.py \
-  "$ROOT/libexec/shinobi/shinobi-agentd" "$ROOT/libexec/shinobi/shinobi-agentctl"
+  "$ROOT/libexec/shinobi/shinobi-agentd" "$ROOT/libexec/shinobi/shinobi-agentctl" \
+  "$ROOT/libexec/shinobi/shinobi-contextd" "$ROOT/libexec/shinobi/shinobi-contextctl"
 
 echo "== Checking Hyprland theme bootstrap =="
 colors_file="$ROOT/distro/overlay/includes.chroot/usr/share/shinobi-dotfiles/etc/skel/.config/hypr/colors.conf"
