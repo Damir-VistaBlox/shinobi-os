@@ -45,6 +45,9 @@ jobs:
           printf 'Using Node.js %s\n' "$node_version"
           [[ "$node_version" =~ ^v24\.[0-9]+\.[0-9]+$ ]]
 
+      - name: Validate canonical Shinobi package
+        run: ./tests/test-package.sh
+
       - name: Build the live ISO
         env:
           SHINOBI_VARIANT: shinobi
