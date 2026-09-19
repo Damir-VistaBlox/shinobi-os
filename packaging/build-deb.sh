@@ -14,6 +14,8 @@ mkdir -p "$stage/usr/lib/shinobi"
 cp -a "$root/libexec/shinobi/." "$stage/usr/lib/shinobi/"
 cp -a "$root/themes/." "$stage/usr/share/shinobi/themes/"
 cp -a "$root/tools/." "$stage/usr/share/shinobi/tools/"
+mkdir -p "$stage/usr/share/polkit-1/actions"
+cp -a "$root/packaging/shinobi-core/usr/share/polkit-1/actions/." "$stage/usr/share/polkit-1/actions/"
 chmod 0755 "$stage/usr/bin"/shinobi "$stage/usr/bin"/shinobi-* "$stage/usr/bin/_shinobi-common.sh" \
   "$stage/usr/lib/shinobi/shinobi-agentd" "$stage/usr/lib/shinobi/shinobi-agentctl" \
   "$stage/usr/lib/shinobi/shinobi-contextd" "$stage/usr/lib/shinobi/shinobi-contextctl" \

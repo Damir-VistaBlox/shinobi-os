@@ -7,7 +7,30 @@ set -euo pipefail
 
 source "$(dirname -- "$(readlink -f -- "${BASH_SOURCE[0]}")")/_shinobi-common.sh"
 
+doctor_security() {
+  local failures=0 socket="$(shinobi_runtime_home)/agent.sock" audit="${SHINOBI_AUDIT_FILE:-$(shinobi_state_home)/audit.jsonl}"
+  [[ ! -e "$socket" || "$(stat -c '%a' "$socket" 2>/dev/null)" == 600 ]] || { echo 'security: agent socket must be mode 0600'; failures=$((failures + 1)); }
+  [[ ! -e "$audit" || "$(stat -c '%a' "$audit" 2>/dev/null)" == 600 ]] || { echo 'security: audit journal must be mode 0600'; failures=$((failures + 1)); }
+  profile="$(cat "$(shinobi_state_home)/profile" 2>/dev/null || echo observer)"
+  case "$profile" in observer|analyst|operator|administrator|emergency) ;; *) echo "security: invalid trust profile: $profile"; failures=$((failures + 1)) ;; esac
+  if [[ -f /usr/share/polkit-1/actions/org.shinobi.policy || -f "$(dirname -- "$(readlink -f -- "${BASH_SOURCE[0]}")")/../packaging/shinobi-core/usr/share/polkit-1/actions/org.shinobi.policy" ]]; then
+    echo 'security: Polkit action policy present'
+  else
+    echo 'security: Polkit action policy missing'; failures=$((failures + 1))
+  fi
+  (( failures == 0 ))
+}
+
+if [[ "${1:-}" == security ]]; then
+  doctor_security
+  exit $?
+fi
+if [[ "${1:-}" == services ]]; then
+  exec shinobi-system status
+fi
+
 if [[ "${1:-}" == "--json" ]]; then
+  category="${2:-all}"
   status=0
   missing_json=()
   for required in python3 nmap shinobi-recon; do
@@ -19,6 +42,8 @@ if [[ "${1:-}" == "--json" ]]; then
   shell_state="inactive"
   agent_state="inactive"
   context_state="inactive"
+  profile_valid=true
+  case "$profile_json" in observer|analyst|operator|administrator|emergency) ;; *) profile_valid=false; status=1 ;; esac
   if [[ "${XDG_CURRENT_DESKTOP:-}" == *Hyprland* ]]; then
     systemctl --user is-active --quiet shinobi-shell.service && shell_state=active || status=1
     systemctl --user is-active --quiet shinobi-agentd.service && agent_state=active || status=1
@@ -29,8 +54,8 @@ if [[ "${1:-}" == "--json" ]]; then
     context_state=not-applicable
   fi
   missing_payload="$(IFS=,; echo "${missing_json[*]:-}")"
-  printf '{"status":"%s","missing":[%s],"engagement":"%s","profile":"%s","shell":"%s","agent":"%s","context":"%s","live":%s}\n' \
-    "$([[ $status -eq 0 ]] && echo pass || echo failed)" "$missing_payload" "$active_json" "$profile_json" "$shell_state" "$agent_state" "$context_state" \
+  printf '{"status":"%s","category":"%s","missing":[%s],"engagement":"%s","profile":"%s","profile_valid":%s,"shell":"%s","agent":"%s","context":"%s","audit":"%s","live":%s}\n' \
+    "$([[ $status -eq 0 ]] && echo pass || echo failed)" "$category" "$missing_payload" "$active_json" "$profile_json" "$profile_valid" "$shell_state" "$agent_state" "$context_state" "$( [[ -f "${SHINOBI_AUDIT_FILE:-$(shinobi_state_home)/audit.jsonl}" ]] && echo present || echo absent )" \
     "$([[ -f /run/live/medium/live/filesystem.squashfs ]] && echo true || echo false)"
   exit "$status"
 fi

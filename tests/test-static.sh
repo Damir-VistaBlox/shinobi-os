@@ -32,6 +32,7 @@ done
 [[ -f "$ROOT/libexec/shinobi/shinobi-agentctl" ]] || fail 'missing agent client'
 [[ -f "$ROOT/libexec/shinobi/shinobi-contextd" ]] || fail 'missing context daemon'
 [[ -f "$ROOT/libexec/shinobi/shinobi-contextctl" ]] || fail 'missing context client'
+[[ -s "$ROOT/packaging/shinobi-core/usr/share/polkit-1/actions/org.shinobi.policy" ]] || fail 'missing Polkit action policy'
 python3 -m py_compile "$ROOT"/libexec/shinobi/shinobi_control/*.py \
   "$ROOT/libexec/shinobi/shinobi-agentd" "$ROOT/libexec/shinobi/shinobi-agentctl" \
   "$ROOT/libexec/shinobi/shinobi-contextd" "$ROOT/libexec/shinobi/shinobi-contextctl"

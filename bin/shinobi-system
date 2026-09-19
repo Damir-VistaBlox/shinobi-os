@@ -9,7 +9,7 @@ case "$action" in
   status)
     printf 'mode=%s\n' "$([[ -f /run/live/medium/live/filesystem.squashfs ]] && echo live || echo installed)"
     printf 'user_manager=%s\n' "$(systemctl --user is-active 2>/dev/null || true)"
-    for unit in shinobi-desktop.target shinobi-migrate.service shinobi-shell.service; do
+    for unit in shinobi-desktop.target shinobi-migrate.service shinobi-shell.service shinobi-agentd.service shinobi-contextd.service; do
       printf '%s=%s\n' "$unit" "$(systemctl --user is-active "$unit" 2>/dev/null || echo unavailable)"
     done
     ;;
@@ -19,6 +19,8 @@ case "$action" in
     case "$name" in
       shell) unit=shinobi-shell.service ;;
       migrate) unit=shinobi-migrate.service ;;
+      agent) unit=shinobi-agentd.service ;;
+      context) unit=shinobi-contextd.service ;;
       desktop) unit=shinobi-desktop.target ;;
       *) echo "unknown Shinobi service: $name" >&2; exit 2 ;;
     esac
