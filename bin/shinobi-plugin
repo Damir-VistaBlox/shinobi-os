@@ -1,12 +1,8 @@
 #!/usr/bin/env bash
-# shinobi:summary=Inspect the Shinobi plugin directory
-# shinobi:args=<list|audit>
-# shinobi:examples=shinobi plugin list
+# shinobi:summary=Validate and manage explicitly trusted Shinobi plugins
+# shinobi:args=<list|audit|validate|install> [directory]
+# shinobi:examples=shinobi plugin audit | shinobi plugin validate ./plugin
 set -euo pipefail
-root="${SHINOBI_PLUGIN_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/shinobi/plugins}"
-case "${1:-list}" in
-  list) find "$root" -mindepth 1 -maxdepth 1 -type d -printf '%f\n' 2>/dev/null | sort ;;
-  audit) find "$root" -mindepth 2 -maxdepth 2 -type f -name manifest.toml -print 2>/dev/null | sort ;;
-  -h|--help|help) echo 'Usage: shinobi plugin <list|audit>' ;;
-  *) echo 'shinobi-plugin: installation is disabled until plugin trust policy is configured' >&2; exit 77 ;;
-esac
+root="$(dirname -- "$(readlink -f -- "${BASH_SOURCE[0]}")")/../libexec/shinobi"
+export PYTHONPATH="$root${PYTHONPATH:+:$PYTHONPATH}"
+exec python3 -m shinobi_control.pluginctl "$@"
