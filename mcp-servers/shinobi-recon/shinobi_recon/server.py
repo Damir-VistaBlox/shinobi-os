@@ -11,13 +11,13 @@ Design rules for every tool in this file:
 """
 from __future__ import annotations
 
-import subprocess
 import urllib.error
 import urllib.request
 from typing import Literal
 
 from mcp.server.fastmcp import FastMCP
 
+from .process import run
 from .scope import ScopeError, current_engagement, log_call, require_in_scope
 
 mcp = FastMCP("shinobi-recon")
@@ -74,25 +74,12 @@ def nmap_scan(
     # to stderr for that particular refusal.)
     engagement = _authorized("nmap_scan", target, argv)
 
-    try:
-        proc = subprocess.run(
-            argv,
-            capture_output=True,
-            text=True,
-            timeout=_SCAN_TIMEOUT_S,
-            check=False,
-        )
-        output = proc.stdout + ("\n" + proc.stderr if proc.stderr else "")
-        log_call(engagement, "nmap_scan", target, argv, "allowed", output)
-        return output
-    except subprocess.TimeoutExpired:
-        detail = f"timed out after {_SCAN_TIMEOUT_S}s"
-        log_call(engagement, "nmap_scan", target, argv, "allowed", detail)
-        return f"nmap_scan: {detail}"
-    except OSError as e:
-        detail = f"could not start nmap: {e}"
-        log_call(engagement, "nmap_scan", target, argv, "allowed", detail)
-        return f"nmap_scan: {detail}"
+    result = run(argv, timeout=_SCAN_TIMEOUT_S)
+    output = result.stdout + ("\n" + result.stderr if result.stderr else "")
+    if result.timed_out:
+        output = f"nmap_scan: timed out after {_SCAN_TIMEOUT_S}s\n{output}".rstrip()
+    log_call(engagement, "nmap_scan", target, argv, "allowed", output)
+    return output or f"nmap_scan: exited with status {result.returncode}"
 
 
 @mcp.tool()
@@ -100,15 +87,25 @@ def dns_lookup(target: str) -> str:
     """Resolve an in-scope hostname or address using the local resolver."""
     argv = ["getent", "ahosts", target]
     engagement = _authorized("dns_lookup", target, argv)
-    try:
-        proc = subprocess.run(argv, capture_output=True, text=True, timeout=_PASSIVE_TIMEOUT_S, check=False)
-        output = proc.stdout + ("\n" + proc.stderr if proc.stderr else "")
-        log_call(engagement, "dns_lookup", target, argv, "allowed", output)
-        return output or f"dns_lookup: resolver exited with status {proc.returncode}"
-    except (OSError, subprocess.TimeoutExpired) as exc:
-        detail = f"resolver failed: {exc}"
-        log_call(engagement, "dns_lookup", target, argv, "allowed", detail)
-        return detail
+    result = run(argv, timeout=_PASSIVE_TIMEOUT_S)
+    output = result.stdout + ("\n" + result.stderr if result.stderr else "")
+    if result.timed_out:
+        output = f"dns_lookup: timed out after {_PASSIVE_TIMEOUT_S}s\n{output}".rstrip()
+    log_call(engagement, "dns_lookup", target, argv, "allowed", output)
+    return output or f"dns_lookup: resolver exited with status {result.returncode}"
+
+
+@mcp.tool()
+def whatweb_scan(target: str) -> str:
+    """Run passive WhatWeb fingerprinting on an in-scope host."""
+    argv = ["whatweb", "--no-errors", "--color=never", f"https://{target}"]
+    engagement = _authorized("whatweb_scan", target, argv)
+    result = run(argv, timeout=_PASSIVE_TIMEOUT_S)
+    output = result.stdout + ("\n" + result.stderr if result.stderr else "")
+    if result.timed_out:
+        output = f"whatweb_scan: timed out after {_PASSIVE_TIMEOUT_S}s\n{output}".rstrip()
+    log_call(engagement, "whatweb_scan", target, argv, "allowed", output)
+    return output or f"whatweb_scan: exited with status {result.returncode}"
 
 
 @mcp.tool()

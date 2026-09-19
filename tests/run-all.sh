@@ -7,6 +7,7 @@ cd "$ROOT"
 
 ./tests/test-static.sh
 ./tests/test-control-plane.sh
+./tests/test-tool-process.sh
 ./tests/test-source-integrity.sh
 ./tests/test-iso-structure.sh "$ISO"
 ./tests/test-image-content.sh "$ISO"

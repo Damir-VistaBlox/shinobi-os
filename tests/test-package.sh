@@ -27,6 +27,7 @@ for path in \
   ./usr/share/shinobi/policy/README \
   ./usr/share/shinobi/capabilities/README \
   ./usr/share/shinobi/tools/nmap-scan.toml \
+  ./usr/share/shinobi/tools/whatweb-scan.toml \
   ./usr/share/polkit-1/actions/org.shinobi.policy \
   ./usr/share/shinobi/themes/kali-dark/theme.toml
 do

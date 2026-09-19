@@ -35,7 +35,8 @@ done
 [[ -s "$ROOT/packaging/shinobi-core/usr/share/polkit-1/actions/org.shinobi.policy" ]] || fail 'missing Polkit action policy'
 python3 -m py_compile "$ROOT"/libexec/shinobi/shinobi_control/*.py \
   "$ROOT/libexec/shinobi/shinobi-agentd" "$ROOT/libexec/shinobi/shinobi-agentctl" \
-  "$ROOT/libexec/shinobi/shinobi-contextd" "$ROOT/libexec/shinobi/shinobi-contextctl"
+  "$ROOT/libexec/shinobi/shinobi-contextd" "$ROOT/libexec/shinobi/shinobi-contextctl" \
+  "$ROOT"/mcp-servers/shinobi-recon/shinobi_recon/*.py
 
 echo "== Checking Hyprland theme bootstrap =="
 colors_file="$ROOT/distro/overlay/includes.chroot/usr/share/shinobi-dotfiles/etc/skel/.config/hypr/colors.conf"

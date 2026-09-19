@@ -1,0 +1,9 @@
+id = "tool.passive.whatweb"
+name = "WhatWeb fingerprint"
+binary = "whatweb"
+category = "web"
+risk = "passive"
+requires_scope = true
+requires_approval = false
+supports_live = true
+timeout_seconds = 30
