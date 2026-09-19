@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from .audit import write as audit_write
+from .approval import create as create_approval
 from .policy import allowed, current_profile
 from .protocol import MAX_LINE_BYTES, ProtocolError, Request, encode, response
 from .registry import builtin_capabilities, describe
@@ -65,6 +66,15 @@ class AgentDaemon:
             return response(request.request_id, "denied", audit_id=audit_id, error="unknown capability")
         ok, reason = allowed(capability)
         if not ok:
+            if "approval" in reason:
+                approval = create_approval(
+                    capability=capability.id,
+                    arguments=request.arguments,
+                    profile=current_profile(),
+                    reason=reason,
+                )
+                audit_id = audit_write(actor="agent", capability=request.capability, arguments=request.arguments, status="approval-required", detail=approval["approval_id"], request_id=request.request_id)
+                return response(request.request_id, "approval-required", approval_id=approval["approval_id"], audit_id=audit_id)
             audit_id = audit_write(actor="agent", capability=request.capability, arguments=request.arguments, status="denied", detail=reason, request_id=request.request_id)
             return response(request.request_id, "approval-required" if "approval" in reason else "denied", audit_id=audit_id, error=reason)
         try:
