@@ -12,8 +12,11 @@ on:
     branches:
       - preview
 
+# Read-only by default. The one step that needs write (creating the pre-release)
+# asks for it at the step level, so a compromised action or a stray command in the
+# build cannot use the workflow token to push to the repository.
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: shinobi-preview-build
@@ -27,12 +30,12 @@ jobs:
     timeout-minutes: 360
     steps:
       - name: Check out Shinobi OS
-        uses: actions/checkout@v5
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
           submodules: recursive
 
       - name: Set up Node.js 24
-        uses: actions/setup-node@v7
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
           node-version: 24.x
           check-latest: true
@@ -100,7 +103,7 @@ jobs:
           EOF
 
       - name: Upload live USB preview artifact
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
           name: shinobi-os-${{ steps.metadata.outputs.version }}-live-usb
           if-no-files-found: error
@@ -108,7 +111,7 @@ jobs:
 
       - name: Upload automated test logs
         if: always()
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
           name: shinobi-os-${{ github.run_number }}-test-logs
           if-no-files-found: warn
@@ -124,7 +127,7 @@ jobs:
           sudo chown -R "$(id -u):$(id -g)" "$GITHUB_WORKSPACE" || true
 
       - name: Publish checksum and build log
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
           name: shinobi-os-${{ steps.metadata.outputs.version }}-metadata
           path: |
@@ -134,6 +137,8 @@ jobs:
 
       - name: Create GitHub pre-release metadata
         if: github.event_name == 'workflow_dispatch' && inputs.publish_metadata == true
+        permissions:
+          contents: write
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
