@@ -11,12 +11,11 @@ Design rules for every tool in this file:
 """
 from __future__ import annotations
 
-import urllib.error
-import urllib.request
 from typing import Literal
 
 from mcp.server.fastmcp import FastMCP
 
+from . import http
 from .process import run
 from .scope import ScopeError, current_engagement, log_call, require_in_scope
 
@@ -47,6 +46,19 @@ def _authorized(tool: str, target: str, argv: list[str]):
     except ScopeError as exc:
         log_call(engagement, tool, target, argv, "refused", str(exc))
         raise
+
+
+def _redirect_guard(host: str) -> None:
+    """Adapt a scope refusal onto the http module's refusal contract.
+
+    http.fetch_headers does not import scope, so the authorizer it calls is
+    responsible for raising http.RedirectRefused. Keeping the translation
+    here means the "redirects are re-scoped" rule lives in exactly one place.
+    """
+    try:
+        require_in_scope(host)
+    except ScopeError as exc:
+        raise http.RedirectRefused(f"out-of-scope redirect target {host!r}: {exc}") from exc
 
 
 @mcp.tool()
@@ -114,26 +126,21 @@ def http_headers(
     scheme: Literal["http", "https"] = "https",
     port: int | None = None,
 ) -> str:
-    """Fetch response headers from an in-scope host without crawling it."""
-    if port is not None and (port < 1 or port > 65535):
-        raise ValueError("port must be between 1 and 65535")
+    """Fetch response headers from an in-scope host without crawling it.
+
+    Redirects are followed, but every hop is re-checked against the same
+    scope policy as the original target. A redirect onto an out-of-scope
+    host is refused and the refusal is recorded in the audit log.
+    """
+    http.validate_port(port)
     host = target
-    authority = f"{host}:{port}" if port is not None else host
-    url = f"{scheme}://{authority}/"
-    argv = ["python3", "-", scheme, host, str(port or "")]
-    engagement = _authorized("http_headers", host, argv)
-    request = urllib.request.Request(url, method="HEAD", headers={"User-Agent": "ShinobiOS/1"})
-    try:
-        with urllib.request.urlopen(request, timeout=_PASSIVE_TIMEOUT_S) as reply:
-            lines = [f"HTTP {reply.status} {reply.reason}"]
-            lines.extend(f"{key}: {value}" for key, value in reply.headers.items())
-            output = "\n".join(lines)
-    except urllib.error.HTTPError as exc:
-        output = f"HTTP {exc.code} {exc.reason}\n" + "\n".join(f"{key}: {value}" for key, value in exc.headers.items())
-    except (urllib.error.URLError, TimeoutError, OSError) as exc:
-        output = f"http_headers: request failed: {exc}"
-    log_call(engagement, "http_headers", host, argv, "allowed", output)
-    return output
+    url = http.build_url(scheme, host, port)
+    engagement = _authorized("http_headers", host, ["HEAD", url])
+    result = http.fetch_headers(url, authorize=_redirect_guard, timeout=_PASSIVE_TIMEOUT_S)
+    log_call(engagement, "http_headers", host, ["HEAD", url], result.verdict, result.output)
+    return result.output
+
+
 def main() -> None:
     mcp.run(transport="stdio")
 
