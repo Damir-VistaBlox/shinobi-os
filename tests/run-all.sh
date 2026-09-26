@@ -54,12 +54,16 @@ for test in "${SOURCE_TESTS[@]}"; do
   "./$test"
 done
 
-# Packaging validation runs everywhere. It only needs dpkg-deb to check the .deb
-# metadata and that the archive is well formed; the file list and the packaged
-# manifests are properties of the staged tree, so the test degrades to those
-# rather than skipping, and says which part it could not check.
-echo "--- tests/test-package.sh"
-./tests/test-package.sh
+# Packaging validation inspects the real .deb, so it needs dpkg-deb and therefore
+# Debian-family tooling. Kali is the target and the hosted PR runners are Ubuntu,
+# so this runs where it counts. Elsewhere it reports SKIPPED explicitly, so a
+# green run is never mistaken for a verified package.
+if command -v dpkg-deb >/dev/null 2>&1; then
+  echo "--- tests/test-package.sh"
+  ./tests/test-package.sh
+else
+  echo "--- tests/test-package.sh: SKIPPED (dpkg-deb unavailable; needs a Debian-family host)"
+fi
 
 if [[ -z "$ISO" ]]; then
   echo

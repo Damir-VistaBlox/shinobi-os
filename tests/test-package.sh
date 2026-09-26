@@ -1,61 +1,46 @@
 #!/usr/bin/env bash
 # Validate the package that both the ISO hook and install.sh produce.
 #
-# Almost everything worth knowing about this package is a property of the staged
-# tree, so that is what gets checked: the file list, the permissions on the
-# executables, and above all that the packaged tool manifests are byte-identical
-# to the source and still load through the same registry the server uses. A
-# package that ships a stale copy of a manifest ships a different security
-# policy than the repository says, and the server would enforce that copy
-# without complaint.
+# The staged tree is not enough to call a package verified: the point of the .deb
+# is what a dpkg install actually lands on disk. So this builds the real archive
+# and inspects that, which means it needs dpkg-deb and therefore Debian-family
+# tooling. That is not a limitation to work around -- Kali is the target, and the
+# hosted PR runners are Ubuntu, so the suite runs where it matters. Elsewhere it
+# reports SKIPPED rather than pretending to have checked something.
 #
-# dpkg-deb is only needed for the two things a directory cannot answer: the
-# control metadata, and the archive actually being a well-formed .deb. Where the
-# tool is missing, those two checks are reported as skipped and everything else
-# still runs, so a non-Debian host gets real coverage instead of a blank skip.
+# What it checks, and why each matters:
+#   * control metadata, so the package is identifiable and attributable
+#   * the file list, so a shipped component cannot quietly go missing
+#   * exec bits, because a daemon that loses +x fails at start, not at build
+#   * no bytecode residue, so the package does not depend on build order
+#   * packaged manifests byte-identical to source and still loading with policy
+#     intact, because a stale copy ships a different security policy than the
+#     repository documents, and the server would enforce that copy silently
 set -euo pipefail
 
 ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 
-skipped=0
-stage=""
-package=""
-cleanup() {
-  # The staged tree carries the shipped directory modes, and some of those are
-  # read-only by design. rm cannot unlink inside a directory it cannot write,
-  # so restore write permission first or the trap fails, leaves the temp tree
-  # behind, and buries the assertion that actually failed.
-  [[ -n "$stage" ]] && chmod -R u+rwX "$stage" 2>/dev/null
-  [[ -n "$stage" ]] && rm -rf "$stage"
-  [[ -n "$package" ]] && rm -f "$package"
-  return 0
-}
-trap cleanup EXIT
-
-if command -v dpkg-deb >/dev/null 2>&1; then
-  package="$(mktemp --suffix=.deb)"
-  "$ROOT/packaging/build-deb.sh" "$package" >/dev/null
-
-  dpkg-deb --info "$package" | grep -Fq 'Package: shinobi-core' \
-    || { echo 'package-test: package name is not shinobi-core' >&2; exit 1; }
-  dpkg-deb --info "$package" | grep -Fq 'Maintainer: Shinobi OS Maintainers' \
-    || { echo 'package-test: maintainer metadata is wrong' >&2; exit 1; }
-
-  # dpkg-deb --contents prefixes each entry with its mode and owner, so strip
-  # that and compare on the path, which is the part that matters here.
-  contents="$(dpkg-deb --contents "$package" | awk '{print $NF}')"
-  extracted="$(mktemp -d)"
-  stage="$extracted"
-  dpkg-deb -x "$package" "$stage"
-else
-  skipped=1
-  stage="$(SHINOBI_DEB_STAGE_ONLY=1 "$ROOT/packaging/build-deb.sh")"
-  # Same paths, derived from the tree rather than from the archive listing.
-  contents="$(cd "$stage" && find . -mindepth 1 \( -type f -o -type l \) -printf './%P\n' | sort)"
-  echo 'package-test: dpkg-deb unavailable, checking the staged tree only'
-  echo 'package-test: SKIPPED control metadata and .deb well-formedness'
+if ! command -v dpkg-deb >/dev/null 2>&1; then
+  echo 'package-test: SKIPPED (dpkg-deb unavailable; needs a Debian-family host)'
+  exit 0
 fi
 
+package="$(mktemp --suffix=.deb)"
+stage="$(mktemp -d)"
+# dpkg-deb -x reproduces the shipped directory modes, and rm cannot unlink
+# inside a directory it cannot write, so restore write permission on the way out.
+trap 'chmod -R u+rwX "$stage" "$package" 2>/dev/null; rm -rf "$stage" "$package"' EXIT
+
+"$ROOT/packaging/build-deb.sh" "$package" >/dev/null
+
+dpkg-deb --info "$package" | grep -Fq 'Package: shinobi-core' \
+  || { echo 'package-test: package name is not shinobi-core' >&2; exit 1; }
+dpkg-deb --info "$package" | grep -Fq 'Maintainer: Shinobi OS Maintainers' \
+  || { echo 'package-test: maintainer metadata is wrong' >&2; exit 1; }
+
+# --contents prefixes each entry with mode, owner and size, so compare on the
+# path, which is the part the file-list check is about.
+contents="$(dpkg-deb --contents "$package" | awk '{print $NF}')"
 for path in \
   ./usr/bin/shinobi \
   ./usr/bin/shinobi-version \
@@ -79,31 +64,9 @@ for path in \
 do
   grep -Fxq "$path" <<<"$contents" || { echo "package-test: missing $path" >&2; exit 1; }
 done
-echo "package-test: all 19 expected paths are present"
+echo 'package-test: all 19 expected paths are present in the archive'
 
-# The server resolves every manifest at import time and refuses to start if one
-# is missing or malformed, so the packaged copies are checked by the same loader
-# the server uses -- and against the source, so packaging cannot quietly ship a
-# different policy than the repository holds.
-for name in dns-lookup http-headers nmap-scan whatweb-scan; do
-  cmp -s "$stage/usr/share/shinobi/tools/$name.toml" "$ROOT/tools/$name.toml" \
-    || { echo "package-test: $name.toml differs from the source manifest" >&2; exit 1; }
-done
-echo 'package-test: packaged manifests are byte-identical to the source'
-
-# A manifest copied with the wrong mode, or a loader that silently tolerates a
-# bad field, would both pass the checks above.
-PYTHONPATH="$ROOT/mcp-servers/shinobi-recon" python3 -c '
-import sys
-from shinobi_recon.registry import load_all
-manifests = load_all(sys.argv[1])
-assert len(manifests) == 4, f"expected 4 packaged manifests, got {len(manifests)}"
-assert "nmap_scan" in manifests and manifests["nmap_scan"].requires_approval, "nmap lost its approval gate"
-assert manifests["nmap_scan"].timeout_seconds == 900, "nmap lost its timeout"
-assert manifests["http_headers"].binary is None, "http_headers should stay in-process"
-' "$stage/usr/share/shinobi/tools" \
-  || { echo 'package-test: the packaged manifests do not load' >&2; exit 1; }
-echo 'package-test: packaged manifests load cleanly with policy intact'
+dpkg-deb -x "$package" "$stage"
 
 for exe in \
   usr/bin/shinobi \
@@ -118,15 +81,33 @@ do
 done
 echo 'package-test: shipped executables are executable'
 
-# Bytecode caches are build residue. They show up as soon as anyone imports a
-# module, so if they are not pruned they make the .deb depend on whether the
-# builder ran the tests first.
+# Bytecode caches are build residue: they appear as soon as anyone imports a
+# module, so if they are not pruned the .deb depends on whether the builder ran
+# the tests first, and ships bytecode built for the wrong Python and arch.
 stray="$(cd "$stage" && find . -name __pycache__ -o -name '*.pyc' -o -name '*.pyo' | head -5)"
-[[ -z "$stray" ]] || { printf 'package-test: build residue shipped: %s\n' "$stray" >&2; exit 1; }
+[[ -z "$stray" ]] || { printf 'package-test: build residue shipped:\n%s\n' "$stray" >&2; exit 1; }
 echo 'package-test: no bytecode residue in the package'
 
-if (( skipped )); then
-  echo 'package-test: PASS (staged tree only; .deb itself unverified on this host)'
-else
-  echo 'package-test: PASS'
-fi
+# The server resolves every manifest at import time and refuses to start if one
+# is missing or malformed, so the packaged copies are checked by the same loader
+# the server uses -- and against the source, so packaging cannot quietly ship a
+# different policy than the repository holds.
+for name in dns-lookup http-headers nmap-scan whatweb-scan; do
+  cmp -s "$stage/usr/share/shinobi/tools/$name.toml" "$ROOT/tools/$name.toml" \
+    || { echo "package-test: $name.toml differs from the source manifest" >&2; exit 1; }
+done
+echo 'package-test: packaged manifests are byte-identical to the source'
+
+PYTHONPATH="$ROOT/mcp-servers/shinobi-recon" python3 -c '
+import sys
+from shinobi_recon.registry import load_all
+manifests = load_all(sys.argv[1])
+assert len(manifests) == 4, f"expected 4 packaged manifests, got {len(manifests)}"
+assert "nmap_scan" in manifests and manifests["nmap_scan"].requires_approval, "nmap lost its approval gate"
+assert manifests["nmap_scan"].timeout_seconds == 900, "nmap lost its timeout"
+assert manifests["http_headers"].binary is None, "http_headers should stay in-process"
+' "$stage/usr/share/shinobi/tools" \
+  || { echo 'package-test: the packaged manifests do not load' >&2; exit 1; }
+echo 'package-test: packaged manifests load cleanly with policy intact'
+
+echo 'package-test: PASS'

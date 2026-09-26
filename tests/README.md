@@ -48,7 +48,7 @@ on failure. `run-all.sh` runs them in this order and stops at the first failure.
 | `test-hook.sh` | Hook install/run: event validation, secure roots, user-hook confirmation |
 | `test-webapp.sh` | The webapp record cannot choose the program or URL that runs, and `.desktop` `Exec=` cannot be used to inject flags |
 | `test-variant-parity.sh` | Both variants install the same integration layer, and the console variant stays console-only |
-| `test-package.sh` | The package matches the tree: expected file list, executables still executable, no bytecode residue, and packaged manifests byte-identical to the source and still loading with policy intact. The `.deb` metadata and archive are additionally checked where `dpkg-deb` exists |
+| `test-package.sh` | The real `.deb`: control metadata, expected file list, executables still executable, no bytecode residue, and packaged manifests byte-identical to the source and still loading with policy intact |
 | `test-docs.sh` | Documentation matches the tree: tool lists, suite lists, build knobs, command references, pinned actions |
 
 ### Image-level (require the ISO argument)
@@ -63,9 +63,12 @@ on failure. `run-all.sh` runs them in this order and stops at the first failure.
 
 Source-level suites need Bash and `python3`. `test-mcp-e2e.sh` needs the `mcp`
 package and reports `SKIPPED` without it rather than failing, because a missing
-client library is not a broken server. `test-package.sh` runs everywhere: it
-checks the staged tree without `dpkg-deb` and says which two archive-level
-checks it could not make, so a non-Debian host still gets real coverage.
+client library is not a broken server.
+
+`test-package.sh` builds and inspects the real `.deb`, so it needs `dpkg-deb` and
+therefore Debian-family tooling. That is the target platform rather than an
+inconvenience: Kali is Debian-based and the hosted PR runners are Ubuntu, so it
+runs wherever the result matters. On other hosts it reports `SKIPPED`.
 
 The image-level suites need `xorriso`, `qemu-system-x86_64`, UEFI firmware
 (OVMF) and `systemd-analyze`.
