@@ -27,6 +27,7 @@ SOURCE_TESTS=(
   tests/test-doctor.sh
   tests/test-hook.sh
   tests/test-launcher-env.sh
+  tests/test-variant-parity.sh
   tests/test-webapp.sh
   tests/test-tool-process.sh
   tests/test-scope-gate.sh
