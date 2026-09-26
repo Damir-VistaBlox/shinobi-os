@@ -1,9 +1,9 @@
 id = "tool.passive.http_headers"
 name = "HTTP headers"
-binary = "python3"
 category = "web"
 risk = "passive"
 requires_scope = true
 requires_approval = false
 supports_live = true
+mcp_tool = "http_headers"
 timeout_seconds = 30

@@ -110,7 +110,12 @@ fi
 
 echo "Launching '$agent' for engagement '$name' (scope: $dir/scope.yaml)"
 export SHINOBI_ENGAGEMENT="$name"
-export SHINOBI_ENGAGEMENT_DIR="$dir"
+# Export the engagements *root*, not this engagement's directory. The scope
+# gate and evidencectl resolve an engagement by name under the root and refuse
+# a caller-supplied per-engagement path, so exporting $dir here would be
+# ignored -- and on a packaged install, where the root is the install sibling
+# rather than the XDG default, the agent would not find its own engagement.
+export SHINOBI_ENGAGEMENTS_DIR="$ENGAGEMENTS_DIR"
 export SHINOBI_API_VERSION=1
 export SHINOBI_AGENT_PROTOCOL=1
 export SHINOBI_AGENT_SOCKET="${SHINOBI_AGENT_SOCKET:-${XDG_RUNTIME_DIR:-/tmp}/shinobi/agent.sock}"

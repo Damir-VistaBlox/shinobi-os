@@ -6,4 +6,5 @@ risk = "passive"
 requires_scope = true
 requires_approval = false
 supports_live = true
+mcp_tool = "whatweb_scan"
 timeout_seconds = 30

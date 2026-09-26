@@ -27,14 +27,27 @@ vars from the active engagement before starting the agent.
 
 ## Adding a new tool
 
-1. Add a function in `server.py` decorated with `@mcp.tool()`.
-2. Structured parameters only — target + a closed set of options, never a
+1. Add a manifest in `../../tools/`. It is the single source of truth for the
+   tool's policy — binary, timeout, risk, and whether it needs scope or
+   approval. Every field is required except `binary`, and an unknown field is an
+   error, so a typo like `requries_scope` is caught rather than silently read as
+   "not set".
+2. Add a function in `server.py` decorated with `@mcp.tool()`, and resolve its
+   policy at module scope with `_TOOL = registry.require("your_mcp_tool")`.
+   Because that runs at import, a tool with no valid manifest stops the server
+   from starting instead of being served ungoverned.
+3. Take the binary and timeout from the manifest (`_TOOL.binary`,
+   `_TOOL.timeout_seconds`) rather than restating them. They used to be
+   duplicated as constants in `server.py` and drifted from the manifests.
+4. Structured parameters only — target + a closed set of options, never a
    free-form command string.
-3. Call `_authorized(tool, target, argv)` to check scope and open an audit
+5. Call `_authorized(tool, target, argv)` to check scope and open an audit
    record. It returns `(engagement, call_id)` and must be called *before*
    anything executes, so an interrupted call still leaves evidence.
-4. Build argv as a list and run it with `subprocess.run(..., shell=False)`.
-5. Close the record with `_finish(engagement, call_id, tool, target, argv,
+6. Build argv as a list and run it with `subprocess.run(..., shell=False)`.
+   Use `_binary(_TOOL)` if the tool spawns a subprocess; it raises if the
+   manifest names no binary.
+7. Close the record with `_finish(engagement, call_id, tool, target, argv,
    "allowed", output)`.
 
 `_authorized` already logs the refusal path, so a tool does not need its own
@@ -42,9 +55,40 @@ vars from the active engagement before starting the agent.
 behalf must re-check scope on every redirect hop rather than only the URL it
 was handed; `shinobi_recon/http.py` shows the pattern.
 
-Anything exploitation-adjacent (Metasploit module execution, credential
-spraying, etc.) should additionally require an explicit human confirmation
-parameter — scope membership alone shouldn't be enough to fire those.
+`tests/test-tool-registry.sh` enforces the anti-drift properties: every MCP
+tool in `server.py` must have a manifest, the values `server.py` uses must come
+from the manifest, and the old hardcoded timeout constants must stay gone.
+
+## Approvals
+
+A manifest with `requires_approval = true` makes its tool run only against an
+explicit human approval. `nmap_scan` is the only such tool today: it is the one
+recon tool here that reaches hosts with packets rather than reading a public
+record, and an active scan is visible to the target.
+
+The flow, which `tests/test-approvals.sh` covers end to end:
+
+1. The agent calls the tool without `approval_id`. The call is **refused**,
+   the refusal is audited, and an approval request is created.
+2. A human runs `shinobi approval list`, then `shinobi approval approve <id>`.
+3. The agent retries with `approval_id=<id>`. The approval is claimed and the
+   call proceeds.
+
+An approval authorizes exactly one call:
+
+- it is bound to the capability, the trust profile, and the canonical
+  arguments, so an approval for `nmap 10.0.0.5 quick` cannot be spent on
+  `10.0.0.6`, on `service`, or with an extra argument;
+- it is single-use, claimed atomically, so two concurrent callers cannot both
+  spend it;
+- it expires, five minutes after it was requested by default (`--ttl` on
+  `shinobi approval request` sets this);
+- scope is still checked first, so an out-of-scope target is refused without an
+  approval ever being created.
+
+The claim logic lives in `shinobi_control/approval.py` and is reached through
+the `shinobi-approval` CLI rather than reimplemented in the MCP server; two
+copies of a security rule eventually disagree and the laxer one wins.
 
 ## What the scope gate is, and is not
 

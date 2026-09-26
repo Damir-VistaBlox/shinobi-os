@@ -1,5 +1,5 @@
 {
-  "_comment": "Example MCP registration for Claude Code. Merge the 'mcpServers' entry below into your Claude Code MCP config (e.g. `claude mcp add-json shinobi-recon '{...}'` or the equivalent in .claude/settings.json). shinobi agent already exports SHINOBI_ENGAGEMENT / SHINOBI_ENGAGEMENT_DIR before launching the agent, so the server inherits them — no extra env config needed when launched via `shinobi agent`.",
+  "_comment": "Example MCP registration for Claude Code. Merge the 'mcpServers' entry below into your Claude Code MCP config (e.g. `claude mcp add-json shinobi-recon '{...}'` or the equivalent in .claude/settings.json). shinobi agent already exports SHINOBI_ENGAGEMENT / SHINOBI_ENGAGEMENTS_DIR before launching the agent, so the server inherits them — no extra env config needed when launched via `shinobi agent`. SHINOBI_ENGAGEMENTS_DIR is the engagements root; a per-engagement path is not accepted.",
   "mcpServers": {
     "shinobi-recon": {
       "command": "shinobi-recon"

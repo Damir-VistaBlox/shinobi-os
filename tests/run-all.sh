@@ -23,9 +23,12 @@ SOURCE_TESTS=(
   tests/test-static.sh
   tests/test-control-plane.sh
   tests/test-control-paths.sh
+  tests/test-approvals.sh
+  tests/test-launcher-env.sh
   tests/test-tool-process.sh
   tests/test-scope-gate.sh
   tests/test-http-headers.sh
+  tests/test-tool-registry.sh
   tests/test-source-integrity.sh
 )
 
