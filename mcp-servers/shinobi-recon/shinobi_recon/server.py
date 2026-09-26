@@ -40,12 +40,24 @@ def _engagement_for_call():
 
 
 def _authorized(tool: str, target: str, argv: list[str]):
+    """Check scope and open an audit record for the call.
+
+    Returns (engagement, call_id). The 'intent' record is written here, before
+    the tool runs, so an interrupted or killed call still leaves evidence that
+    it was attempted. The caller closes the record with _finish().
+    """
     engagement = _engagement_for_call()
     try:
-        return require_in_scope(target)
+        require_in_scope(target)
     except ScopeError as exc:
-        log_call(engagement, tool, target, argv, "refused", str(exc))
+        log_call(engagement, tool, target, argv, "refused", str(exc), phase="result")
         raise
+    call_id = log_call(engagement, tool, target, argv, "pending", phase="intent")
+    return engagement, call_id
+
+
+def _finish(engagement, call_id: str, tool: str, target: str, argv: list[str], verdict: str, detail: str = "") -> None:
+    log_call(engagement, tool, target, argv, verdict, detail, phase="result", call_id=call_id)
 
 
 def _redirect_guard(host: str) -> None:
@@ -84,13 +96,13 @@ def nmap_scan(
     # an out-of-scope target are recorded in that engagement's audit log too.
     # (A missing engagement has nowhere safe to write, so log_call falls back
     # to stderr for that particular refusal.)
-    engagement = _authorized("nmap_scan", target, argv)
+    engagement, call_id = _authorized("nmap_scan", target, argv)
 
     result = run(argv, timeout=_SCAN_TIMEOUT_S)
     output = result.stdout + ("\n" + result.stderr if result.stderr else "")
     if result.timed_out:
         output = f"nmap_scan: timed out after {_SCAN_TIMEOUT_S}s\n{output}".rstrip()
-    log_call(engagement, "nmap_scan", target, argv, "allowed", output)
+    _finish(engagement, call_id, "nmap_scan", target, argv, "allowed", output)
     return output or f"nmap_scan: exited with status {result.returncode}"
 
 
@@ -98,12 +110,12 @@ def nmap_scan(
 def dns_lookup(target: str) -> str:
     """Resolve an in-scope hostname or address using the local resolver."""
     argv = ["getent", "ahosts", target]
-    engagement = _authorized("dns_lookup", target, argv)
+    engagement, call_id = _authorized("dns_lookup", target, argv)
     result = run(argv, timeout=_PASSIVE_TIMEOUT_S)
     output = result.stdout + ("\n" + result.stderr if result.stderr else "")
     if result.timed_out:
         output = f"dns_lookup: timed out after {_PASSIVE_TIMEOUT_S}s\n{output}".rstrip()
-    log_call(engagement, "dns_lookup", target, argv, "allowed", output)
+    _finish(engagement, call_id, "dns_lookup", target, argv, "allowed", output)
     return output or f"dns_lookup: resolver exited with status {result.returncode}"
 
 
@@ -111,12 +123,12 @@ def dns_lookup(target: str) -> str:
 def whatweb_scan(target: str) -> str:
     """Run passive WhatWeb fingerprinting on an in-scope host."""
     argv = ["whatweb", "--no-errors", "--color=never", f"https://{target}"]
-    engagement = _authorized("whatweb_scan", target, argv)
+    engagement, call_id = _authorized("whatweb_scan", target, argv)
     result = run(argv, timeout=_PASSIVE_TIMEOUT_S)
     output = result.stdout + ("\n" + result.stderr if result.stderr else "")
     if result.timed_out:
         output = f"whatweb_scan: timed out after {_PASSIVE_TIMEOUT_S}s\n{output}".rstrip()
-    log_call(engagement, "whatweb_scan", target, argv, "allowed", output)
+    _finish(engagement, call_id, "whatweb_scan", target, argv, "allowed", output)
     return output or f"whatweb_scan: exited with status {result.returncode}"
 
 
@@ -135,9 +147,9 @@ def http_headers(
     http.validate_port(port)
     host = target
     url = http.build_url(scheme, host, port)
-    engagement = _authorized("http_headers", host, ["HEAD", url])
+    engagement, call_id = _authorized("http_headers", host, ["HEAD", url])
     result = http.fetch_headers(url, authorize=_redirect_guard, timeout=_PASSIVE_TIMEOUT_S)
-    log_call(engagement, "http_headers", host, ["HEAD", url], result.verdict, result.output)
+    _finish(engagement, call_id, "http_headers", host, ["HEAD", url], result.verdict, result.output)
     return result.output
 
 

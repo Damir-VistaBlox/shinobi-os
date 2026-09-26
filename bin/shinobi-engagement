@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# shinobi:summary=Scaffold, list, or switch the active engagement
-# shinobi:args=<new|list|use> [name]
+# shinobi:summary=Scaffold, list, switch, or harden the active engagement
+# shinobi:args=<new|list|use|harden> [name]
 # shinobi:examples=shinobi engagement new acme-pentest | shinobi engagement use acme-pentest
 set -euo pipefail
 source "$(dirname -- "$(readlink -f -- "${BASH_SOURCE[0]}")")/_shinobi-common.sh"
@@ -10,11 +10,12 @@ STATE_FILE="$(shinobi_state_file)"
 
 usage() {
   cat <<'USAGE'
-Usage: shinobi-engagement <new|list|use> [name]
+Usage: shinobi-engagement <new|list|use|harden> [name]
 
   new <name>    Scaffold a new engagement (scope file + log dir), make it active
   list          List known engagements
   use <name>    Set the active engagement for `shinobi-agent`
+  harden [name] Restrict an engagement (or all) to owner-only access
 USAGE
 }
 
@@ -33,7 +34,15 @@ cmd_new() {
     echo "shinobi-engagement: engagement '$name' already exists at $dir" >&2
     exit 1
   fi
-  mkdir -p "$dir"
+  # Engagement data is client-confidential: the scope file names the targets
+  # the client authorized, and the log is the record of what was touched. Both
+  # were created at the process umask default (0755/0644), leaving them
+  # readable by every local user. Create them owner-only.
+  #
+  # mkdir -p applies the umask, so the mode is set explicitly afterwards;
+  # this also fixes up a directory that already existed.
+  (umask 077 && mkdir -p "$dir")
+  chmod 0700 "$dir"
   cat >"$dir/scope.yaml" <<YAML
 # Authorized scope for this engagement. Every shinobi-recon tool call is
 # checked against this file before it runs — out-of-scope targets are
@@ -47,12 +56,39 @@ targets:
   # - 10.10.10.0/24
   # - app.client-example.com
 YAML
+  chmod 0600 "$dir/scope.yaml"
   : >"$dir/log.jsonl"
+  chmod 0600 "$dir/log.jsonl"
   mkdir -p "$(dirname "$STATE_FILE")"
   echo "$name" >"$STATE_FILE"
   shinobi_emit_event engagement.created "{\"engagement\":\"$name\"}"
   echo "Created engagement '$name' at $dir"
   echo "Edit $dir/scope.yaml before running any tools."
+}
+
+# Older engagements were created world-readable. This tightens them in place.
+cmd_harden() {
+  local name="${1:-}"
+  local -a targets
+  if [[ -n "$name" ]]; then
+    validate_name "$name"
+    targets=("$ENGAGEMENTS_DIR/$name")
+  else
+    mapfile -t targets < <(find "$ENGAGEMENTS_DIR" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | sort)
+  fi
+  ((${#targets[@]} > 0)) || { echo "shinobi-engagement: no engagements found in $ENGAGEMENTS_DIR" >&2; exit 1; }
+  local dir
+  for dir in "${targets[@]}"; do
+    [[ -d "$dir" ]] || continue
+    chmod 0700 "$dir"
+    local file
+    for file in "$dir"/*.yaml "$dir"/*.yml "$dir"/*.jsonl; do
+      [[ -f "$file" ]] || continue
+      chmod 0600 "$file"
+      printf 'hardened %s (%s)\n' "$file" "$(stat -c '%a' "$file")"
+    done
+    printf 'hardened %s (%s)\n' "$dir" "$(stat -c '%a' "$dir")"
+  done
 }
 
 cmd_list() {
@@ -92,6 +128,7 @@ case "$sub" in
   new) cmd_new "$@" ;;
   list) cmd_list "$@" ;;
   use) cmd_use "$@" ;;
+  harden) cmd_harden "$@" ;;
   -h | --help | help | "") usage ;;
   *)
     echo "shinobi-engagement: unknown subcommand '$sub'" >&2

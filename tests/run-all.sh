@@ -22,6 +22,7 @@ cd "$ROOT"
 SOURCE_TESTS=(
   tests/test-static.sh
   tests/test-control-plane.sh
+  tests/test-control-paths.sh
   tests/test-tool-process.sh
   tests/test-scope-gate.sh
   tests/test-http-headers.sh

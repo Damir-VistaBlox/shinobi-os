@@ -20,6 +20,7 @@ import datetime as dt
 import json
 import os
 import shutil
+import subprocess
 import sys
 import tempfile
 from contextlib import contextmanager
@@ -67,16 +68,31 @@ def allows(callable_, message):
 
 @contextmanager
 def engagement(scope_data, *, name="unit-test"):
-    """Materialize an engagement in a temp dir and point the env at it."""
-    home = Path(tempfile.mkdtemp(prefix="shinobi-scope-"))
+    """Materialize an engagement under a temp ROOT and point the env at it.
+
+    Mirrors the real layout: a root directory holding one subdirectory per
+    engagement, selected by name. SHINOBI_ENGAGEMENT_DIR is set too, and must
+    be ignored -- that is the point of the tests below.
+    """
+    root = Path(tempfile.mkdtemp(prefix="shinobi-root-"))
+    home = root / name
+    home.mkdir()
     try:
         if scope_data is not None:
             (home / "scope.yaml").write_text(yaml.safe_dump(scope_data))
         previous = {
             key: os.environ.get(key)
-            for key in ("SHINOBI_ENGAGEMENT", "SHINOBI_ENGAGEMENT_DIR", "XDG_DATA_HOME")
+            for key in (
+                "SHINOBI_ENGAGEMENT",
+                "SHINOBI_ENGAGEMENT_DIR",
+                "SHINOBI_ENGAGEMENTS_DIR",
+                "XDG_DATA_HOME",
+            )
         }
         os.environ["SHINOBI_ENGAGEMENT"] = name
+        os.environ["SHINOBI_ENGAGEMENTS_DIR"] = str(root)
+        # Deliberately hostile: a caller-controlled directory that the gate
+        # must never read scope from.
         os.environ["SHINOBI_ENGAGEMENT_DIR"] = str(home)
         yield home
     finally:
@@ -85,7 +101,7 @@ def engagement(scope_data, *, name="unit-test"):
                 os.environ.pop(key, None)
             else:
                 os.environ[key] = value
-        shutil.rmtree(home, ignore_errors=True)
+        shutil.rmtree(root, ignore_errors=True)
 
 
 def window(start_offset, end_offset):
@@ -296,7 +312,10 @@ with engagement(None):
     )
 
 # No engagement at all: must refuse, and must say how to fix it.
-saved = {k: os.environ.pop(k, None) for k in ("SHINOBI_ENGAGEMENT", "SHINOBI_ENGAGEMENT_DIR")}
+saved = {
+    k: os.environ.pop(k, None)
+    for k in ("SHINOBI_ENGAGEMENT", "SHINOBI_ENGAGEMENT_DIR", "SHINOBI_ENGAGEMENTS_DIR")
+}
 try:
     refuses(
         lambda: scope.require_in_scope("example.com"),
@@ -339,10 +358,165 @@ for hostile in ["- just a string\n", "- a\n- b\n", "42\n"]:
             check(False, f"non-mapping scope {hostile.strip()!r} refuses (allowed!)")
 
 # ---------------------------------------------------------------------------
+print("== engagement resolution cannot be redirected by the caller ==")
+
+# The original bypass: SHINOBI_ENGAGEMENT_DIR was trusted verbatim, so anything
+# that could launch the server could point it at a scope file it wrote itself.
+# The gate now resolves the engagement by name under SHINOBI_ENGAGEMENTS_DIR
+# and ignores the per-engagement variable entirely.
+root = Path(tempfile.mkdtemp(prefix="shinobi-trust-"))
+try:
+    legit = root / "real-engagement"
+    legit.mkdir()
+    (legit / "scope.yaml").write_text(yaml.safe_dump({"window": window(-1, 1), "targets": ["example.com"]}))
+
+    attacker = root.parent / f"{root.name}-attacker"
+    attacker.mkdir()
+    (attacker / "scope.yaml").write_text(yaml.safe_dump({"window": window(-1, 1), "targets": ["0.0.0.0/0", "example.com"]}))
+
+    previous = {k: os.environ.get(k) for k in ("SHINOBI_ENGAGEMENT", "SHINOBI_ENGAGEMENT_DIR", "SHINOBI_ENGAGEMENTS_DIR")}
+    try:
+        os.environ["SHINOBI_ENGAGEMENT"] = "real-engagement"
+        os.environ["SHINOBI_ENGAGEMENTS_DIR"] = str(root)
+        os.environ["SHINOBI_ENGAGEMENT_DIR"] = str(attacker)
+
+        allows(lambda: scope.require_in_scope("example.com"), "in-scope target still authorized")
+        refuses(
+            lambda: scope.require_in_scope("8.8.8.8"),
+            "attacker scope file is ignored: 0.0.0.0/0 does not take effect",
+            expect_fragment="not in the authorized scope",
+        )
+        check(
+            scope.current_engagement().dir == legit.resolve(),
+            "engagement resolves inside the root, not to the caller-supplied dir",
+        )
+
+        # Names that try to escape the root.
+        for bad_name in ["..", "../evil", "real-engagement/../../evil", "/etc", "a/b", "", "  ", "x" * 65, "-leading-dash", "with space"]:
+            os.environ["SHINOBI_ENGAGEMENT"] = bad_name
+            try:
+                scope.current_engagement()
+            except ScopeError:
+                check(True, f"refuses engagement name {bad_name!r}")
+            else:
+                check(False, f"refuses engagement name {bad_name!r} (accepted)")
+
+        # A symlinked engagement directory would put the scope file outside
+        # the root entirely.
+        os.environ["SHINOBI_ENGAGEMENT"] = "linked"
+        (root / "linked").symlink_to(attacker)
+        try:
+            scope.current_engagement()
+        except ScopeError as exc:
+            check("symlink" in str(exc), f"refuses symlinked engagement dir ({exc})")
+        else:
+            check(False, "refuses symlinked engagement dir (accepted)")
+
+        # A name that exists but is not a directory.
+        os.environ["SHINOBI_ENGAGEMENT"] = "afile"
+        (root / "afile").write_text("not a directory")
+        try:
+            scope.current_engagement()
+        except ScopeError:
+            check(True, "refuses engagement name that is a regular file")
+        else:
+            check(False, "refuses engagement name that is a regular file (accepted)")
+    finally:
+        for key, value in previous.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
+finally:
+    shutil.rmtree(root, ignore_errors=True)
+    shutil.rmtree(attacker, ignore_errors=True)
+
+# ---------------------------------------------------------------------------
+print("== scope file trust ==")
+
+# A scope file others can write is not a trustworthy authorization.
+with engagement({"window": window(-1, 1), "targets": ["example.com"]}) as home:
+    scope_file = home / "scope.yaml"
+    original = scope_file.read_text()
+
+    scope_file.chmod(0o666)
+    refuses(
+        lambda: scope.require_in_scope("example.com"),
+        "group/other-writable scope file is refused",
+        expect_fragment="writable by group or other",
+    )
+    scope_file.chmod(0o620)
+    refuses(
+        lambda: scope.require_in_scope("example.com"),
+        "group-writable-only scope file is also refused",
+        expect_fragment="writable by group or other",
+    )
+    scope_file.chmod(0o644)
+    allows(
+        lambda: scope.require_in_scope("example.com"),
+        "readable-but-not-writable scope file is accepted",
+    )
+    scope_file.chmod(0o600)
+    allows(
+        lambda: scope.require_in_scope("example.com"),
+        "owner-only scope file is accepted",
+    )
+
+    # A symlinked scope file could point the gate at a file elsewhere.
+    real = home / "real-scope.yaml"
+    real.write_text(original)
+    scope_file.unlink()
+    scope_file.symlink_to(real)
+    refuses(
+        lambda: scope.require_in_scope("example.com"),
+        "symlinked scope file is refused",
+        expect_fragment="not a regular file",
+    )
+    scope_file.unlink()
+    scope_file.write_text(original)
+
+# ---------------------------------------------------------------------------
+print("== audit record is fail-closed across an abrupt exit ==")
+
+# The whole point of the intent record: if the process dies mid-tool, the
+# attempt must still be on disk. This runs the write in a real child process
+# and kills it with SIGKILL, so no cleanup handler and no flush-on-exit can
+# be doing the work.
+with engagement({"window": window(-1, 1), "targets": ["example.com"]}) as home:
+    child = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "import os, sys\n"
+            "sys.path.insert(0, %r)\n"
+            "from shinobi_recon import scope\n"
+            "eng = scope.Engagement(name='x', dir=__import__('pathlib').Path(%r))\n"
+            "scope.log_call(eng, 'nmap_scan', 'example.com', ['nmap', '-T4'], 'pending', phase='intent')\n"
+            "os.kill(os.getpid(), 9)\n" % (os.path.dirname(os.path.dirname(scope.__file__)), str(home)),
+        ],
+        capture_output=True,
+    )
+    check(child.returncode == -9, f"child was SIGKILLed, not shut down (rc={child.returncode})")
+
+    lines = (home / "log.jsonl").read_text().splitlines() if (home / "log.jsonl").exists() else []
+    check(len(lines) == 1, f"intent record survived SIGKILL (got {len(lines)} records)")
+    if lines:
+        try:
+            record = json.loads(lines[0])
+            check(record["phase"] == "intent", "the surviving record is the intent record")
+            check(record["tool"] == "nmap_scan", "the surviving record names the tool")
+            check(record["verdict"] == "pending", "an unclosed intent record is marked pending")
+        except json.JSONDecodeError as exc:
+            check(False, f"surviving record is valid JSON ({exc})")
+
+# ---------------------------------------------------------------------------
 print("== audit logging ==")
 with engagement(valid) as home:
     eng = scope.require_in_scope("example.com")
-    scope.log_call(eng, "nmap_scan", "example.com", ["nmap", "-T4"], "allowed", "ok")
+    first = scope.log_call(eng, "nmap_scan", "example.com", ["nmap", "-T4"], "pending", phase="intent")
+    check(first != "", "log_call returns a call id")
+    scope.log_call(eng, "nmap_scan", "example.com", ["nmap", "-T4"], "allowed", "ok",
+                   phase="result", call_id=first)
     scope.log_call(eng, "nmap_scan", "evil.net", ["nmap", "-T4"], "refused", "not in scope")
     # Detail is attacker-influenced (tool output). It must not be able to
     # break the one-record-per-line contract.
@@ -351,7 +525,7 @@ with engagement(valid) as home:
     scope.log_call(eng, "nmap_scan", "example.com", ["nmap"], "allowed", "x" * 5000)
 
     lines = (home / "log.jsonl").read_text().splitlines()
-    check(len(lines) == 4, f"one JSON record per call (got {len(lines)})")
+    check(len(lines) == 5, f"one JSON record per call (got {len(lines)})")
 
     records = []
     for number, line in enumerate(lines, 1):
@@ -359,26 +533,37 @@ with engagement(valid) as home:
             records.append(json.loads(line))
         except json.JSONDecodeError as exc:
             check(False, f"line {number} is valid JSON ({exc})")
-    check(len(records) == 4, "every log line parses independently")
+    check(len(records) == 5, "every log line parses independently")
 
-    if len(records) == 4:
+    if len(records) == 5:
         first = records[0]
         check(first["tool"] == "nmap_scan", "record keeps the tool name")
-        check(first["verdict"] == "allowed", "record keeps the verdict")
+        check(records[1]["verdict"] == "allowed", "record keeps the verdict")
         check(first["args"] == ["nmap", "-T4"], "record keeps the argv")
-        check("ts" in first and first["ts"].endswith("+00:00"), "record is UTC-stamped")
+        check("ts" in records[0] and records[0]["ts"].endswith("+00:00"), "record is UTC-stamped")
+        check(records[0]["phase"] == "intent" and records[0]["verdict"] == "pending",
+              "first record is a pending intent")
+        check(records[1]["phase"] == "result" and records[1]["verdict"] == "allowed",
+              "second record is the matching result")
+        check(records[0]["call_id"] == records[1]["call_id"],
+              "intent and result share a call id")
+        check(records[3].get("phase", "result") == "result",
+              "records written without an explicit phase default to result")
 
-        check(records[1]["verdict"] == "refused", "refusals are recorded with their own verdict")
-        check(records[2]["detail"].count("\n") == 1,
+        check(records[2]["verdict"] == "refused", "refusals are recorded with their own verdict")
+        check(records[3]["detail"].count("\n") == 1,
               "a newline in tool output does not split the log record")
-        check(len(records[3]["detail"]) == 2000, "detail is truncated to 2000 characters")
+        check(len(records[4]["detail"]) == 2000, "detail is truncated to 2000 characters")
 
 # A refusal that happens before an engagement can be resolved has nowhere to
 # write, so it must still reach stderr rather than vanish.
 import io  # noqa: E402
 import contextlib  # noqa: E402
 
-saved = {k: os.environ.pop(k, None) for k in ("SHINOBI_ENGAGEMENT", "SHINOBI_ENGAGEMENT_DIR")}
+saved = {
+    k: os.environ.pop(k, None)
+    for k in ("SHINOBI_ENGAGEMENT", "SHINOBI_ENGAGEMENT_DIR", "SHINOBI_ENGAGEMENTS_DIR")
+}
 try:
     stderr = io.StringIO()
     with contextlib.redirect_stderr(stderr):

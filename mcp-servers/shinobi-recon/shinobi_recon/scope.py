@@ -12,13 +12,18 @@ import ipaddress
 import json
 import os
 import re
+import stat
 import sys
+import uuid
 from dataclasses import dataclass
 from pathlib import Path
 
 import yaml
 
 _HOSTNAME_RE = re.compile(r"^[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?(\.[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*$")
+
+# Must stay in step with validate_name() in bin/shinobi-engagement.
+_ENGAGEMENT_NAME_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}")
 
 
 class ScopeError(RuntimeError):
@@ -39,15 +44,62 @@ class Engagement:
         return self.dir / "log.jsonl"
 
 
+def _engagements_root() -> Path:
+    """Resolve the directory that holds all engagements.
+
+    Mirrors shinobi_engagements_dir() in bin/_shinobi-common.sh. The
+    SHINOBI_ENGAGEMENTS_DIR override exists so the packaged install can keep
+    engagements beside the binaries; it names a *root*, not an engagement.
+    """
+    root = os.environ.get("SHINOBI_ENGAGEMENTS_DIR", "").strip()
+    if not root:
+        base = os.environ.get("XDG_DATA_HOME", "").strip() or str(Path.home() / ".local" / "share")
+        root = str(Path(base) / "shinobi" / "engagements")
+    return Path(root).expanduser()
+
+
 def current_engagement() -> Engagement:
-    name = os.environ.get("SHINOBI_ENGAGEMENT")
-    dir_ = os.environ.get("SHINOBI_ENGAGEMENT_DIR")
-    if not name or not dir_:
+    """Locate the active engagement by name inside the engagements root.
+
+    SHINOBI_ENGAGEMENT_DIR is deliberately not consulted. It is an ordinary
+    environment variable, so anything able to launch this process could point
+    the gate at a scope file it authored itself, and the gate would then
+    authorize exactly what that file said -- which is the one outcome the
+    gate exists to make impossible. The engagement is found by name under the
+    engagements root instead, and the result must be a real directory sitting
+    directly inside that root.
+    """
+    name = os.environ.get("SHINOBI_ENGAGEMENT", "").strip()
+    if not name:
         raise ScopeError(
-            "No active engagement (SHINOBI_ENGAGEMENT / SHINOBI_ENGAGEMENT_DIR not set). "
+            "No active engagement (SHINOBI_ENGAGEMENT not set). "
             "Launch this server via `shinobi agent` after `shinobi engagement use <name>`."
         )
-    return Engagement(name=name, dir=Path(dir_))
+    if not _ENGAGEMENT_NAME_RE.fullmatch(name):
+        raise ScopeError(f"Refusing malformed engagement name {name!r}")
+
+    root = _engagements_root()
+    candidate = root / name
+
+    # A symlinked engagement directory would put the scope file outside the
+    # root, so it is refused rather than followed.
+    if candidate.is_symlink():
+        raise ScopeError(f"Refusing symlinked engagement directory {candidate}")
+
+    try:
+        resolved_root = root.resolve(strict=True)
+    except OSError as exc:
+        raise ScopeError(f"Engagements root {root} is unusable: {exc}") from exc
+
+    resolved = candidate.resolve()
+    if resolved.parent != resolved_root:
+        raise ScopeError(
+            f"Engagement directory for {name!r} resolves to {resolved}, which is "
+            f"outside the engagements root {resolved_root}. Refusing."
+        )
+    if not resolved.is_dir():
+        raise ScopeError(f"No engagement directory at {resolved}")
+    return Engagement(name=name, dir=resolved)
 
 
 def _load_scope(engagement: Engagement) -> dict:
@@ -60,25 +112,44 @@ def _load_scope(engagement: Engagement) -> dict:
     scope.yaml would then refuse every call while leaving no record that it
     did, which is the worst possible failure mode for an audit trail.
     """
+    path = engagement.scope_file
     try:
-        text = engagement.scope_file.read_text()
+        info = path.lstat()
     except FileNotFoundError as exc:
-        raise ScopeError(f"No scope file at {engagement.scope_file}") from exc
+        raise ScopeError(f"No scope file at {path}") from exc
     except OSError as exc:
-        raise ScopeError(f"Cannot read scope file {engagement.scope_file}: {exc}") from exc
+        raise ScopeError(f"Cannot read scope file {path}: {exc}") from exc
+
+    # The scope file is the authorization itself, so it has to be a plain file
+    # owned by whoever is running the tools. A symlink would let it point
+    # somewhere else; a world- or group-writable file could have been edited
+    # by another user, which means the targets in it are not trustworthy.
+    if not stat.S_ISREG(info.st_mode):
+        raise ScopeError(f"Refusing scope file {path}: not a regular file.")
+    if info.st_mode & 0o022:
+        raise ScopeError(
+            f"Refusing scope file {path}: writable by group or other "
+            f"(mode {stat.filemode(info.st_mode)}). Run "
+            f"'chmod go-w {path}' to fix."
+        )
+
+    try:
+        text = path.read_text()
+    except OSError as exc:
+        raise ScopeError(f"Cannot read scope file {path}: {exc}") from exc
 
     try:
         data = yaml.safe_load(text)
     except yaml.YAMLError as exc:
         raise ScopeError(
-            f"Scope file {engagement.scope_file} is not valid YAML: {exc}. Refusing."
+            f"Scope file {path} is not valid YAML: {exc}. Refusing."
         ) from exc
 
     if data is None:
         data = {}
     if not isinstance(data, dict):
         raise ScopeError(
-            f"Scope file {engagement.scope_file} must contain a mapping at the top "
+            f"Scope file {path} must contain a mapping at the top "
             f"level, got {type(data).__name__}. Refusing."
         )
     return data
@@ -156,10 +227,40 @@ def require_in_scope(target: str) -> Engagement:
     return engagement
 
 
-def log_call(engagement: Engagement | None, tool: str, target: str, args: list[str], verdict: str, detail: str = "") -> None:
-    """verdict: 'allowed' | 'refused'"""
+def log_call(
+    engagement: Engagement | None,
+    tool: str,
+    target: str,
+    args: list[str],
+    verdict: str,
+    detail: str = "",
+    *,
+    phase: str = "result",
+    call_id: str | None = None,
+) -> str:
+    """Append one audit record and return its call id.
+
+    verdict: 'allowed' | 'refused'
+    phase:   'intent'  -- written before the tool runs
+             'result'  -- written after it finishes, with the verdict
+
+    Every tool writes an 'intent' record *before* it executes anything and a
+    'result' record afterwards. The intent record is what makes the log
+    fail-closed: if the tool is killed, crashes the session, or the machine
+    loses power mid-scan, the intent record is the only surviving evidence
+    that the call was attempted. Logging only the outcome meant an
+    interrupted call left no trace at all, which is indistinguishable from
+    the call never having happened.
+
+    The two records share a call_id so an outcome can be tied back to the
+    attempt that produced it.
+    """
+    if call_id is None:
+        call_id = uuid.uuid4().hex[:16]
     entry = {
         "ts": _dt.datetime.now(_dt.timezone.utc).isoformat(),
+        "call_id": call_id,
+        "phase": phase,
         "tool": tool,
         "target": target,
         "args": args,
@@ -174,6 +275,11 @@ def log_call(engagement: Engagement | None, tool: str, target: str, args: list[s
         # is the JSON-RPC transport. A bare text line on stdout corrupts the
         # protocol stream and takes down the session.
         print(f"shinobi-recon: {json.dumps(entry)}", file=sys.stderr, flush=True)
-        return
+        return call_id
     with engagement.log_file.open("a") as f:
         f.write(json.dumps(entry) + "\n")
+        f.flush()
+        # The intent record has to survive the tool running, including a hard
+        # kill, so it cannot sit in the page cache.
+        os.fsync(f.fileno())
+    return call_id
