@@ -1,0 +1,134 @@
+#!/usr/bin/env bash
+# shinobi:summary=Check whether a prompt may be sent to an LLM provider, and see the audit trail
+# shinobi:args=<check|show|trail> [provider] [options]
+# shinobi:examples=shinobi egress check openai --prompt-file q.txt | shinobi egress show
+set -euo pipefail
+root="$(dirname -- "$(readlink -f -- "${BASH_SOURCE[0]}")")/../libexec/shinobi"
+export PYTHONPATH="$root${PYTHONPATH:+:$PYTHONPATH}"
+action="${1:-check}"
+shift || true
+python3 - "$action" "$@" <<'PY'
+import argparse, json, pathlib, sys
+
+parser = argparse.ArgumentParser(prog="shinobi egress", add_help=False)
+parser.add_argument("action")
+parser.add_argument("provider", nargs="?")
+parser.add_argument("--prompt-file", help="read the prompt from a file instead of stdin")
+parser.add_argument("--model")
+parser.add_argument("--system-file", help="read a system prompt from a file")
+parser.add_argument("--approval-id")
+parser.add_argument("--json", action="store_true")
+known, _ = parser.parse_known_args()
+
+
+def read_prompt():
+    # Read from a file or stdin, never from argv: argv is world-readable via
+    # /proc and lands in shell history, and this is a client's confidential data.
+    if known.prompt_file:
+        path = pathlib.Path(known.prompt_file).expanduser()
+        try:
+            return path.read_text(encoding="utf-8")
+        except OSError as exc:
+            raise SystemExit(f"shinobi egress: cannot read {path}: {exc.strerror}")
+    if sys.stdin.isatty():
+        raise SystemExit(
+            "shinobi egress: no prompt given. Pipe one in, or use --prompt-file.\n"
+            "The prompt is hashed, never stored, and never passed as an argument."
+        )
+    return sys.stdin.read()
+
+
+def emit(payload):
+    print(json.dumps(payload, indent=2, sort_keys=True))
+
+
+try:
+    from shinobi_control import egress
+except ImportError as exc:
+    raise SystemExit(f"shinobi egress: {exc}")
+
+action = known.action
+try:
+    if action == "check":
+        if not known.provider:
+            raise SystemExit("shinobi egress check: a provider id is required")
+        system = None
+        if known.system_file:
+            system = pathlib.Path(known.system_file).expanduser().read_text(encoding="utf-8")
+        try:
+            decision = egress.authorize(
+                known.provider,
+                read_prompt(),
+                model=known.model,
+                system=system,
+                approval_id=known.approval_id,
+            )
+        except egress.EgressRefused as exc:
+            if known.json:
+                emit({"allowed": False, "provider": known.provider, "reason": str(exc)})
+            else:
+                print(f"REFUSED  {exc}", file=sys.stderr)
+            raise SystemExit(1)
+        # The decision reports the digest, never the prompt.
+        emit(
+            {
+                "allowed": True,
+                "call_id": decision.call_id,
+                "engagement": decision.engagement,
+                "provider": decision.provider.id,
+                "model": decision.model,
+                "egress": decision.provider.egress,
+                "base_url": decision.provider.base_url,
+                "peer": decision.peer,
+                "prompt_sha256": decision.prompt_sha256,
+                "requires_key": decision.requires_key,
+            }
+        )
+    elif action == "show":
+        # What this engagement has authorized, without sending anything.
+        engagement = egress._engagement_dir()
+        scope = egress.load_scope(engagement)
+        allowed = egress.clearance(scope)
+        emit(
+            {
+                "engagement": engagement.name,
+                "scope_file": str(engagement / "scope.yaml"),
+                "cloud_cleared": allowed.cloud,
+                "providers": list(allowed.providers) if allowed.providers is not None else "unrestricted",
+                "models": list(allowed.models) if allowed.models is not None else "unrestricted",
+                "registry": egress.registry_summary(),
+            }
+        )
+    elif action == "trail":
+        engagement = egress._engagement_dir()
+        path = engagement / "log.jsonl"
+        if not path.is_file():
+            print(f"shinobi egress: no log at {path}")
+            raise SystemExit(1)
+        wanted = "llm.egress"
+        for line in path.read_text(encoding="utf-8").splitlines():
+            if not line.strip():
+                continue
+            try:
+                record = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if record.get("tool") == wanted:
+                print(json.dumps(record, sort_keys=True))
+    elif action in {"help", "-h", "--help"}:
+        print("Usage: shinobi egress <check|show|trail> [provider] [options]")
+        print()
+        print("  check PROVIDER   decide whether a prompt may be sent; sends nothing")
+        print("  show             what this engagement has cleared, and the registry")
+        print("  trail            the egress records in this engagement's log")
+        print()
+        print("  --prompt-file F  read the prompt from a file (or pipe it on stdin)")
+        print("  --model ID       override the manifest's default model")
+        print("  --approval-id ID a human approval for this exact prompt digest")
+    else:
+        raise SystemExit(f"unknown egress action: {action}")
+except egress.EgressRefused as exc:
+    raise SystemExit(f"shinobi egress: {exc}")
+except (OSError, ValueError) as exc:
+    raise SystemExit(f"shinobi egress: {exc}")
+PY

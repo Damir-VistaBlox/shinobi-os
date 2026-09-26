@@ -302,6 +302,15 @@ def _validate_reachable_on(value, source: Path) -> tuple[str, ...]:
                 f"{source}: reachable_on lists the public address {host}. A local provider's "
                 "peers must be on this machine or the local network."
             )
+        if literal is not None and (literal.is_link_local or literal in _LINK_LOCAL):
+            # The metadata endpoint is not a model server. Allowing it here
+            # would let a manifest that calls itself local point at the
+            # instance's own credentials and treat whatever comes back as a
+            # local model, which is exfiltration wearing a "local" label.
+            raise ProviderError(
+                f"{source}: reachable_on lists {host}, a link-local address. A local "
+                "provider's peers must be on this machine or the local network."
+            )
         if host in peers:
             raise ProviderError(f"{source}: reachable_on lists {host!r} twice")
         peers.append(host)

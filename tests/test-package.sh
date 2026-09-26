@@ -46,6 +46,7 @@ for path in \
   ./usr/bin/shinobi-version \
   ./usr/bin/shinobi-config \
   ./usr/bin/shinobi-provider \
+  ./usr/bin/shinobi-egress \
   ./usr/lib/systemd/user/shinobi-desktop.target \
   ./usr/lib/systemd/user/shinobi-agentd.service \
   ./usr/lib/systemd/user/shinobi-contextd.service \
@@ -56,6 +57,7 @@ for path in \
   ./usr/lib/shinobi/shinobi-contextctl \
   ./usr/lib/shinobi/shinobi_control/providerctl.py \
   ./usr/lib/shinobi/shinobi_control/credentials.py \
+  ./usr/lib/shinobi/shinobi_control/egress.py \
   ./usr/share/shinobi/version \
   ./usr/share/shinobi/policy/README \
   ./usr/share/shinobi/capabilities/README \
@@ -70,7 +72,7 @@ for path in \
 do
   grep -Fxq "$path" <<<"$contents" || { echo "package-test: missing $path" >&2; exit 1; }
 done
-echo 'package-test: all 27 expected paths are present in the archive'
+echo 'package-test: all 29 expected paths are present in the archive'
 
 dpkg-deb -x "$package" "$stage"
 

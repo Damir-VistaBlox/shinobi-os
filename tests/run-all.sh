@@ -40,6 +40,7 @@ SOURCE_TESTS=(
   tests/test-mcp-e2e.sh
   tests/test-tool-registry.sh
   tests/test-providers.sh
+  tests/test-egress.sh
   tests/test-source-integrity.sh
 )
 

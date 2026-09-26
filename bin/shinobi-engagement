@@ -55,6 +55,25 @@ window:
 targets:
   # - 10.10.10.0/24
   # - app.client-example.com
+
+# What Shinobi may send off this machine. This block is about data leaving, not
+# about targets: it has no effect on which hosts the recon tools may touch,
+# which the list above governs.
+#
+# An engagement with no llm block at all cannot use a cloud provider. That is
+# deliberate -- a prompt can carry this client's targets, scan output, or
+# credentials, and none of that is visible to a target authorization check. If
+# the client has agreed in writing to their data being processed by a third
+# party, set cloud: true and record the authorization above.
+llm:
+  # true only if the client has authorized cloud processing in writing.
+  cloud: false
+  # Optional allowlist. Commented out means "no provider restriction beyond the
+  # cloud setting above". Uncommenting to an empty list means *no* providers --
+  # absent and empty are deliberately different.
+  # providers: [openai]
+  # Optional model allowlist, same absent-vs-empty rule.
+  # models: [gpt-4o]
 YAML
   chmod 0600 "$dir/scope.yaml"
   : >"$dir/log.jsonl"
