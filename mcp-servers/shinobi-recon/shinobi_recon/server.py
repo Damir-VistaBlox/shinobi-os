@@ -27,7 +27,7 @@ from typing import Literal
 
 from mcp.server.fastmcp import FastMCP
 
-from . import http, registry
+from . import httpclient, registry
 from .registry import RegistryError
 from .process import run
 from .scope import ScopeError, current_engagement, log_call, require_in_scope
@@ -155,14 +155,14 @@ def _require_approval(manifest, arguments: dict, approval_id: str | None, tool: 
 def _redirect_guard(host: str) -> None:
     """Adapt a scope refusal onto the http module's refusal contract.
 
-    http.fetch_headers does not import scope, so the authorizer it calls is
-    responsible for raising http.RedirectRefused. Keeping the translation
+    httpclient.fetch_headers does not import scope, so the authorizer it calls is
+    responsible for raising httpclient.RedirectRefused. Keeping the translation
     here means the "redirects are re-scoped" rule lives in exactly one place.
     """
     try:
         require_in_scope(host)
     except ScopeError as exc:
-        raise http.RedirectRefused(f"out-of-scope redirect target {host!r}: {exc}") from exc
+        raise httpclient.RedirectRefused(f"out-of-scope redirect target {host!r}: {exc}") from exc
 
 
 @mcp.tool()
@@ -246,11 +246,11 @@ def http_headers(
     scope policy as the original target. A redirect onto an out-of-scope
     host is refused and the refusal is recorded in the audit log.
     """
-    http.validate_port(port)
+    httpclient.validate_port(port)
     host = target
-    url = http.build_url(scheme, host, port)
+    url = httpclient.build_url(scheme, host, port)
     engagement, call_id = _authorized("http_headers", host, ["HEAD", url])
-    result = http.fetch_headers(url, authorize=_redirect_guard, timeout=_HTTP.timeout_seconds)
+    result = httpclient.fetch_headers(url, authorize=_redirect_guard, timeout=_HTTP.timeout_seconds)
     _finish(engagement, call_id, "http_headers", host, ["HEAD", url], result.verdict, result.output)
     return result.output
 

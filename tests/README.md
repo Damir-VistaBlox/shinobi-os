@@ -33,6 +33,8 @@ on failure. `run-all.sh` runs them in this order and stops at the first failure.
 | `test-source-integrity.sh` | Files the package ships are the files in the tree — no hand-maintained copies |
 | `test-scope-gate.sh` | The engagement scope gate: authorized/refused targets, host resolution, engagement containment, date windows, durable audit records |
 | `test-http-headers.sh` | Redirect re-authorization and bounded redirect chains |
+| `test-mcp-layout.sh` | No module in the server package shadows a stdlib name, and the stdlib still resolves correctly with the package directory on `sys.path` |
+| `test-mcp-e2e.sh` | The assembled `shinobi-recon` server driven over stdio by a real MCP client: all four tools served, in-scope allowed, out-of-scope refused, `nmap_scan` refused until a human approves that exact call, approval not replayable, and both outcomes audited. Skips when the `mcp` package is absent |
 | `test-tool-registry.sh` | `tools/*.toml` is the single source of truth: every MCP tool has a manifest, values come from the manifest, the old hardcoded timeout constants stay gone |
 | `test-approvals.sh` | Approval lifecycle end to end: exact-argument binding, single use, atomic claim, expiry, and that scope is still checked first |
 | `test-control-plane.sh` | The control plane over a real socket |

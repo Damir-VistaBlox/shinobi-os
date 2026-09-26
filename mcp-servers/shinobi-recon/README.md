@@ -53,7 +53,7 @@ vars from the active engagement before starting the agent.
 `_authorized` already logs the refusal path, so a tool does not need its own
 `ScopeError` handler. Anything that touches the network on the caller's
 behalf must re-check scope on every redirect hop rather than only the URL it
-was handed; `shinobi_recon/http.py` shows the pattern.
+was handed; `shinobi_recon/httpclient.py` shows the pattern.
 
 `tests/test-tool-registry.sh` enforces the anti-drift properties: every MCP
 tool in `server.py` must have a manifest, the values `server.py` uses must come

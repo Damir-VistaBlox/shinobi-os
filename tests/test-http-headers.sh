@@ -21,8 +21,8 @@ import sys
 import threading
 
 # Aliased: this script has a flat namespace, so importing the stdlib `http`
-# and shinobi_recon.http under the same name would shadow one of them.
-from shinobi_recon import http as recon
+# and shinobi_recon.httpclient under the same name would shadow one of them.
+from shinobi_recon import httpclient as recon
 
 failures = []
 

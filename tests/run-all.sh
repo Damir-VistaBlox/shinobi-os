@@ -36,6 +36,8 @@ SOURCE_TESTS=(
   tests/test-tool-process.sh
   tests/test-scope-gate.sh
   tests/test-http-headers.sh
+  tests/test-mcp-layout.sh
+  tests/test-mcp-e2e.sh
   tests/test-tool-registry.sh
   tests/test-source-integrity.sh
 )
