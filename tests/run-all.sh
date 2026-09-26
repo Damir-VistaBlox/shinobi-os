@@ -54,15 +54,12 @@ for test in "${SOURCE_TESTS[@]}"; do
   "./$test"
 done
 
-# Packaging validation needs dpkg-deb, so it only runs where Debian tooling
-# exists. Everywhere else it is reported as skipped rather than silently
-# absent, so a green run is never mistaken for a fully verified package.
-if command -v dpkg-deb >/dev/null 2>&1; then
-  echo "--- tests/test-package.sh"
-  ./tests/test-package.sh
-else
-  echo "--- tests/test-package.sh: SKIPPED (dpkg-deb unavailable)"
-fi
+# Packaging validation runs everywhere. It only needs dpkg-deb to check the .deb
+# metadata and that the archive is well formed; the file list and the packaged
+# manifests are properties of the staged tree, so the test degrades to those
+# rather than skipping, and says which part it could not check.
+echo "--- tests/test-package.sh"
+./tests/test-package.sh
 
 if [[ -z "$ISO" ]]; then
   echo

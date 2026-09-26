@@ -48,7 +48,7 @@ on failure. `run-all.sh` runs them in this order and stops at the first failure.
 | `test-hook.sh` | Hook install/run: event validation, secure roots, user-hook confirmation |
 | `test-webapp.sh` | The webapp record cannot choose the program or URL that runs, and `.desktop` `Exec=` cannot be used to inject flags |
 | `test-variant-parity.sh` | Both variants install the same integration layer, and the console variant stays console-only |
-| `test-package.sh` | The built `.deb` matches the tree. **Skipped without `dpkg-deb`** |
+| `test-package.sh` | The package matches the tree: expected file list, executables still executable, no bytecode residue, and packaged manifests byte-identical to the source and still loading with policy intact. The `.deb` metadata and archive are additionally checked where `dpkg-deb` exists |
 | `test-docs.sh` | Documentation matches the tree: tool lists, suite lists, build knobs, command references, pinned actions |
 
 ### Image-level (require the ISO argument)
@@ -61,9 +61,11 @@ on failure. `run-all.sh` runs them in this order and stops at the first failure.
 
 ## Requirements
 
-Source-level suites need Bash and `python3`. `test-package.sh` additionally
-needs `dpkg-deb` and reports `SKIPPED` without it rather than failing — a
-missing packer is not a broken package.
+Source-level suites need Bash and `python3`. `test-mcp-e2e.sh` needs the `mcp`
+package and reports `SKIPPED` without it rather than failing, because a missing
+client library is not a broken server. `test-package.sh` runs everywhere: it
+checks the staged tree without `dpkg-deb` and says which two archive-level
+checks it could not make, so a non-Debian host still gets real coverage.
 
 The image-level suites need `xorriso`, `qemu-system-x86_64`, UEFI firmware
 (OVMF) and `systemd-analyze`.

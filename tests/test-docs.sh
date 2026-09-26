@@ -60,6 +60,10 @@ check "tests/README.md does not present the ISO as the only way to run tests" \
   "$(grep -qi 'Run the complete suite against a built ISO' "$ROOT/tests/README.md" && echo stale || echo current)" "current"
 check "tests/README.md mentions the dpkg-deb skip" \
   "$(grep -qi 'dpkg-deb' "$ROOT/tests/README.md" && echo yes || echo no)" "yes"
+check "tests/README.md says the package test still runs without dpkg-deb" \
+  "$(grep -qi 'runs everywhere' "$ROOT/tests/README.md" && echo yes || echo no)" "yes"
+check "the package test really does still run without dpkg-deb" \
+  "$(grep -q 'SHINOBI_DEB_STAGE_ONLY' "$ROOT/packaging/build-deb.sh" && echo yes || echo no)" "yes"
 check "tests/README.md says python3 is required" \
   "$(grep -qi 'python3' "$ROOT/tests/README.md" && echo yes || echo no)" "yes"
 
