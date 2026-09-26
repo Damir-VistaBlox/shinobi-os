@@ -1,12 +1,51 @@
 #!/bin/sh
+# Records the config version this system has been migrated to, and runs the
+# migrations for anything older.
+#
+# The previous version read the stamp with `cat` and handed it to `[ ... -lt 1 ]`
+# without checking it was a number. Any garbage there -- a truncated write, a
+# full disk, a user edit -- made the test fail, and because that test was an `if`
+# condition `set -e` did not catch it. The migration was skipped, the script
+# exited 0, and it then stamped the current version anyway: a silently
+# un-migrated system that would never retry, since the next run read a valid "1".
+#
+# So an unreadable stamp is treated as unknown, and unknown means "migrate".
+# Re-running a migration has to be safe, because that is now the path a damaged
+# system takes.
 set -eu
+
 state_dir="${XDG_STATE_HOME:-$HOME/.local/state}/shinobi"
 state_file="$state_dir/config-version"
 current_version=1
+
+# The stamp decides whether migrations run, so keep it to the user.
+umask 077
 mkdir -p "$state_dir"
-previous_version=0
-[ -r "$state_file" ] && previous_version=$(cat "$state_file" 2>/dev/null || printf '0')
-if [ "$previous_version" -lt 1 ]; then
-  mkdir -p "${XDG_CONFIG_HOME:-$HOME/.config}/shinobi"
+chmod 700 "$state_dir"
+
+# Bounded, and read with head rather than `read`: a stamp written by a
+# full disk or an interrupted write often has no trailing newline, and `read`
+# discards the value it managed to read, which is exactly the value worth
+# putting in the warning.
+previous_version=""
+if [ -r "$state_file" ]; then
+  previous_version="$(head -c 32 -- "$state_file" 2>/dev/null || printf '')"
 fi
-printf '%s\n' "$current_version" >"$state_file"
+
+# Accept a plain non-negative integer and nothing else: no signs, no whitespace,
+# no leading zeros, no decimals. Anything else is not a version we wrote.
+case "$previous_version" in
+  '' | *[!0-9]*)
+    # No stamp is the normal first run; unreadable is not. Only the second is
+    # worth a word on stderr, so a normal boot stays quiet.
+    if [ -s "$state_file" ]; then
+      echo "shinobi-migrate: ignoring unreadable config version '$previous_version'; migrating from scratch" >&2
+    fi
+    previous_version=0
+    ;;
+esac
+
+if [ "$previous_version" -lt "$current_version" ]; then
+  mkdir -p "${XDG_CONFIG_HOME:-$HOME/.config}/shinobi"
+  printf '%s\n' "$current_version" >"$state_file"
+fi
