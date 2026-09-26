@@ -45,8 +45,11 @@ jobs:
           printf 'Using Node.js %s\n' "$node_version"
           [[ "$node_version" =~ ^v24\.[0-9]+\.[0-9]+$ ]]
 
-      - name: Validate canonical Shinobi package
-        run: ./tests/test-package.sh
+      - name: Run source test suite
+        # Source-level tests plus the package validation, which needs dpkg-deb
+        # and so is skipped elsewhere. Runs before the build so a regression
+        # fails in minutes instead of after a multi-hour ISO build.
+        run: ./tests/run-all.sh
 
       - name: Build the live ISO
         env:
@@ -62,12 +65,6 @@ jobs:
           sha256sum "$iso" > shinobi-os-amd64.sha256
           du -h "$iso" > shinobi-os-amd64.size
           printf 'version=%s\n' "preview-${GITHUB_RUN_NUMBER}" >> "$GITHUB_OUTPUT"
-
-      - name: Run source regression tests
-        run: ./tests/test-static.sh
-
-      - name: Run source integrity tests
-        run: ./tests/test-source-integrity.sh
 
       - name: Validate ISO structure
         run: ./tests/test-iso-structure.sh distro/kali-live/images/kali-linux-rolling-live-shinobi-amd64.iso

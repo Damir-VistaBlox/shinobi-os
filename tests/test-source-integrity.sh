@@ -56,6 +56,26 @@ grep -Fq 'Wants=shinobi-migrate.service shinobi-shell.service shinobi-agentd.ser
   "$ROOT/packaging/shinobi-core/usr/lib/systemd/user/shinobi-desktop.target" \
   || fail "desktop target does not group core services"
 
+echo "== Checking systemd unit copies agree =="
+# The .deb (packaging/) and the ISO overlay (distro/overlay/) each install a
+# copy of the same user units to the same paths, so whichever is applied last
+# wins. The two copies had already drifted in their After= ordering and
+# nothing noticed, which is precisely the failure this check exists to catch.
+# A unit may exist in only one place; where both exist they must be identical.
+packaged_units="$ROOT/packaging/shinobi-core/usr/lib/systemd/user"
+overlay_units="$ROOT/distro/overlay/includes.chroot/etc/systemd/user"
+[[ -d "$overlay_units" ]] || overlay_units=""
+if [[ -n "$overlay_units" && -d "$overlay_units" ]]; then
+  while IFS= read -r -d '' overlay_unit; do
+    name="$(basename "$overlay_unit")"
+    packaged_unit="$packaged_units/$name"
+    [[ -f "$packaged_unit" ]] || continue
+    if ! diff -u "$packaged_unit" "$overlay_unit" >/dev/null; then
+      fail "systemd unit $name differs between packaging/ and distro/overlay/ (diff: diff -u ${packaged_unit#$ROOT/} ${overlay_unit#$ROOT/})"
+    fi
+  done < <(find "$overlay_units" -maxdepth 1 -type f \( -name '*.service' -o -name '*.target' \) -print0)
+fi
+
 echo "== Checking optional static analyzers =="
 if command -v qmllint >/dev/null 2>&1; then
   qmllint "$ROOT/distro/overlay/includes.chroot/usr/share/shinobi-dotfiles/etc/skel/.config/quickshell/shell.qml"
