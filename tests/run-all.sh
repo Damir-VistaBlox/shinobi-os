@@ -24,6 +24,7 @@ SOURCE_TESTS=(
   tests/test-control-plane.sh
   tests/test-control-paths.sh
   tests/test-approvals.sh
+  tests/test-doctor.sh
   tests/test-launcher-env.sh
   tests/test-tool-process.sh
   tests/test-scope-gate.sh

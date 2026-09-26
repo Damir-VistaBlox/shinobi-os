@@ -30,7 +30,6 @@ for path in \
   ./usr/share/shinobi/tools/whatweb-scan.toml \
   ./usr/share/shinobi/tools/dns-lookup.toml \
   ./usr/share/shinobi/tools/http-headers.toml \
-  ./usr/share/polkit-1/actions/org.shinobi.policy \
   ./usr/share/shinobi/themes/kali-dark/theme.toml
 do
   grep -Fq "$path" <<<"$contents" || { echo "package-test: missing $path" >&2; exit 1; }

@@ -32,7 +32,15 @@ done
 [[ -f "$ROOT/libexec/shinobi/shinobi-agentctl" ]] || fail 'missing agent client'
 [[ -f "$ROOT/libexec/shinobi/shinobi-contextd" ]] || fail 'missing context daemon'
 [[ -f "$ROOT/libexec/shinobi/shinobi-contextctl" ]] || fail 'missing context client'
-[[ -s "$ROOT/packaging/shinobi-core/usr/share/polkit-1/actions/org.shinobi.policy" ]] || fail 'missing Polkit action policy'
+# The Polkit action policy is deliberately absent: it declared org.shinobi.*
+# actions that no code ever invoked, so it authorised nothing while reading as
+# a privilege control. See the comment in doctor_privilege_boundary.
+[[ ! -e "$ROOT/packaging/shinobi-core/usr/share/polkit-1/actions/org.shinobi.policy" ]] \
+  || fail 'the dead Polkit action policy is back; it authorises nothing'
+# Nothing shinobi ships may be setuid or setgid: privilege comes from the
+# distribution's own policy, not from a binary that can act as root.
+setuid_shipped="$(find "$ROOT/bin" "$ROOT/libexec" -type f \( -perm -4000 -o -perm -2000 \) -print 2>/dev/null || true)"
+[[ -z "$setuid_shipped" ]] || fail "setuid/setgid file shipped: $setuid_shipped"
 python3 -m py_compile "$ROOT"/libexec/shinobi/shinobi_control/*.py \
   "$ROOT/libexec/shinobi/shinobi-agentd" "$ROOT/libexec/shinobi/shinobi-agentctl" \
   "$ROOT/libexec/shinobi/shinobi-contextd" "$ROOT/libexec/shinobi/shinobi-contextctl" \
