@@ -36,6 +36,7 @@ on failure. `run-all.sh` runs them in this order and stops at the first failure.
 | `test-mcp-layout.sh` | No module in the server package shadows a stdlib name, and the stdlib still resolves correctly with the package directory on `sys.path` |
 | `test-mcp-e2e.sh` | The assembled `shinobi-recon` server driven over stdio by a real MCP client: all four tools served, in-scope allowed, out-of-scope refused, `nmap_scan` refused until a human approves that exact call, approval not replayable, and both outcomes audited. Skips when the `mcp` package is absent |
 | `test-tool-registry.sh` | `tools/*.toml` is the single source of truth: every MCP tool has a manifest, values come from the manifest, the old hardcoded timeout constants stay gone |
+| `test-providers.sh` | `providers/*.toml` is the LLM provider registry: every manifest classifies its `egress`, cloud endpoints are refused when they are not https or point at loopback, private, CGNAT or metadata addresses, a `local` provider must declare the peers that make it local, unknown fields and duplicate ids are refused, layers compose without silently shadowing, and the credential broker round-trips keys at 0600 while refusing bad ids, empty keys, loose modes and planted symlinks |
 | `test-approvals.sh` | Approval lifecycle end to end: exact-argument binding, single use, atomic claim, expiry, and that scope is still checked first |
 | `test-control-plane.sh` | The control plane over a real socket |
 | `test-control-paths.sh` | Every command in the control plane resolves to a real implementation |

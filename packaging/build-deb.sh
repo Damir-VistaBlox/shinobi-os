@@ -10,13 +10,15 @@ stage="$(mktemp -d)"
 trap 'chmod -R u+rwX "$stage" 2>/dev/null; rm -rf "$stage"' EXIT
 
 cp -a "$root/packaging/shinobi-core/." "$stage/"
-mkdir -p "$stage/usr/bin" "$stage/usr/share/shinobi/themes" "$stage/usr/share/shinobi/tools"
+mkdir -p "$stage/usr/bin" "$stage/usr/share/shinobi/themes" "$stage/usr/share/shinobi/tools" \
+  "$stage/usr/share/shinobi/providers"
 cp -a "$root/bin/shinobi" "$root"/bin/shinobi-* "$stage/usr/bin/"
 cp -a "$root/bin/_shinobi-common.sh" "$stage/usr/bin/"
 mkdir -p "$stage/usr/lib/shinobi"
 cp -a "$root/libexec/shinobi/." "$stage/usr/lib/shinobi/"
 cp -a "$root/themes/." "$stage/usr/share/shinobi/themes/"
 cp -a "$root/tools/." "$stage/usr/share/shinobi/tools/"
+cp -a "$root/providers/." "$stage/usr/share/shinobi/providers/"
 
 # Bytecode caches are not source. They appear the moment anyone imports these
 # modules, which the test suite does, so without this the .deb silently depends

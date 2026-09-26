@@ -45,6 +45,7 @@ for path in \
   ./usr/bin/shinobi \
   ./usr/bin/shinobi-version \
   ./usr/bin/shinobi-config \
+  ./usr/bin/shinobi-provider \
   ./usr/lib/systemd/user/shinobi-desktop.target \
   ./usr/lib/systemd/user/shinobi-agentd.service \
   ./usr/lib/systemd/user/shinobi-contextd.service \
@@ -53,6 +54,8 @@ for path in \
   ./usr/lib/shinobi/shinobi-agentctl \
   ./usr/lib/shinobi/shinobi-contextd \
   ./usr/lib/shinobi/shinobi-contextctl \
+  ./usr/lib/shinobi/shinobi_control/providerctl.py \
+  ./usr/lib/shinobi/shinobi_control/credentials.py \
   ./usr/share/shinobi/version \
   ./usr/share/shinobi/policy/README \
   ./usr/share/shinobi/capabilities/README \
@@ -60,11 +63,14 @@ for path in \
   ./usr/share/shinobi/tools/whatweb-scan.toml \
   ./usr/share/shinobi/tools/dns-lookup.toml \
   ./usr/share/shinobi/tools/http-headers.toml \
+  ./usr/share/shinobi/providers/openai.toml \
+  ./usr/share/shinobi/providers/anthropic.toml \
+  ./usr/share/shinobi/providers/ollama.toml \
   ./usr/share/shinobi/themes/kali-dark/theme.toml
 do
   grep -Fxq "$path" <<<"$contents" || { echo "package-test: missing $path" >&2; exit 1; }
 done
-echo 'package-test: all 19 expected paths are present in the archive'
+echo 'package-test: all 27 expected paths are present in the archive'
 
 dpkg-deb -x "$package" "$stage"
 
@@ -109,5 +115,40 @@ assert manifests["http_headers"].binary is None, "http_headers should stay in-pr
 ' "$stage/usr/share/shinobi/tools" \
   || { echo 'package-test: the packaged manifests do not load' >&2; exit 1; }
 echo 'package-test: packaged manifests load cleanly with policy intact'
+
+# Provider manifests get the same treatment, and it matters more here: the
+# egress field is the one that decides whether engagement data may leave the
+# machine, so a packaged copy that disagrees with the source is a policy change
+# that no other test would notice.
+for name in openai anthropic ollama; do
+  cmp -s "$stage/usr/share/shinobi/providers/$name.toml" "$ROOT/providers/$name.toml" \
+    || { echo "package-test: $name.toml differs from the source manifest" >&2; exit 1; }
+done
+echo 'package-test: packaged provider manifests are byte-identical to the source'
+
+PYTHONPATH="$ROOT/libexec/shinobi" python3 -c '
+import sys
+from shinobi_control import providerctl
+providers = providerctl.load_all([sys.argv[1]])
+assert len(providers) == 3, f"expected 3 packaged providers, got {len(providers)}"
+# The classification is the security property, so assert it directly rather than
+# trusting that a file which parsed also said the right thing.
+assert providers["openai"].egress == "cloud", "openai must be cloud"
+assert providers["anthropic"].egress == "cloud", "anthropic must be cloud"
+assert providers["ollama"].egress == "local", "ollama must be local"
+assert providers["ollama"].reachable_on, "the local provider must pin its peers"
+assert providers["openai"].requires_key is True, "openai must need a key"
+assert providers["ollama"].requires_key is False, "the local provider must not need a key"
+' "$stage/usr/share/shinobi/providers" \
+  || { echo 'package-test: the packaged provider manifests do not load' >&2; exit 1; }
+echo 'package-test: packaged providers load with their egress classification intact'
+
+# A credential must never be part of the package. Keys are per-user state under
+# XDG_STATE_HOME, so anything key-shaped under the shipped data directory is a
+# leak rather than a default. The scan looks for stored key files specifically;
+# credentials.py is the broker's source and belongs in the package.
+stray_key="$(find "$stage/usr/share/shinobi/providers" -type f -name '*.key' -print -quit)"
+[[ -z "$stray_key" ]] || { echo "package-test: a stored key is packaged: $stray_key" >&2; exit 1; }
+echo 'package-test: no stored credential material in the package'
 
 echo 'package-test: PASS'
