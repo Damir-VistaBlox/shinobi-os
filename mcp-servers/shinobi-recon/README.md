@@ -55,6 +55,20 @@ vars from the active engagement before starting the agent.
 behalf must re-check scope on every redirect hop rather than only the URL it
 was handed; `shinobi_recon/httpclient.py` shows the pattern.
 
+Step 4's "closed set of options" is enforced, not just conventional. mcp
+discards arguments a tool does not declare, and a discarded option that
+selects behaviour is not a no-op: the tool runs on its default and reports
+success. A guard in `argcheck.py`, installed on the tool manager at import,
+refuses the call instead, names the offending key, and lists what is actually
+accepted. A tool needs nothing for this — it follows from having a signature —
+but it does mean a new tool gets strict arguments for free, and `**kwargs` must
+not be used, since that would erase the signature the guard checks against.
+
+The refusal is audited like any other, recording the rejected key *names* and
+not their values: the values are unvalidated model text, and the names are
+what an operator needs in order to work out what the agent was trying to ask
+for.
+
 `tests/test-tool-registry.sh` enforces the anti-drift properties: every MCP
 tool in `server.py` must have a manifest, the values `server.py` uses must come
 from the manifest, and the old hardcoded timeout constants must stay gone.

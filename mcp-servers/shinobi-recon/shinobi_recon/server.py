@@ -10,11 +10,21 @@ Design rules for every tool in this file:
      into a shell command.
   5. Take the tool's binary, timeout and approval requirement from its
      tools/*.toml manifest, not from a constant in this file.
+  6. Reject unknown arguments rather than running on defaults. mcp silently
+     drops arguments a tool does not declare, which is not a no-op when the
+     argument selects behaviour -- see argcheck.py.
 
 Rule 5 exists because these used to be restated here and drifted: a manifest
 could declare a tool approval-gated while this file ran it freely. The
 manifests are now the only place that policy is written down, and a tool with
 no valid manifest stops the server from starting.
+
+Rule 6 exists for the same reason. An end-to-end test in this repo asked for
+nmap_scan(preset="quick") where the tool declares profile, and passed, because
+quick is also the default. The argument was dropped, the test asserted the
+value it had already been given, and the mistake was invisible. A model makes
+that class of error constantly, and the result is a tool reporting success for
+a scan it did not run.
 """
 from __future__ import annotations
 
@@ -27,7 +37,7 @@ from typing import Literal
 
 from mcp.server.fastmcp import FastMCP
 
-from . import httpclient, registry
+from . import argcheck, httpclient, registry
 from .registry import RegistryError
 from .process import run
 from .scope import ScopeError, current_engagement, log_call, require_in_scope
@@ -253,6 +263,101 @@ def http_headers(
     result = httpclient.fetch_headers(url, authorize=_redirect_guard, timeout=_HTTP.timeout_seconds)
     _finish(engagement, call_id, "http_headers", host, ["HEAD", url], result.verdict, result.output)
     return result.output
+
+
+def _log_unknown_arguments(tool: str, arguments: dict, unknown: list[str], detail: str) -> None:
+    """Record a call refused for unknown arguments, then let it be refused.
+
+    A refusal with no audit record breaks the invariant the rest of this file
+    is built on -- every call, allowed or refused, reaches the engagement log
+    (DESIGN.md). That holds for the scope gate and the approval gate; a
+    misspelled argument has to hold for it too, or the one class of call the
+    model makes most often is the one class nobody can account for afterwards.
+
+    What goes in `args` is the rejected key *names*, not their values. The
+    values are model-supplied text that failed validation, so there is no
+    reason to persist them; the names are what an operator needs to see, and
+    they are bounded by the schema's shape. A `target` is carried over when the
+    client spelled it correctly, because the operator is trying to work out
+    which host the agent meant, and "<unset>" is the honest answer when even
+    that was misspelled.
+    """
+    engagement = _engagement_for_call()
+    target = arguments.get("target")
+    log_call(
+        engagement,
+        tool,
+        target if isinstance(target, str) and target else "<unset>",
+        unknown,
+        "refused",
+        detail,
+        phase="result",
+    )
+
+
+def _install_argument_guard() -> None:
+    """Refuse unknown tool arguments before the tool manager drops them.
+
+    Wraps ToolManager.call_tool rather than each tool, because that is the only
+    point that still holds the client's raw argument dict -- see argcheck.py for
+    why the extras are unrecoverable by the time a tool body runs. The tool is
+    resolved at call time, so this stays correct for tools registered after this
+    runs, and it is installed once instead of being repeated per tool.
+
+    The raise is a ScopeError so it travels the same path as every other
+    refusal: the lowlevel server turns it into a normal CallToolResult with
+    isError=True, which is what callers already handle for a refused scope or
+    a rejected approval.
+
+    The introspection it depends on is private API in two places -- the
+    tool manager on FastMCP, and fn_metadata.arg_model on the tool. A mcp
+    upgrade that moves either would otherwise leave the guard silently
+    inert, which is the worst possible outcome: the server would go on
+    dropping unknown arguments exactly as before, and nothing would say so.
+    So the paths are verified against every registered tool before the guard
+    is accepted, and a server that cannot introspect its own tools refuses to
+    start rather than serve them unguarded. The same reasoning as a tool with
+    no valid manifest, applied to the mechanism that enforces the manifests.
+    """
+    manager = getattr(mcp, "_tool_manager", None)
+    if manager is None or not callable(getattr(manager, "call_tool", None)):
+        raise RegistryError(
+            "cannot install the argument guard: this mcp version exposes no "
+            "FastMCP._tool_manager with a callable call_tool. Refusing to serve "
+            "tools, because unknown arguments would be silently dropped again. "
+            "Pin mcp<2 and re-check argcheck.py against the installed version."
+        )
+
+    for tool in manager.list_tools():
+        arg_model = getattr(getattr(tool, "fn_metadata", None), "arg_model", None)
+        if arg_model is None:
+            raise RegistryError(
+                f"cannot install the argument guard: {tool.name} exposes no "
+                "fn_metadata.arg_model, so its parameter names cannot be read. "
+                "Refusing to serve tools rather than dropping unknown arguments."
+            )
+
+    original = manager.call_tool
+
+    async def guarded(name, arguments, context=None, convert_result=False):
+        requested = arguments or {}
+        tool = manager.get_tool(name)
+        if tool is not None:
+            accepted = argcheck.accepted_arguments(tool.fn_metadata.arg_model)
+            unknown = argcheck.unknown_arguments(requested, accepted)
+            if unknown:
+                detail = argcheck.describe_unknown(name, unknown, accepted)
+                _log_unknown_arguments(name, requested, unknown, detail)
+                raise ScopeError(detail)
+        return await original(name, requested, context=context, convert_result=convert_result)
+
+    manager.call_tool = guarded
+    if manager.call_tool is not guarded:
+        raise RegistryError("the argument guard did not install; refusing to serve tools.")
+
+
+
+_install_argument_guard()
 
 
 def main() -> None:

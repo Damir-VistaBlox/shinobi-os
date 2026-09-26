@@ -137,8 +137,32 @@ async def main() -> int:
             argv = (work / "whatweb-argv").read_text()
             check_contains("whatweb got the manifest's arguments", argv, "--no-errors")
 
-            print("== an active tool is refused without an approval ==")
+            print("== a misspelled argument is refused, not defaulted ==")
+            # This exact call used to succeed. `preset` is not a parameter --
+            # nmap_scan declares `profile` -- and mcp drops unknown keys
+            # silently, so the scan ran on the default profile and reported
+            # success. Because quick is *also* the default, no assertion here
+            # could tell the two apart, which is how the mistake stayed
+            # invisible. It is kept as a regression case: the bug is the test.
             out = await session.call_tool("nmap_scan", {"target": "example.com", "preset": "quick"})
+            text = str(out.content[0].text)
+            check_contains("an unknown argument is refused", text, "unknown argument")
+            check_contains("the refusal names the offending argument", text, "preset")
+            check_contains("the refusal lists what is accepted instead", text, "profile")
+            check("nothing was executed for a malformed call", (work / "nmap-argv").exists(), False)
+
+            # Not nmap-specific: any tool with a closed parameter set.
+            out = await session.call_tool("http_headers", {"target": "example.com", "schem": "http"})
+            check_contains(
+                "another tool's misspelled argument is refused too",
+                str(out.content[0].text),
+                "unknown argument",
+            )
+
+            print("== an active tool is refused without an approval ==")
+            # profile=service, not the default quick, so the argv assertions
+            # below can prove the requested profile is the one that ran.
+            out = await session.call_tool("nmap_scan", {"target": "example.com", "profile": "service"})
             text = str(out.content[0].text)
             check_contains("nmap_scan without approval is refused", text, "approval")
             check("nmap was never executed", (work / "nmap-argv").exists(), False)
@@ -160,23 +184,58 @@ async def main() -> int:
                 capture_output=True, text=True, check=True,
             )
             out = await session.call_tool(
-                "nmap_scan", {"target": "example.com", "preset": "quick", "approval_id": approval_id}
+                "nmap_scan", {"target": "example.com", "profile": "service", "approval_id": approval_id}
             )
             check_contains("the approved nmap_scan runs", str(out.content[0].text), "nmap stub output")
             check("nmap actually executed", (work / "nmap-argv").exists(), True)
 
+            print("== the requested profile is the one that ran, not the default ==")
+            # This is the assertion that could not exist before. Checking that
+            # argv mentions "nmap" proves nothing -- the stub echoes its own
+            # $0, so that passed whatever profile was selected. These flags are
+            # specific to the service profile, and -F is specific to quick, so
+            # both directions are pinned: the requested profile reached nmap,
+            # and the default's flags were not silently used instead.
+            argv = (work / "nmap-argv").read_text()
+            check_contains("the manifest's service-profile version flag reached nmap", argv, "-sV")
+            check_contains("and its script flag too", argv, "-sC")
+            check("the default quick profile's -F was not used", "-F" in argv, False)
+
             print("== the approval cannot be spent twice ==")
             out = await session.call_tool(
-                "nmap_scan", {"target": "example.com", "preset": "quick", "approval_id": approval_id}
+                "nmap_scan", {"target": "example.com", "profile": "service", "approval_id": approval_id}
             )
             check_contains("replaying the approval is refused", str(out.content[0].text), "approval")
 
             print("== an approval is bound to its exact arguments ==")
-            subprocess.run(
-                [str(REPO / "bin/shinobi-approval"), "list", "--json"],
-                env={**env, "XDG_STATE_HOME": str(state_dir)}, capture_output=True, text=True,
+            # Same tool, same target, different profile. A different profile is
+            # a different probe, so an approval granted for one must not pay
+            # for another. This block used to re-list the approvals, throw the
+            # result away, and assert nothing.
+            await session.call_tool("nmap_scan", {"target": "example.com", "profile": "quick"})
+            listed = json.loads(
+                subprocess.run(
+                    [str(REPO / "bin/shinobi-approval"), "list", "--json"],
+                    env={**env, "XDG_STATE_HOME": str(state_dir)},
+                    capture_output=True, text=True, check=True,
+                ).stdout
             )
-            check("nmap argv came from the manifest", "nmap" in (work / "nmap-argv").read_text(), True)
+            pending = [r for r in listed if r.get("state") == "pending"]
+            check("a second approval request was created for the quick profile", len(pending), 1)
+            second_id = pending[0]["approval_id"] if pending else ""
+            subprocess.run(
+                [str(REPO / "bin/shinobi-approval"), "approve", second_id],
+                env={**env, "XDG_STATE_HOME": str(state_dir)},
+                capture_output=True, text=True, check=True,
+            )
+            out = await session.call_tool(
+                "nmap_scan", {"target": "example.com", "profile": "service", "approval_id": second_id}
+            )
+            check_contains(
+                "an approval for quick cannot be spent on a service scan",
+                str(out.content[0].text),
+                "different arguments",
+            )
 
     print("== the audit trail records intent and result, allowed and refused ==")
     records = audit_records(engagement)
@@ -186,6 +245,17 @@ async def main() -> int:
     check("refused calls are logged", "refused" in verdicts, True)
     check("an intent record precedes the result", "intent" in phases and "result" in phases, True)
     check("every record names its tool", all("tool" in r for r in records), True)
+
+    # A refusal with no audit record would break the invariant the whole
+    # server is built on, so the malformed-call refusals are checked for by
+    # name. The args assertion also pins that the log keeps the rejected key
+    # name and not its value: the value is unvalidated model text, and there
+    # is no reason to persist it.
+    malformed = [r for r in records if "unknown argument" in str(r.get("detail", ""))]
+    check("an unknown-argument refusal reached the audit log", len(malformed) >= 2, True)
+    if malformed:
+        check("it names the argument instead of logging its value", "preset" in malformed[0]["args"], True)
+        check("and it kept the target when the client spelled it right", malformed[0]["target"], "example.com")
 
     print()
     if failures:
