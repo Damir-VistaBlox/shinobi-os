@@ -12,6 +12,7 @@ import ipaddress
 import json
 import os
 import re
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -50,10 +51,36 @@ def current_engagement() -> Engagement:
 
 
 def _load_scope(engagement: Engagement) -> dict:
-    if not engagement.scope_file.exists():
-        raise ScopeError(f"No scope file at {engagement.scope_file}")
-    with engagement.scope_file.open() as f:
-        data = yaml.safe_load(f) or {}
+    """Load and validate the engagement's scope file.
+
+    Every failure mode here raises ScopeError, never a bare parser or
+    attribute error. That matters for more than tidiness: the callers only
+    catch ScopeError, so a yaml.ParserError or an AttributeError escaping
+    this function skips the audit log entirely. A hand-edited or truncated
+    scope.yaml would then refuse every call while leaving no record that it
+    did, which is the worst possible failure mode for an audit trail.
+    """
+    try:
+        text = engagement.scope_file.read_text()
+    except FileNotFoundError as exc:
+        raise ScopeError(f"No scope file at {engagement.scope_file}") from exc
+    except OSError as exc:
+        raise ScopeError(f"Cannot read scope file {engagement.scope_file}: {exc}") from exc
+
+    try:
+        data = yaml.safe_load(text)
+    except yaml.YAMLError as exc:
+        raise ScopeError(
+            f"Scope file {engagement.scope_file} is not valid YAML: {exc}. Refusing."
+        ) from exc
+
+    if data is None:
+        data = {}
+    if not isinstance(data, dict):
+        raise ScopeError(
+            f"Scope file {engagement.scope_file} must contain a mapping at the top "
+            f"level, got {type(data).__name__}. Refusing."
+        )
     return data
 
 
@@ -142,7 +169,11 @@ def log_call(engagement: Engagement | None, tool: str, target: str, args: list[s
     if engagement is None:
         # Refused before we could even resolve an engagement (e.g. env not
         # set) — nowhere safe to log to, so this must still reach stderr.
-        print(f"shinobi-recon: {json.dumps(entry)}", flush=True)
+        #
+        # stderr specifically: this server speaks MCP over stdio, so stdout
+        # is the JSON-RPC transport. A bare text line on stdout corrupts the
+        # protocol stream and takes down the session.
+        print(f"shinobi-recon: {json.dumps(entry)}", file=sys.stderr, flush=True)
         return
     with engagement.log_file.open("a") as f:
         f.write(json.dumps(entry) + "\n")
