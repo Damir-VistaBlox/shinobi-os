@@ -32,8 +32,11 @@ interfaces without overwriting user configuration.
   bluetooth OSD, Hyprland toggles). Need the Hyprland desktop stack to do
   anything — see `distro/`.
 - `mcp-servers/shinobi-recon` — MCP server exposing Kali recon tools
-  (currently: `nmap_scan`) as scope-checked, logged tool calls. Every call
-  is validated against the active engagement's `scope.yaml` before it runs.
+  (`nmap_scan`, `dns_lookup`, `whatweb_scan`, `http_headers`) as
+  scope-checked, logged tool calls. Every call is validated against the
+  active engagement's `scope.yaml` before it runs, and each tool's policy —
+  binary, timeout, risk, whether it needs scope or approval — comes from a
+  manifest in [`tools/`](./tools) rather than from constants in the server.
 - `themes/` — `kali-dark` (default) and `matrix`, switched with `shinobi-theme`.
 - `install.sh` — apt + pipx provisioning to add shinobi to an existing Kali box.
 - `distro/` — builds a custom Kali live ISO (Hyprland desktop + shinobi
@@ -66,9 +69,24 @@ runs. Out-of-scope targets are refused, not warned about. Every call —
 allowed or refused — is appended to `engagements/<name>/log.jsonl`. Engagement
 data is git-ignored; it's client-confidential and doesn't belong in this repo.
 
+Scope alone does not authorize every tool. A tool marked `live_mode` in its
+manifest is refused even when the target is in scope, and needs an explicit
+human approval instead — see `shinobi approval`. `nmap_scan` is the only such
+tool today: it is the one that reaches hosts with packets rather than reading a
+public record, and an active scan is visible to the target. An approval is
+bound to one exact call: same capability, same arguments, same target, single
+use, and it expires (five minutes by default). Scope is still checked first, so
+an out-of-scope target is refused without an approval ever being created.
+
+This is a guardrail against an agent behaving within its instructions, not a
+sandbox. Anything running as the user can read that user's files and open its
+own sockets.
+
 ## Status
 
-MVP. One tool wrapped (`nmap_scan`) as the reference implementation of the
-scope-gate + audit-log pattern. See "Deliberately not built yet" in
-`DESIGN.md` for what's next and the open decisions (default agent, desktop
-menu integration, which tools to wrap next).
+MVP. Four tools wrapped, `nmap_scan` as the reference implementation of the
+scope-gate + approval + audit-log pattern and the other three following the
+manifest-driven shape described in
+[`mcp-servers/shinobi-recon/README.md`](./mcp-servers/shinobi-recon/README.md).
+See "Deliberately not built yet" in `DESIGN.md` for what's next and the open
+decisions (default agent, desktop menu integration, which tools to wrap next).

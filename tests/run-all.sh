@@ -29,6 +29,7 @@ SOURCE_TESTS=(
   tests/test-launcher-env.sh
   tests/test-migrate.sh
   tests/test-build-config.sh
+  tests/test-docs.sh
   tests/test-fonts-hook.sh
   tests/test-variant-parity.sh
   tests/test-webapp.sh

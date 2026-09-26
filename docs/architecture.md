@@ -29,8 +29,11 @@ volatile unless persistence is configured by the user.
 - Quickshell owns the persistent panel and desktop state presentation.
 - Hooks are named, bounded events; they never receive arbitrary shell commands
   from the agent.
-- MCP tools accept structured arguments, enforce engagement scope, and append
-  both allowed and refused calls to the engagement audit log.
+- MCP tools accept structured arguments, enforce engagement scope, require an
+  explicit human approval for any tool whose manifest marks it `live_mode`, and
+  append both allowed and refused calls to the engagement audit log. Policy is
+  read from the manifests in `tools/` at import, so a tool with no valid
+  manifest prevents the server from starting rather than running ungoverned.
 
 Use `shinobi config paths`, `shinobi version`, and `shinobi doctor --json` when
 diagnosing an installation. User configuration should be changed through

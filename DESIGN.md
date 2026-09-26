@@ -35,6 +35,16 @@ timestamp, tool, args, target, and verdict. This is what makes "AI runs nmap
 for you" defensible instead of reckless: authorization is enforced in code,
 not left to the model's judgment or a prompt in CLAUDE.md.
 
+Scope is necessary but not sufficient, which is the part that needed a second
+mechanic. An in-scope target still does not authorize a tool that is
+`live_mode` in its manifest: `nmap_scan` is refused and a human has to approve
+that specific call with `shinobi approval approve` before it runs. The approval
+is bound to the exact arguments, is single-use, and expires. Scope is checked
+first, so an out-of-scope target is refused without an approval ever being
+created. Both halves matter — scope says *which* targets, the approval says
+*whether this particular active probe* — and neither is a substitute for the
+other.
+
 No tool in this repo shells out to an arbitrary command string from the
 model. Each MCP tool takes structured parameters (target, a closed set of
 flags) and builds the argv itself — never string-interpolates model output
@@ -45,11 +55,16 @@ into a shell.
 - `bin/shinobi` — subcommands: `engagement new/list/use`, `scope show`,
   `agent` (launches the configured agent with the current engagement's
   MCP config wired in).
-- `mcp-servers/shinobi-recon` — Python MCP server, one tool family (`nmap_scan`)
-  as the proof of concept for the scope-gate + audit-log pattern. Built to
-  make adding the next tool (gobuster, nikto, whatweb...) mechanical: each
-  new tool is a thin function that calls the same `require_in_scope()` +
-  `log_call()` helpers.
+- `mcp-servers/shinobi-recon` — Python MCP server. `nmap_scan` was the proof of
+  concept for the scope-gate + audit-log pattern; `dns_lookup`,
+  `whatweb_scan` and `http_headers` followed it, and each is a thin function
+  calling the same `require_in_scope()` + `log_call()` helpers. The next tool
+  (gobuster, nikto...) is meant to be mechanical too, with one addition: a
+  manifest in `tools/` is now required, because each tool's policy — binary,
+  timeout, risk, scope and approval requirements — is read from there at import
+  rather than restated as constants. A tool with no valid manifest stops the
+  server from starting rather than being served ungoverned. See
+  `mcp-servers/shinobi-recon/README.md` for the procedure.
 - `install.sh` — apt + pipx provisioning for a fresh Kali box.
 
 ## Custom ISO (`distro/`)
@@ -96,7 +111,7 @@ the first attempt, but booting the resulting ISO surfaced a real bug —
 `mcp` 2.x, which renamed `FastMCP` to `MCPServer` and broke `shinobi-recon` at
 import time. Fixed by pinning `mcp>=1.2.0,<2`. Verified end-to-end on the
 booted image afterward: `shinobi help` lists all commands correctly, an
-in-scope `nmap_scan` runs and logs `"verdict": "allowed"`, an out-of-scope
+in-scope `nmap_scan` is authorized and logged, an out-of-scope
 target is refused *before* nmap runs and logs `"verdict": "refused"` — the
 core safety mechanism this whole project exists for, confirmed working on a
 real built-and-booted system, not just the earlier host-side unit tests.

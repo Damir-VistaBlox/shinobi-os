@@ -115,9 +115,27 @@ otherwise.
 Two variants, picked via `SHINOBI_VARIANT` (default `shinobi`, the full
 desktop). **Build `shinobi-min` first** when validating changes — console
 only, no desktop, and far less that can go wrong — before attempting
-`shinobi`. Both variants have been built successfully; `shinobi-min` was also
-boot-tested end to end. The full desktop image still needs a live graphical
-boot test (see DESIGN.md's "staged build-out").
+`shinobi`. Both variants have been built, and `shinobi-min` has been booted, but
+that boot did not exercise the MCP server: the console variant was missing the
+tool manifests and its server refused to start, which is what
+`tests/test-variant-parity.sh` now guards. Re-verify the MCP server on a
+rebuilt `shinobi-min` before treating the console variant as working. The full
+desktop image still needs a live graphical boot test (see DESIGN.md's "staged
+build-out").
+
+### Build settings
+
+| Variable | Default | Notes |
+| --- | --- | --- |
+| `SHINOBI_VARIANT` | `shinobi` | Which `variant-*` overlay to build |
+| `SHINOBI_SQUASHFS_COMPRESSION` | `zstd` | One of `gzip`, `xz`, `zstd`, `lz4`, `lzo`, `none` |
+| `SHINOBI_SQUASHFS_LEVEL` | `3` | An integer 0-22, or `none` |
+
+The two squashfs values are interpolated into `kali-live/auto/config`, which is
+a shell script live-build executes, so they are validated against the list
+above before anything is written. An unrecognised value fails the build rather
+than reaching the config — a stray quote in a variable meant to hold `zstd`
+would otherwise be a command.
 
 ```
 git submodule update --init distro/kali-live
