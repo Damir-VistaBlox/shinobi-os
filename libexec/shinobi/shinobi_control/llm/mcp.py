@@ -23,13 +23,19 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import select
 import shutil
 import subprocess
+import sys
 import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+
+# A server name becomes a directory name and a Python import, so it is held to
+# what a package name can be rather than to whatever a caller passed.
+_NAME_RE = re.compile(r"[a-z][a-z0-9_]*(?:-[a-z0-9_]+)*")
 
 CLIENT_NAME = "shinobi-llm"
 CLIENT_VERSION = "1"
@@ -73,32 +79,85 @@ class Tool:
         }
 
 
-def _server_command(command: str) -> list[str]:
-    """Resolve a server name to something runnable.
+def _resolve_server(command: str | list[str]) -> tuple[list[str], dict[str, str]]:
+    """Resolve a server name to an argv, plus any environment it needs.
 
-    Mirrors the recon server's own lookup of `shinobi-approval`: the installed
-    name first, then the source tree, so the same command works on the ISO and
-    in a checkout.
+    An argv is taken as given, and a name is resolved in order of preference:
+    an explicit path, an installed entry point, a script beside this client in
+    `bin/`, then the Python project under `mcp-servers/`.
+
+    The installed entry point is preferred over the source tree on purpose. On
+    the image `shinobi-recon` is a console script from the venv that has `mcp`
+    installed, and launching the source tree instead would use whichever
+    `python3` came first and fail on a missing dependency. The other two are for
+    a checkout, where nothing is installed at all.
     """
+    if isinstance(command, list):
+        if not command or not all(isinstance(part, str) for part in command):
+            raise MCPError(f"an MCP server argv has to be a non-empty list of strings, not {command!r}")
+        return list(command), {}
     if os.sep in command:
-        return [command]
+        return [command], {}
     found = shutil.which(command)
     if found:
-        return [found]
+        return [found], {}
     sibling = Path(__file__).resolve().parents[4] / "bin" / command
     if sibling.is_file():
-        return [str(sibling)]
+        return [str(sibling)], {}
+    source = source_tree_server(command)
+    if source is not None:
+        return source
     raise MCPError(
         f"no MCP server named {command!r} on PATH, and no {command} in the source tree; "
-        "refusing to run a conversation with no tools"
+        "refusing to run a conversation with no tools.\n"
+        "  The recon server ships with the image (pip-installed into /opt/shinobi/venv),\n"
+        "  not with the .deb, which declares no Python MCP dependency.\n"
+        "  In a checkout this resolves to mcp-servers/<name>/ automatically.\n"
+        "  Or ask without tools: --server ''"
+    )
+
+
+def source_tree_server(command: str) -> tuple[list[str], dict[str, str]] | None:
+    """How to launch a Python MCP server out of this checkout, if one is named.
+
+    The layout is the repository's, not this client's: `mcp-servers/<name>/` is a
+    Python project whose `<name>.server:main` is its console entry point. Naming
+    the server is naming the directory, so nothing here is specific to recon.
+
+    Public because "run this server from my checkout" is a reasonable thing for a
+    caller to want without going through the installed-entry-point preference that
+    `Server` applies first.
+    """
+    if not _NAME_RE.fullmatch(command):
+        # A name with a path separator or shell metacharacter in it is not a
+        # directory name, and building an argv or an import out of one would be
+        # the injection.
+        return None
+    project = Path(__file__).resolve().parents[4] / "mcp-servers" / command
+    # The project is named with a hyphen and the package inside it with an
+    # underscore, which is what every Python project does and what this one
+    # does: mcp-servers/shinobi-recon/shinobi_recon/server.py.
+    package = command.replace("-", "_")
+    if not (project / package / "server.py").is_file():
+        return None
+    root = str(project)
+    existing = os.environ.get("PYTHONPATH", "")
+    return (
+        [sys.executable, "-c", f"import {package}.server as _s; _s.main()"],
+        {"PYTHONPATH": f"{root}{os.pathsep}{existing}" if existing else root},
     )
 
 
 class Server:
     """One MCP server subprocess, addressed by JSON-RPC id."""
 
-    def __init__(self, command: str, *, env: dict[str, str] | None = None) -> None:
-        self.command = command
+    def __init__(self, command: str | list[str], *, env: dict[str, str] | None = None) -> None:
+        # A name is resolved to a command; an argv is taken as given. The second
+        # form exists so a caller that already knows how a server is launched --
+        # the source-tree fallback, or a wrapper with its own interpreter -- does
+        # not have to write a shell script to a temporary file to say so.
+        self._argv_input = command
+        self.command = command if isinstance(command, str) else " ".join(command)
         self._process: subprocess.Popen | None = None
         self._next_id = 0
         self._env = env
@@ -122,8 +181,20 @@ class Server:
     def __enter__(self) -> "Server":
         if self.started:
             raise MCPError(f"{self.command}: already started, so entering it again is a bug")
-        argv = _server_command(self.command)
-        environ = dict(os.environ if self._env is None else self._env)
+        argv, extra_env = _resolve_server(self._argv_input)
+        # A source-tree launch is only importable if its path survives, and a
+        # caller that passes a copy of its own environment would otherwise wipe
+        # it out by supplying the inherited PYTHONPATH. So the path the resolver
+        # needs is prepended to whatever the caller ends up with, rather than
+        # being updated in and then overwritten.
+        needed = extra_env.pop("PYTHONPATH", None)
+        environ = dict(os.environ)
+        environ.update(extra_env)
+        if self._env is not None:
+            environ.update(self._env)
+        if needed is not None:
+            existing = environ.get("PYTHONPATH", "")
+            environ["PYTHONPATH"] = f"{needed}{os.pathsep}{existing}" if existing else needed
         try:
             self._process = subprocess.Popen(
                 argv,

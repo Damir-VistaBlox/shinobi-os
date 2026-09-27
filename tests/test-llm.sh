@@ -1036,14 +1036,12 @@ from shinobi_control.llm import mcp
 
 problems = []
 root = pathlib.Path(os.environ["SHINOBI_REPO_ROOT"])
-env = dict(os.environ)
-env["SHINOBI_REPO_ROOT"] = str(root)
-# A state directory of its own, and no engagement: the server is expected to
-# refuse tool calls, and that refusal has to arrive as text the model can read
-# rather than as an exception that ends the conversation.
 # The suite's own sandbox, not the checkout: a test that leaves state in the
-# repository is a test that can be committed.
+# repository is a test that can be committed. And no engagement, because the
+# server is expected to refuse tool calls and that refusal has to arrive as
+# text the model can read rather than as an exception that ends the turn.
 sandbox_state = pathlib.Path(os.environ["XDG_STATE_HOME"])
+env = dict(os.environ)
 env["XDG_STATE_HOME"] = str(sandbox_state)
 env["HOME"] = str(sandbox_state)
 env.pop("SHINOBI_ENGAGEMENT", None)
@@ -1051,7 +1049,69 @@ shinobi_state = sandbox_state / "shinobi"
 shinobi_state.mkdir(parents=True, exist_ok=True)
 (shinobi_state / "profile").write_text("operator\n")
 
-server = mcp.Server(str(root / "tests" / "fixtures" / "launch-recon"), env=env)
+# Named, not pointed at a launcher script. This is the resolution an operator
+# gets from `shinobi llm` in a checkout: an installed entry point if there is
+# one, then a bin/ script, then the Python project under mcp-servers/.
+fallback = mcp.source_tree_server("shinobi-recon")
+if fallback is None:
+    problems.append("the checkout has no mcp-servers/shinobi-recon to fall back to")
+else:
+    argv, extra = fallback
+    print("  resolves to:", os.path.basename(argv[0]), argv[-1][:36])
+    if "shinobi_recon.server" not in " ".join(argv):
+        problems.append(f"the fallback did not name the recon project: {argv}")
+    if str(root / "mcp-servers" / "shinobi-recon") not in extra.get("PYTHONPATH", ""):
+        problems.append(f"the source tree was not made importable: {extra}")
+
+# The order matters and is the whole point: an installed entry point wins,
+# because on the image it is a console script from a venv that knows which
+# interpreter has mcp installed. So the fallback has to be observable with the
+# entry point taken out of the way, or "the fallback exists" is untestable on
+# any machine that has one installed.
+saved_path = os.environ.get("PATH", "")
+try:
+    os.environ["PATH"] = os.pathsep.join([str(root / "bin"), "/usr/bin", "/bin"])
+    argv, extra = mcp._resolve_server("shinobi-recon")
+    if "shinobi_recon.server" not in " ".join(argv):
+        problems.append(f"without an installed entry point, the name did not reach the checkout: {argv}")
+    if str(root / "mcp-servers" / "shinobi-recon") not in extra.get("PYTHONPATH", ""):
+        problems.append(f"the checkout launch is not importable: {extra}")
+    print("  with no entry point installed:", os.path.basename(argv[0]))
+finally:
+    os.environ["PATH"] = saved_path
+
+# And when one is installed, that is what runs.
+import shutil as _shutil
+if _shutil.which("shinobi-recon"):
+    argv, _ = mcp._resolve_server("shinobi-recon")
+    if "shinobi_recon.server" in " ".join(argv):
+        problems.append("an installed entry point was passed over in favour of the checkout")
+
+# A name is not a path and not a shell fragment either: it becomes a directory
+# name and a Python import, so anything that is not a package name is refused
+# rather than turned into an argv.
+for hostile in ("shinobi-recon;id", "$(id)", "`id`", "..", "-rf", "shinobi recon"):
+    try:
+        mcp._resolve_server(hostile)
+        problems.append(f"a hostile server name was accepted: {hostile!r}")
+    except mcp.MCPError:
+        pass
+
+# An explicit path is still how you name a server that is not in this tree, and
+# it is passed as one argv element, never through a shell.
+explicit = str(root / "tests" / "fixtures" / "fake-mcp")
+if mcp._resolve_server(explicit)[0] != [explicit]:
+    problems.append("an explicit server path was not honoured")
+
+# Booted through the checkout's own launch rather than by name, because an
+# installed entry point is meant to win and on a machine that has one this test
+# would be asserting about that installation instead of about this code. The
+# environment the launch needs is applied last, so it is not overwritten by the
+# inherited PYTHONPATH above.
+launch = dict(env)
+if fallback:
+    launch.update(fallback[1])
+server = mcp.Server(fallback[0] if fallback else "shinobi-recon", env=launch)
 with server:
     index = mcp.gather([server])
     print("  tools:", ", ".join(sorted(index)))
