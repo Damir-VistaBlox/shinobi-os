@@ -45,10 +45,16 @@ jobs:
         # pyyaml backs scope loading and mcp backs the real-server end-to-end
         # test. Both are needed *before* run-all.sh, not after: test-mcp-e2e.sh
         # skips when mcp is absent, so installing it later would leave that check
-        # silently unexercised on every pull request. The version bounds are the
-        # ones the server itself declares in pyproject.toml.
+        # silently unexercised on every pull request.
+        #
+        # Installed from the same requirements file the build runner uses, and
+        # test-docs.sh asserts the two agree with the recon package's own
+        # pyproject.toml. The bounds used to be repeated here, which is a third
+        # copy of a pin that already drifted once when only one copy existed.
         run: |
-          python -m pip install --disable-pip-version-check 'pyyaml>=6,<7' 'mcp>=1.2.0,<2'
+          python -m pip install --disable-pip-version-check \
+            -r ./packaging/control-plane-requirements.txt
+          python -c 'import yaml, mcp, mcp.server.fastmcp'
 
       - name: Check that every test script is executable
         # A test committed without the executable bit exits 126 and silently

@@ -108,9 +108,20 @@ for pin in "mcp>=1.2.0,<2" "pyyaml>=6.0"; do
   check "pyproject.toml pins $pin" "$in_pyproject" "yes"
   check "control-plane-requirements.txt pins $pin" "$in_requirements" "yes"
 done
-check "CI installs the pinned requirements file" \
-  "$(grep -qF 'control-plane-requirements.txt' "$ROOT/.github/workflows/build-preview.yml" \
-    && echo yes || echo no)" "yes"
+# Every workflow that runs the suite must install from that one file. A runner
+# that installs a different pin, or none at all, is a runner that quietly skips
+# the MCP checks or resolves a different stack than the product ships.
+for workflow in build-preview.yml pull-request.yml; do
+  check "$workflow installs the pinned requirements file" \
+    "$(grep -qF 'control-plane-requirements.txt' "$ROOT/.github/workflows/$workflow" \
+      && echo yes || echo no)" "yes"
+  # Match an install command, not any mention: a comment explaining why the
+  # upper bound exists is worth keeping even though the bounds themselves must
+  # be spelled in exactly one file.
+  check "$workflow does not repeat the version bounds inline" \
+    "$(grep -qE 'pip install.*mcp>=' "$ROOT/.github/workflows/$workflow" \
+      && echo no || echo yes)" "yes"
+done
 check "CI puts the dependency venv ahead of the system python" \
   "$(grep -qF 'GITHUB_PATH' "$ROOT/.github/workflows/build-preview.yml" \
     && echo yes || echo no)" "yes"
