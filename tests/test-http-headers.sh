@@ -17,6 +17,7 @@ export PYTHONPATH="$ROOT/mcp-servers/shinobi-recon${PYTHONPATH:+:$PYTHONPATH}"
 
 python3 - <<'PY'
 import http.server as httpserver
+import socket
 import sys
 import threading
 
@@ -35,10 +36,55 @@ def check(condition, message):
         failures.append(message)
 
 
+def _loopback_targets():
+    """Every loopback address the name `localhost` resolves to on this host.
+
+    The scope file names `localhost`, so a server that stands in for an
+    in-scope host has to be reachable however this host resolves that name.
+    Binding only 127.0.0.1 is not enough: on a host whose `localhost` is
+    `::1` alone, urllib has no address left to try and the test fails for a
+    property of the machine rather than of the redirect handling it exists to
+    check. It passed for years on a workstation that also had a 127.0.0.1
+    entry, then failed on the CI runner.
+    """
+    targets = []
+    for family, _stype, _proto, _canon, sockaddr in socket.getaddrinfo(
+        "localhost", 0, type=socket.SOCK_STREAM
+    ):
+        address = sockaddr[0].split("%", 1)[0]
+        # Only real loopback. A routable or link-local v6 answer for
+        # `localhost` would put a test server on a real interface.
+        if family == socket.AF_INET6 and address != "::1":
+            continue
+        if (family, address) not in targets:
+            targets.append((family, address))
+    return targets or [(socket.AF_INET, "127.0.0.1")]
+
+
+class _Server6(httpserver.HTTPServer):
+    address_family = socket.AF_INET6
+
+
+_serving = []
+
+
 def serve(handler):
-    server = httpserver.HTTPServer(("127.0.0.1", 0), handler)
-    threading.Thread(target=server.serve_forever, daemon=True).start()
-    return server
+    """Serve `handler` on every loopback address, all on one port.
+
+    Sharing a port keeps the URLs interchangeable: `localhost` reaches whichever
+    family the client happens to prefer.
+    """
+    servers = []
+    port = 0
+    for family, address in _loopback_targets():
+        klass = _Server6 if family == socket.AF_INET6 else httpserver.HTTPServer
+        server = klass((address, port), handler)
+        if port == 0:
+            port = server.server_port
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        servers.append(server)
+    _serving.extend(servers)
+    return servers[0]
 
 
 # --- the off-scope host: any request that lands here is the vulnerability ---
