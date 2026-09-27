@@ -50,6 +50,64 @@ model. Each MCP tool takes structured parameters (target, a closed set of
 flags) and builds the argv itself — never string-interpolates model output
 into a shell.
 
+## Egress-gating is the third mechanic
+
+Scope and approval both decide whether a *probe* may run. Neither decides
+whether the *question* may leave the machine, and that is a separate decision
+with a separate set of ways to get it wrong. A prompt is client-confidential —
+it is the part of an engagement that describes the target — so `shinobi llm`
+sends it through a gate (`shinobi_control/egress.py`) that treats the network
+as hostile:
+
+- **A provider is a manifest, not a URL.** `providers/*.toml` declares the
+  endpoint, the API dialect, the model list, whether egress is `local` or
+  `cloud`, and the peers that make it local. A `local` provider must name
+  `reachable_on`; that field is what makes the waiver mean something. Unknown
+  manifest fields are refused rather than ignored, because a misspelled
+  `cloud = true` that silently reads as local is the failure this project
+  exists to prevent.
+- **The prompt is never in argv.** It is read from stdin or a file, because
+  argv is world-readable through `/proc` and lands in shell history. What
+  crosses the wire instead is a digest of the request — canonical versioned
+  JSON, hashed — so an approval can be bound to *this exact question* without
+  the text being stored anywhere.
+- **Every turn is its own approval.** A tool result changes the next request,
+  so a conversation cannot ride on one approval: turn two is a different digest
+  and needs a new grant, bound to digest, provider and model, expiring and
+  single-use. Reusing turn one's approval would be approving a request nobody
+  read. A `local` provider needs no approval at all, which is also why the
+  loop's approval step has to be tested where it actually runs.
+- **The address that answers is the address that was checked.** Names are
+  resolved per request, every resolved address must be permitted, the socket is
+  pinned to a vetted address, and then the connected peer is read back off the
+  socket and compared. That last step is not redundant: a rebind exists
+  precisely because the answer to a DNS query and the address a connection
+  reaches need not be the same one.
+- **TLS is verified against the name, not the address.** Pinning the socket to
+  an address literal while verifying the certificate against that literal would
+  fail every legitimate provider, since certificates are issued for names. So
+  the name decides *who* is being talked to and the vetted address decides
+  *where the bytes go* — and the verifying context is passed explicitly rather
+  than left to whatever the stdlib defaults to, because a client that weakens
+  certificate checking to reach one provider has weakened it for the key.
+- **Redirects are refused.** Following one would send the prompt and the API
+  key to a host that was never resolved, checked, or approved.
+- **The API key goes in the `Authorization` header and reaches nothing else** —
+  not the body, not the conversation, not the audit trail. A key in a log
+  outlives the rotation that was supposed to remove it.
+- **Nothing is persisted.** No transcript, no prompt, no tool output. There is
+  nothing to leak later because there is no later copy.
+- **Tools still run through the recon server**, as a subprocess speaking MCP.
+  The client is not a second source of scope policy: it offers the server's
+  tools to the model and the server remains the authority on scope, on
+  approval, and on its own argument names. It deliberately does not
+  re-validate tool arguments, because two copies of a schema drift and the laxer
+  one wins.
+
+Refusals land in both audit trails — the engagement log and the control-plane
+journal — carrying the digest and a call id so a specific send can be
+correlated, and never the prompt.
+
 ## MVP built now
 
 - `bin/shinobi` — subcommands: `engagement new/list/use`, `scope show`,
@@ -65,6 +123,15 @@ into a shell.
   rather than restated as constants. A tool with no valid manifest stops the
   server from starting rather than being served ungoverned. See
   `mcp-servers/shinobi-recon/README.md` for the procedure.
+- `bin/shinobi-llm` + `libexec/shinobi/shinobi_control/llm/` — the governed
+  client itself. `shinobi llm ask <provider>` runs a conversation through the
+  egress gate and offers the recon server's tools to the model; `shinobi llm
+  check <provider>` describes a provider and what it would take to use it
+  without sending anything. `bin/shinobi-egress` exposes the same decisions on
+  their own (`check`, `show`, `trail`) for inspecting them.
+- `providers/*.toml` + `shinobi_control/providerctl.py` — the provider
+  registry and its credential broker, layered so a site can narrow what the
+  shipped manifests allow without editing them.
 - `install.sh` — apt + pipx provisioning for a fresh Kali box.
 
 ## Custom ISO (`distro/`)
@@ -243,6 +310,19 @@ not reproduced here since it doesn't change often enough to duplicate.
   `omarchy-snapshot` solves "keep a rolling install in sync with upstream."
   Only matters if Shinobi OS becomes an installed rolling distro rather than a
   one-shot ISO — that's an open decision, not just unbuilt code.
+- **External agent CLIs are not behind the egress gate.** `shinobi agent`
+  launches `claude`/`codex` with this engagement's MCP config wired in, so the
+  *tools* are scope-gated, but the agent's own model traffic uses whatever
+  authentication and endpoint that CLI was configured with. The native client
+  exists partly to close this, and closing it properly means intercepting or
+  replacing a third-party binary's transport — a decision, not a patch.
+- **The `.deb` carries no MCP server.** The recon server is pip-installed into
+  `/opt/shinobi/venv` by the image hook, so on a real image and in a checkout
+  `shinobi llm` has tools, but a bare `shinobi-core` install has none and says
+  so. Making the package carry it means declaring a Python MCP dependency, which
+  needs a Debian-family host to validate rather than a guess from this one.
+- **Response streaming is deferred.** Requests are non-streaming, so a provider
+  that only streams is not supported yet. Nothing in the gate depends on it.
 - The full `shinobi` image still needs a graphical live-boot test: confirm
   SDDM, Hyprland, Quickshell, and keybindings work together in a real session.
 - Which additional recon tools get MCP wrappers, and in what order —
