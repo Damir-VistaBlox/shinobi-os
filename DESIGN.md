@@ -316,11 +316,25 @@ not reproduced here since it doesn't change often enough to duplicate.
   authentication and endpoint that CLI was configured with. The native client
   exists partly to close this, and closing it properly means intercepting or
   replacing a third-party binary's transport — a decision, not a patch.
-- **The `.deb` carries no MCP server.** The recon server is pip-installed into
-  `/opt/shinobi/venv` by the image hook, so on a real image and in a checkout
-  `shinobi llm` has tools, but a bare `shinobi-core` install has none and says
-  so. Making the package carry it means declaring a Python MCP dependency, which
-  needs a Debian-family host to validate rather than a guess from this one.
+- **The `.deb` does not carry the recon server. It should; the dependency is
+  available and the decision is made.** Today the image hook pip-installs it
+  into `/opt/shinobi/venv`, so a real image and a
+  checkout have tools while a bare `shinobi-core` install has none — and says
+  so, pointing at `--server ''` rather than quietly running a toolless
+  conversation. The blocker was never willingness but the dependency: apt
+  cannot express a Python version bound.
+
+  It is unblocked. Kali rolling ships `python3-mcp` at 1.26.0, which is the
+  major version this server imports (`mcp.server.fastmcp`), so the package can
+  depend on it instead of vendoring a pip install at install time. Two things
+  to keep in view when landing it: Kali is rolling, and when `python3-mcp`
+  reaches 2.x — where `fastmcp` no longer exists — every `shinobi-recon` will
+  fail to import. That failure is loud and fail-closed, never a silent
+  ungoverned server, but the postinst should verify the import rather than let
+  an unusable package look installed. And installing a Python package into
+  Debian properly wants `dh_python3`, which is not available on the machine
+  this decision was made on, so the layout is a question for a Debian host
+  rather than a guess.
 - **Response streaming is deferred.** Requests are non-streaming, so a provider
   that only streams is not supported yet. Nothing in the gate depends on it.
 - The full `shinobi` image still needs a graphical live-boot test: confirm
