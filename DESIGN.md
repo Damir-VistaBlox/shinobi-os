@@ -31,7 +31,11 @@ Every MCP tool call that touches a target must be checked against an
 hosts/CIDRs, a client name, a time window) before it runs. Out-of-scope
 targets are refused, not warned about. Every call — allowed or refused — is
 appended to an engagement log (`engagements/<name>/log.jsonl`) with
-timestamp, tool, args, target, and verdict. This is what makes "AI runs nmap
+timestamp, tool, args, target, and verdict. A third verdict, `error`, exists
+for a call the policy allowed and the network did not deliver: a DNS failure or
+a refused connection used to be recorded as `allowed`, which claimed an
+authorized, completed call to a target that was never reached, and `refused`
+would have asserted a policy denial that never happened. This is what makes "AI runs nmap
 for you" defensible instead of reckless: authorization is enforced in code,
 not left to the model's judgment or a prompt in CLAUDE.md.
 

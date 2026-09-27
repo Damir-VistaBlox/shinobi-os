@@ -205,11 +205,12 @@ ok_result = recon.fetch_headers(
     f"http://localhost:{allowed_redirector.server_port}/",
     authorize=authorizer,
 )
-# The output is included in every message here. A connection failure surfaces
-# as verdict "allowed" (see the URLError arm in fetch_headers), so a broken
-# network path and a working one can look identical in the verdict alone --
-# which is exactly how this pair of assertions failed on CI for a reason the
-# test could not report.
+# The output is included in every message here. A connection failure used to
+# surface as verdict "allowed" (see the URLError arm in fetch_headers), so a
+# broken network path and a working one could look identical in the verdict
+# alone -- which is exactly how this pair of assertions failed on CI for a
+# reason the test could not report. That arm now records "error", asserted
+# separately below.
 check(ok_result.verdict == "allowed", f"in-scope redirect is allowed (got {ok_result.verdict!r})")
 # The method is the invariant, not an implementation detail. urllib builds the
 # redirected request without a method on Python 3.11/3.12 and Request then
@@ -291,6 +292,55 @@ loop_result = recon.fetch_headers(f"http://localhost:{loop.server_port}/", autho
 check(
     loop_result.verdict == "refused" and "refused redirect" in loop_result.output,
     f"infinite redirect loop is refused (got {loop_result.output!r})",
+)
+
+# --- a request that never got an answer is not an allowed call ---
+# The verdict used to be "allowed" here, on the reasoning that the authorizer
+# had not raised. But nothing was fetched, so the record claimed an authorized,
+# completed call to a target that was never reached -- and a broken network
+# path became indistinguishable from a working one. Recording it as "refused"
+# would be a different lie, asserting a policy denial that never happened.
+print("== a request that cannot be delivered ==")
+
+# A port nothing is listening on: the connection is refused by the kernel, so
+# this is a delivery failure rather than a policy decision. Chosen over an
+# unresolvable name because DNS failure varies by resolver and can be answered
+# from a cache, which would make the check depend on the machine. And it has to
+# be `localhost`, the name this test's scope actually covers -- an address the
+# authorizer refuses would be stopped before the network was ever involved, and
+# would prove nothing about this arm.
+with socket.socket() as probe:
+    probe.bind(("127.0.0.1", 0))
+    dead_port = probe.getsockname()[1]
+
+dead_url = f"http://localhost:{dead_port}/"
+check("localhost" in SCOPE["targets"], "the dead-port host is in scope, so policy allows it")
+
+dead = recon.fetch_headers(dead_url, authorize=authorizer)
+check(
+    dead.verdict == "error",
+    f"a refused connection is 'error', not 'allowed' (got {dead.verdict!r})",
+)
+check(
+    "request failed" in dead.output,
+    f"the output says the request failed (got {dead.output!r})",
+)
+
+# Even a policy that would refuse everything still does not produce 'refused'
+# here: the authorizer is not what stopped this call, the network was. That is
+# the distinction the third value exists to keep.
+def deny_everything(host):
+    raise recon.RedirectRefused(f"denied {host}")
+
+
+denied = recon.fetch_headers(dead_url, authorize=deny_everything)
+check(
+    denied.verdict == "refused",
+    f"a policy that refuses up front is 'refused' (got {denied.verdict!r})",
+)
+check(
+    dead.verdict != denied.verdict,
+    "a delivery failure and a policy refusal are distinguishable",
 )
 
 # --- a url with no host is a caller error, not a network result ---

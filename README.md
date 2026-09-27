@@ -74,8 +74,10 @@ run `shinobi doctor` to check the local runtime before starting an engagement.
 Every MCP tool call that touches a target is checked against the active
 engagement's `scope.yaml` (authorized hosts/CIDRs + a date window) before it
 runs. Out-of-scope targets are refused, not warned about. Every call —
-allowed or refused — is appended to `engagements/<name>/log.jsonl`. Engagement
-data is git-ignored; it's client-confidential and doesn't belong in this repo.
+allowed or refused — is appended to `engagements/<name>/log.jsonl`, with the
+verdict `error` reserved for a call the policy allowed that the network never
+delivered. Engagement data is git-ignored; it's client-confidential and
+doesn't belong in this repo.
 
 Scope alone does not authorize every tool. A tool marked `live_mode` in its
 manifest is refused even when the target is in scope, and needs an explicit

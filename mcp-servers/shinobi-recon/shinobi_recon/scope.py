@@ -240,7 +240,9 @@ def log_call(
 ) -> str:
     """Append one audit record and return its call id.
 
-    verdict: 'allowed' | 'refused'
+    verdict: 'allowed' -- the target was authorized and answered
+             'refused' -- policy stopped the call; the target was not reached
+             'error'   -- policy allowed it, the network did not deliver
     phase:   'intent'  -- written before the tool runs
              'result'  -- written after it finishes, with the verdict
 

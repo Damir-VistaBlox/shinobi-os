@@ -38,6 +38,22 @@ class HeaderResult:
     `verdict` is the audit verdict for the whole call, including any redirect
     hops: a call that was redirected onto an unauthorized host is "refused",
     never "allowed" no matter how many hops succeeded first.
+
+    Three values, and the third exists because the first two are both lies
+    about a request that never got an answer:
+
+      'allowed' -- an authorized host answered
+      'refused' -- the policy stopped it, so nothing was fetched from the
+                   target it was aimed at
+      'error'   -- the policy allowed it and the network did not deliver:
+                   DNS failure, refused connection, timeout, TLS failure
+
+    A connection failure used to be recorded as 'allowed', which made a broken
+    network path and a working one indistinguishable in the audit log -- the
+    record claimed an authorized, completed call to a target that was never
+    reached. 'refused' would be no better and worse in a different way: it
+    asserts a policy denial that never happened, which is the one thing an
+    audit log is not allowed to invent.
     """
 
     output: str
@@ -142,4 +158,9 @@ def fetch_headers(
         # a 404 or 500 means the request was allowed and the server refused.
         return HeaderResult(_format(exc), "allowed")
     except (urllib.error.URLError, TimeoutError, OSError) as exc:
-        return HeaderResult(f"http_headers: request failed: {exc}", "allowed", str(exc))
+        # The authorizer above did not raise, so the policy allowed this host;
+        # the network then failed to deliver. Recording that as "allowed"
+        # asserted a completed call to a target that was never reached, and
+        # recording it as "refused" would assert a policy denial that never
+        # happened. "error" is the only one of the three that is true.
+        return HeaderResult(f"http_headers: request failed: {exc}", "error", str(exc))
