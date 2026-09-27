@@ -86,10 +86,50 @@ def _read_current_engagement() -> str:
 
 
 def builtin_capabilities() -> dict[str, Capability]:
+    # Keyword arguments on purpose. These were positional, and all three
+    # capabilities had live_mode=True copied down the line -- a field nothing
+    # read, so nobody noticed. When live_mode started being enforced, an
+    # installed system could no longer send a desktop notification or read its
+    # own status. None of these three is live-specific: they are read-only or
+    # benign, and _status reports whether it is on the live image as part of its
+    # own result, so it clearly expects to run in both places.
     return {
-        "system.status": Capability("system.status", "Read Shinobi and host status", "low", "unprivileged", False, False, True, True, 10, _status),
-        "desktop.notify": Capability("desktop.notify", "Display a desktop notification", "low", "unprivileged", False, False, True, True, 10, _desktop_notify),
-        "context.snapshot": Capability("context.snapshot", "Read privacy-bounded desktop context", "low", "unprivileged", False, False, True, True, 10, _context_snapshot),
+        "system.status": Capability(
+            id="system.status",
+            summary="Read Shinobi and host status",
+            risk="low",
+            privilege="unprivileged",
+            requires_engagement=False,
+            requires_approval=False,
+            live_mode=False,
+            audit=True,
+            timeout=10,
+            handler=_status,
+        ),
+        "desktop.notify": Capability(
+            id="desktop.notify",
+            summary="Display a desktop notification",
+            risk="low",
+            privilege="unprivileged",
+            requires_engagement=False,
+            requires_approval=False,
+            live_mode=False,
+            audit=True,
+            timeout=10,
+            handler=_desktop_notify,
+        ),
+        "context.snapshot": Capability(
+            id="context.snapshot",
+            summary="Read privacy-bounded desktop context",
+            risk="low",
+            privilege="unprivileged",
+            requires_engagement=False,
+            requires_approval=False,
+            live_mode=False,
+            audit=True,
+            timeout=10,
+            handler=_context_snapshot,
+        ),
     }
 
 

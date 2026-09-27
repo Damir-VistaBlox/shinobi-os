@@ -12,8 +12,17 @@ on:
     branches:
       - preview
 
+# Read-only by default. The one thing that needs write -- creating the
+# pre-release -- is a separate job on a GitHub-hosted runner with its own
+# `contents: write`, so a compromised action or a stray command in the
+# multi-hour build never holds a token that can push to the repository.
+#
+# This started life as a step-level `permissions:` key, which is not a thing
+# GitHub accepts. The file was rejected as invalid, and because the rejection
+# also stopped the branch filter below from being applied, a broken workflow
+# was firing a full ISO build on every push to every branch.
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: shinobi-preview-build
@@ -25,14 +34,16 @@ jobs:
     # Deliberately no pull_request trigger: forks must never execute here.
     runs-on: [self-hosted, linux, x64, shinobi-builder]
     timeout-minutes: 360
+    outputs:
+      version: ${{ steps.metadata.outputs.version }}
     steps:
       - name: Check out Shinobi OS
-        uses: actions/checkout@v5
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
           submodules: recursive
 
       - name: Set up Node.js 24
-        uses: actions/setup-node@v7
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
           node-version: 24.x
           check-latest: true
@@ -45,8 +56,38 @@ jobs:
           printf 'Using Node.js %s\n' "$node_version"
           [[ "$node_version" =~ ^v24\.[0-9]+\.[0-9]+$ ]]
 
-      - name: Validate canonical Shinobi package
-        run: ./tests/test-package.sh
+      - name: Install control-plane Python dependencies
+        # Two things the suite needs that a bare runner does not have.
+        #
+        # PyYAML is not optional: the egress gate imports it, so without this the
+        # suite fails for a reason that has nothing to do with the change under
+        # test. `mcp` is optional by design -- the MCP checks skip when it is
+        # absent, which is right on a developer machine and wrong here, because a
+        # runner that quietly skipped them would still report PASS. Installing it
+        # explicitly and importing it afterwards makes the skip impossible to
+        # reach by accident.
+        #
+        # The version bounds are copied from
+        # mcp-servers/shinobi-recon/pyproject.toml, and tests/test-docs.sh
+        # asserts the two agree. The upper bound is not decoration: an unbounded
+        # `mcp>=1.2.0` once pulled 2.x, which renamed FastMCP and broke
+        # shinobi-recon at import time on a real built image (see DESIGN.md).
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends python3-venv
+          venv="${RUNNER_TEMP}/shinobi-deps"
+          python3 -m venv "$venv"
+          "$venv/bin/pip" install --quiet --upgrade pip
+          "$venv/bin/pip" install --quiet -r "${GITHUB_WORKSPACE}/packaging/control-plane-requirements.txt"
+          echo "$venv/bin" >> "$GITHUB_PATH"
+          "$venv/bin/python" -c 'import yaml, mcp, mcp.server.fastmcp; print("control-plane deps importable")'
+
+      - name: Run source test suite
+        # Source-level tests plus the package validation, which needs dpkg-deb
+        # and so is skipped elsewhere. Runs before the build so a regression
+        # fails in minutes instead of after a multi-hour ISO build.
+        run: ./tests/run-all.sh
 
       - name: Build the live ISO
         env:
@@ -62,12 +103,6 @@ jobs:
           sha256sum "$iso" > shinobi-os-amd64.sha256
           du -h "$iso" > shinobi-os-amd64.size
           printf 'version=%s\n' "preview-${GITHUB_RUN_NUMBER}" >> "$GITHUB_OUTPUT"
-
-      - name: Run source regression tests
-        run: ./tests/test-static.sh
-
-      - name: Run source integrity tests
-        run: ./tests/test-source-integrity.sh
 
       - name: Validate ISO structure
         run: ./tests/test-iso-structure.sh distro/kali-live/images/kali-linux-rolling-live-shinobi-amd64.iso
@@ -103,7 +138,7 @@ jobs:
           EOF
 
       - name: Upload live USB preview artifact
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
           name: shinobi-os-${{ steps.metadata.outputs.version }}-live-usb
           if-no-files-found: error
@@ -111,7 +146,7 @@ jobs:
 
       - name: Upload automated test logs
         if: always()
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
           name: shinobi-os-${{ github.run_number }}-test-logs
           if-no-files-found: warn
@@ -127,7 +162,7 @@ jobs:
           sudo chown -R "$(id -u):$(id -g)" "$GITHUB_WORKSPACE" || true
 
       - name: Publish checksum and build log
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
           name: shinobi-os-${{ steps.metadata.outputs.version }}-metadata
           path: |
@@ -135,12 +170,29 @@ jobs:
             shinobi-os-amd64.size
             distro/kali-live/images/kali-linux-rolling-live-shinobi-amd64.log
 
+  # The only job holding a write token, and the only one that ever runs off the
+  # build VM. It needs two small text files, not an image, so there is no reason
+  # for it to touch the machine that builds ISOs.
+  publish-metadata:
+    needs: build
+    if: github.event_name == 'workflow_dispatch' && inputs.publish_metadata == true
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - name: Fetch release metadata from the build
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: shinobi-os-${{ needs.build.outputs.version }}-metadata
+          path: metadata
+
       - name: Create GitHub pre-release metadata
-        if: github.event_name == 'workflow_dispatch' && inputs.publish_metadata == true
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          tag="v0.1.0-preview.${GITHUB_RUN_NUMBER}"
+          cd metadata
+          tag="v0.1.0-preview.$GITHUB_RUN_NUMBER"
           gh release create "$tag" \
             shinobi-os-amd64.sha256 shinobi-os-amd64.size \
             --target "$GITHUB_SHA" \

@@ -1,0 +1,221 @@
+#!/usr/bin/env bash
+# Documentation truth checks.
+#
+# Docs drift silently: nothing fails when a new MCP tool ships and the README
+# still says "currently: nmap_scan". The claims that *can* be derived from the
+# tree are derived here, so the drift is a test failure instead of a lie someone
+# trusts. The prose claims that cannot be derived are not checked -- they are
+# marked as such at the end, and rely on review.
+set -euo pipefail
+ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
+
+failures=0
+checks=0
+check() {
+  checks=$((checks + 1))
+  if [[ "$2" == "$3" ]]; then
+    printf '  ok   %s\n' "$1"
+  else
+    printf '  FAIL %s\n       expected: %s\n       actual:   %s\n' "$1" "$3" "$2"
+    failures=$((failures + 1))
+  fi
+}
+
+echo "== the README's tool list matches the manifests =="
+# Derived from tools/*.toml, so adding a tool without documenting it fails here.
+manifest_tools=()
+for manifest in "$ROOT"/tools/*.toml; do
+  name="$(sed -n 's/^mcp_tool *= *"\(.*\)"/\1/p' "$manifest")"
+  [[ -n "$name" ]] && manifest_tools+=("$name")
+done
+check "at least one manifest exists" "${#manifest_tools[@]}" "4"
+for tool in "${manifest_tools[@]}"; do
+  check "README.md documents the $tool tool" \
+    "$(grep -q "\`$tool\`" "$ROOT/README.md" && echo yes || echo no)" "yes"
+done
+check "README.md does not claim nmap_scan is the only tool" \
+  "$(grep -q 'currently: `nmap_scan`' "$ROOT/README.md" && echo stale || echo current)" "current"
+check "DESIGN.md does not claim one tool family" \
+  "$(grep -q 'one tool family (`nmap_scan`)' "$ROOT/DESIGN.md" && echo stale || echo current)" "current"
+
+echo "== the approval gate is documented, not just the scope gate =="
+# A live_mode tool is refused without an explicit human approval. Docs that
+# describe only the scope check tell a reader that scope alone authorizes a scan,
+# which is the opposite of what the code does.
+for doc in README.md DESIGN.md docs/architecture.md; do
+  check "$doc mentions approval" "$(grep -qi 'approval' "$ROOT/$doc" && echo yes || echo no)" "yes"
+done
+check "the docs state that scope alone is not sufficient" \
+  "$(grep -qiE 'approval' "$ROOT/README.md" && \
+     { grep -qiE 'in addition to scope|as well as scope|scope is still checked|scope alone|before scope alone' "$ROOT/README.md" || grep -qi 'approval' "$ROOT/DESIGN.md"; } && echo yes || echo no)" "yes"
+
+echo "== the test docs match how the suite is actually invoked =="
+# Wave 1 made the ISO argument optional; the docs still described it as required,
+# so the documented command was the multi-gigabyte path.
+check "tests/README.md documents the source-only invocation" \
+  "$(grep -qE '^\s*(\./)?tests/run-all\.sh\s*$' "$ROOT/tests/README.md" && echo yes || echo no)" "yes"
+check "tests/README.md shows the ISO as optional" \
+  "$(grep -qiE 'optional|without an ISO|no ISO|source tests only|source-level' "$ROOT/tests/README.md" && echo yes || echo no)" "yes"
+check "tests/README.md does not present the ISO as the only way to run tests" \
+  "$(grep -qi 'Run the complete suite against a built ISO' "$ROOT/tests/README.md" && echo stale || echo current)" "current"
+check "tests/README.md mentions the dpkg-deb skip" \
+  "$(grep -qi 'dpkg-deb' "$ROOT/tests/README.md" && echo yes || echo no)" "yes"
+check "the package test states the Debian-family requirement" \
+  "$(grep -qi 'Debian-family' "$ROOT/tests/README.md" && echo yes || echo no)" "yes"
+check "build-deb.sh has no platform-conditional path" \
+  "$(grep -qc 'SHINOBI_DEB_STAGE_ONLY' "$ROOT/packaging/build-deb.sh" && echo yes || echo no)" "no"
+check "tests/README.md says python3 is required" \
+  "$(grep -qi 'python3' "$ROOT/tests/README.md" && echo yes || echo no)" "yes"
+
+echo "== every test suite is listed in tests/README.md =="
+for suite in "$ROOT"/tests/test-*.sh; do
+  name="$(basename "$suite")"
+  check "tests/README.md lists $name" \
+    "$(grep -q "$name" "$ROOT/tests/README.md" && echo yes || echo no)" "yes"
+done
+
+echo "== operator-facing build knobs are documented =="
+# These now reject invalid values, so an operator who sets one needs the list.
+for knob in SHINOBI_VARIANT SHINOBI_SQUASHFS_COMPRESSION SHINOBI_SQUASHFS_LEVEL; do
+  check "distro/README.md documents $knob" \
+    "$(grep -q "$knob" "$ROOT/distro/README.md" && echo yes || echo no)" "yes"
+done
+check "distro/README.md lists the valid compression types" \
+  "$(grep -qiE 'gzip.*xz.*zstd.*lz4|gzip xz zstd lz4' "$ROOT/distro/README.md" && echo yes || echo no)" "yes"
+
+echo "== the commands the docs tell you to run actually resolve =="
+# A quickstart naming a renamed command is worse than no quickstart. The
+# dispatcher routes `shinobi foo bar` to bin/shinobi-foo-bar, so ask it.
+# Only backticked references count; prose like "add shinobi to an existing" is
+# not a command.
+for verb in $(grep -oE '`shinobi [a-z][a-z-]*' "$ROOT/README.md" | awk '{print $2}' | sort -u); do
+  [[ "$verb" == "help" ]] && continue
+  check "'shinobi $verb' resolves to a command" \
+    "$(bin_out="$(SHINOBI_BIN_DIR="$ROOT/bin" "$ROOT/bin/shinobi" "$verb" --help 2>&1)"; \
+       grep -q "^Usage: shinobi $verb" <<<"$bin_out" && echo yes || echo no)" "yes"
+done
+
+echo "== the CI dependency pins match the recon package =="
+# The build runner installs from packaging/control-plane-requirements.txt, and
+# the shipped server installs from its own pyproject.toml. If those two drift,
+# the runner validates a different stack than the product ships -- and the mcp
+# upper bound is exactly the kind of pin that gets "tidied up" by accident.
+pyproject="$ROOT/mcp-servers/shinobi-recon/pyproject.toml"
+requirements="$ROOT/packaging/control-plane-requirements.txt"
+for pin in "mcp>=1.2.0,<2" "pyyaml>=6.0"; do
+  in_pyproject="$(grep -qF "\"$pin\"," "$pyproject" && echo yes || echo no)"
+  in_requirements="$(grep -qF "$pin" "$requirements" && echo yes || echo no)"
+  check "pyproject.toml pins $pin" "$in_pyproject" "yes"
+  check "control-plane-requirements.txt pins $pin" "$in_requirements" "yes"
+done
+# Every workflow that runs the suite must install from that one file. A runner
+# that installs a different pin, or none at all, is a runner that quietly skips
+# the MCP checks or resolves a different stack than the product ships.
+for workflow in build-preview.yml pull-request.yml; do
+  check "$workflow installs the pinned requirements file" \
+    "$(grep -qF 'control-plane-requirements.txt' "$ROOT/.github/workflows/$workflow" \
+      && echo yes || echo no)" "yes"
+  # Match an install command, not any mention: a comment explaining why the
+  # upper bound exists is worth keeping even though the bounds themselves must
+  # be spelled in exactly one file.
+  check "$workflow does not repeat the version bounds inline" \
+    "$(grep -qE 'pip install.*mcp>=' "$ROOT/.github/workflows/$workflow" \
+      && echo no || echo yes)" "yes"
+done
+check "CI puts the dependency venv ahead of the system python" \
+  "$(grep -qF 'GITHUB_PATH' "$ROOT/.github/workflows/build-preview.yml" \
+    && echo yes || echo no)" "yes"
+
+echo "== the recon package ships the policy it enforces =="
+# The manifests decide which tools are governed and which need a human
+# approval, so a wheel that carries the enforcing code without them cannot
+# start: the registry fails closed on "tool manifest directory not found". That
+# is the right behaviour pointed at a packaging mistake, and it is how a plain
+# `pip install shinobi-recon` used to fail.
+check "the wheel includes the repo tool manifests" \
+  "$(grep -qF '"../../tools" = "shinobi_recon/tools"' \
+    "$ROOT/mcp-servers/shinobi-recon/pyproject.toml" && echo yes || echo no)" "yes"
+check "the registry falls back to the manifests inside the package" \
+  "$(grep -qF 'Path(__file__).resolve().parent / "tools"' \
+    "$ROOT/mcp-servers/shinobi-recon/shinobi_recon/registry.py" && echo yes || echo no)" "yes"
+check "the site-installed copy still takes precedence over the packaged one" \
+  "$(grep -qF 'if packaged.is_dir():' \
+    "$ROOT/mcp-servers/shinobi-recon/shinobi_recon/registry.py" && echo yes || echo no)" "yes"
+manifest_count="$(find "$ROOT/tools" -maxdepth 1 -name '*.toml' | wc -l)"
+check "there are tool manifests to ship ($manifest_count found)" \
+  "$(printf '%s' "$manifest_count" | grep -qE '^[1-9]' && echo yes || echo no)" "yes"
+
+echo "== workflow structure GitHub would reject or misroute =="
+# GitHub validates workflow files far more strictly than any local YAML parser.
+# A step-level `permissions:` key is the specific case that bit us: GitHub
+# rejected the whole file, and because the rejection also stopped the
+# `branches:` filter from being read, a broken workflow fired a full ISO build
+# on every push to every branch while the entire test suite reported PASS.
+# These are the two shapes of that failure worth being unable to reintroduce.
+python3 - "$ROOT" <<'PYEOF'
+import pathlib
+import sys
+
+import yaml
+
+root = pathlib.Path(sys.argv[1])
+failures = 0
+checks = 0
+
+
+def check(label, condition):
+    global failures, checks
+    checks += 1
+    ok = "ok" if condition else "FAIL"
+    if not condition:
+        failures += 1
+    print(f"  {ok}   {label}")
+
+
+for path in sorted((root / ".github" / "workflows").glob("*.yml")):
+    doc = yaml.safe_load(path.read_text())
+    jobs = doc.get("jobs") or {}
+
+    for job_name, job in jobs.items():
+        steps = job.get("steps") or []
+        for index, step in enumerate(steps, start=1):
+            check(
+                f"{path.name}:{job_name} step {index} has no step-level permissions",
+                "permissions" not in step,
+            )
+
+        perms = job.get("permissions") or {}
+        writes = perms.get("contents") == "write" or perms.get("write-all") is True
+        runs_on = job.get("runs-on")
+        labels = runs_on if isinstance(runs_on, list) else [runs_on]
+        on_builder = any("shinobi-builder" in str(label) for label in labels)
+        if writes:
+            check(
+                f"{path.name}:{job_name} holds a write token off the build VM",
+                not on_builder,
+            )
+
+print(f"  {checks} structural checks run")
+sys.exit(1 if failures else 0)
+PYEOF
+structure_status=$?
+if (( structure_status != 0 )); then
+  failures=$((failures + 1))
+fi
+checks=$((checks + 1))
+
+echo "== every workflow action is pinned to a commit =="
+for workflow in "$ROOT"/.github/workflows/*.yml; do
+  name="$(basename "$workflow")"
+  while read -r ref; do
+    check "$name pins $ref" \
+      "$(printf '%s' "$ref" | grep -qE '@[0-9a-f]{40}$' && echo yes || echo no)" "yes"
+  done < <(grep -oE 'uses: [^ ]+' "$workflow" | awk '{print $2}' | sort -u)
+done
+
+echo
+if (( failures > 0 )); then
+  printf 'docs-test: FAIL (%d of %d checks failed)\n' "$failures" "$checks"
+  exit 1
+fi
+printf '%d/%d checks passed\ndocs-test: PASS\n' "$checks" "$checks"

@@ -1,0 +1,241 @@
+#!/usr/bin/env python3
+"""shinobi-llm: ask a governed LLM provider a question, with Shinobi's tools.
+
+The prompt comes from stdin or a file, never from argv, because argv is visible
+to every process on the machine and to the shell history file. A question in
+argv is a question in `ps` output, and the whole point of this command is that
+the question is not supposed to be casually readable.
+
+Nothing is sent until the gate says so, and for a cloud provider that means a
+human approved this turn's digest. See `shinobi egress check` for the clearance
+rules, and DESIGN.md for why they are shaped that way.
+"""
+from __future__ import annotations
+
+import argparse
+import json
+import sys
+from pathlib import Path
+
+# This script is exec'd directly, so make its own directory importable. The
+# installed location is /usr/lib/shinobi, which is parents[1] either way.
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from shinobi_control import egress as gate  # noqa: E402
+from shinobi_control.llm import agent, mcp  # noqa: E402
+
+# Servers whose tools are offered to the model when none are named. The recon
+# server is the one that touches targets; the control server is the one that
+# reads engagement state.
+DEFAULT_SERVERS = ("shinobi-recon",)
+
+
+def _read_prompt(args: argparse.Namespace) -> str:
+    """Read the prompt from a file or stdin. Never from argv."""
+    if args.file:
+        if args.file == "-":
+            text = sys.stdin.read()
+        else:
+            path = Path(args.file)
+            try:
+                text = path.read_text(encoding="utf-8")
+            except OSError as exc:
+                raise SystemExit(f"shinobi-llm: cannot read {path}: {exc.strerror or exc}")
+    else:
+        if sys.stdin.isatty():
+            raise SystemExit(
+                "shinobi-llm: no prompt given. Pipe it in, or pass --file.\n"
+                "  echo 'what is open on the target?' | shinobi llm ask ollama\n"
+                "The prompt is never accepted as an argument, because argv is world-readable."
+            )
+        text = sys.stdin.read()
+
+    if not text.strip():
+        raise SystemExit("shinobi-llm: the prompt is empty")
+    return text
+
+
+def _servers(names: list[str]) -> list[mcp.Server]:
+    return [mcp.Server(name) for name in names]
+
+
+def _cmd_check(args: argparse.Namespace) -> int:
+    """Report whether this provider could be used at all, and what it would cost."""
+    try:
+        decision_probe = gate.get_provider(args.provider)
+    except gate.ProviderError as exc:
+        print(f"shinobi-llm: {exc}", file=sys.stderr)
+        return 1
+    if args.json:
+        print(json.dumps(gate.registry_summary()[decision_probe.id], indent=2, sort_keys=True))
+    else:
+        print(f"{decision_probe.id}: {decision_probe.name}")
+        print(f"  api      {decision_probe.api}")
+        print(f"  egress   {decision_probe.egress}")
+        print(f"  endpoint {decision_probe.base_url}")
+        print(f"  model    {decision_probe.default_model}")
+        print(f"  key      {'required' if decision_probe.requires_key else 'not required'}")
+        if decision_probe.reachable_on:
+            print(f"  peers    {', '.join(decision_probe.reachable_on)}")
+    return 0
+
+
+def _cmd_ask(args: argparse.Namespace) -> int:
+    prompt = _read_prompt(args)
+    servers = _servers(args.server)
+
+    approve = None
+    if args.approval_id:
+        # Scripted use: one turn, one pre-made approval, no waiting. Anything
+        # that needs a second approval will stop and say so, which is the
+        # correct outcome rather than a retry loop.
+        wanted = args.approval_id
+
+        def approve(digest: str, provider: str, model: str, turn: int) -> str | None:
+            if turn > 1:
+                print(
+                    f"shinobi-llm: turn {turn} needs its own approval; --approval-id covers one "
+                    "turn only. Re-run without it to be asked per turn.",
+                    file=sys.stderr,
+                )
+                return None
+            return wanted
+
+    elif not args.yes:
+        approve = agent.interactive_approver(wait=not args.no_wait)
+    else:
+        # --yes is for local providers, where there is no per-turn approval to
+        # give. A cloud provider still refuses: the whole point of the cloud
+        # rule is that a standing yes is not consent for a specific prompt, and
+        # this flag must not become a way around it.
+        approve = None
+
+    try:
+        result = agent.run(
+            args.provider,
+            prompt,
+            model=args.model,
+            system=None if args.no_system else args.system,
+            servers=servers,
+            max_turns=args.max_turns,
+            approve=approve,
+            timeout=args.timeout,
+        )
+    except agent.LoopRefused as exc:
+        print(f"shinobi-llm: {exc}", file=sys.stderr)
+        return 1
+    except gate.EgressRefused as exc:
+        print(f"shinobi-llm: refused: {exc}", file=sys.stderr)
+        print(
+            "  The refusal is in the engagement log and the control-plane audit trail. "
+            "See 'shinobi egress trail'.",
+            file=sys.stderr,
+        )
+        return 1
+    except mcp.MCPError as exc:
+        print(f"shinobi-llm: {exc}", file=sys.stderr)
+        return 1
+    except KeyboardInterrupt:
+        print("\nshinobi-llm: interrupted", file=sys.stderr)
+        return 130
+    finally:
+        # Idempotent: the agent exits what it started, and this catches only
+        # servers that failed before it ever saw them.
+        for server in servers:
+            if server.started:
+                server.__exit__(None, None, None)
+
+    if args.json:
+        print(
+            json.dumps(
+                {
+                    "text": result.text,
+                    "turns": result.turns,
+                    "tool_calls": result.tool_calls,
+                    "input_tokens": result.input_tokens,
+                    "output_tokens": result.output_tokens,
+                    "digests": result.digests,
+                },
+                indent=2,
+                sort_keys=True,
+            )
+        )
+    else:
+        if result.text:
+            print(result.text)
+        print(f"[{result.summary()}]", file=sys.stderr)
+    return 0
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = _QuietParser(
+        prog="shinobi-llm",
+        description="Ask a governed LLM provider a question, with Shinobi's tools.",
+    )
+    sub = parser.add_subparsers(dest="command", required=True, parser_class=_QuietParser)
+
+    ask = sub.add_parser("ask", help="ask a provider a question")
+    ask.add_argument("provider", help="provider id, as in 'shinobi provider list'")
+    ask.add_argument("--model", help="model id (defaults to the manifest's)")
+    ask.add_argument("--file", help="read the prompt from this file, or - for stdin")
+    ask.add_argument(
+        "--server",
+        action="append",
+        default=None,
+        metavar="CMD",
+        help="MCP server to offer tools from; repeatable (default: "
+        + ", ".join(DEFAULT_SERVERS)
+        + "; pass --server '' for none)",
+    )
+    ask.add_argument("--max-turns", type=int, default=agent.DEFAULT_MAX_TURNS)
+    ask.add_argument("--timeout", type=int, default=120, help="per-request seconds")
+    ask.add_argument("--system", default=agent.DEFAULT_SYSTEM, help="system prompt ('' to send none)")
+    ask.add_argument("--no-system", action="store_true", help="send no system prompt at all")
+    ask.add_argument("--approval-id", help="use this approval for the single first turn")
+    ask.add_argument("--yes", action="store_true", help="do not ask (local providers only)")
+    ask.add_argument(
+        "--no-wait",
+        action="store_true",
+        help="request an approval and exit instead of waiting for it",
+    )
+    ask.add_argument("--json", action="store_true", help="emit the result as JSON")
+    ask.set_defaults(func=_cmd_ask)
+
+    check = sub.add_parser("check", help="describe a provider and its governance")
+    check.add_argument("provider")
+    check.add_argument("--json", action="store_true")
+    check.set_defaults(func=_cmd_check)
+
+    return parser
+
+
+class _QuietParser(argparse.ArgumentParser):
+    """An argument parser that does not quote what it was given.
+
+    argparse's own error for an unexpected argument repeats the argument back.
+    For every other command that is a convenience; for this one it would put the
+    prompt into stderr, a terminal scrollback, and anything capturing output --
+    and a user who pasted a prompt into argv by mistake has just learned that
+    mistake is not private. The refusal names the command and nothing else.
+    """
+
+    def error(self, message: str) -> None:
+        if "unrecognized arguments" in message:
+            raise SystemExit(
+                f"{self.prog}: unexpected argument. The prompt is not accepted as an "
+                "argument, because argv is world-readable. Pipe it in or use --file."
+            )
+        super().error(message)
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = build_parser().parse_args(argv)
+    if getattr(args, "server", None) is None:
+        args.server = list(DEFAULT_SERVERS)
+    elif args.server == [""]:
+        args.server = []
+    return args.func(args)
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

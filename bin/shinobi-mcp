@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+# shinobi:summary=Offer a Shinobi MCP server to an external agent, and show how servers resolve
+# shinobi:args=<register|resolve|support> [agent] [options]
+# shinobi:examples=shinobi mcp register claude
+set -euo pipefail
+root="$(dirname -- "$(readlink -f -- "${BASH_SOURCE[0]}")")/../libexec/shinobi"
+export PYTHONPATH="$root${PYTHONPATH:+:$PYTHONPATH}"
+exec python3 -m shinobi_control.mcpctl "$@"

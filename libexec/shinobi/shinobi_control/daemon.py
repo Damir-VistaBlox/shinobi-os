@@ -72,25 +72,35 @@ class AgentDaemon:
         if capability is None:
             audit_id = audit_write(actor="agent", capability=request.capability, arguments=request.arguments, status="denied", detail="unknown capability", request_id=request.request_id)
             return response(request.request_id, "denied", audit_id=audit_id, error="unknown capability")
-        ok, reason = allowed(capability)
+
+        # The approval id travels in the arguments and is removed before the
+        # handler sees it, so a capability never has to know about approvals
+        # and an approval can never be smuggled into a handler's own input.
+        arguments = dict(request.arguments)
+        approval_id = arguments.pop("approval_id", None)
+        if approval_id is not None and not isinstance(approval_id, str):
+            audit_id = audit_write(actor="agent", capability=request.capability, arguments=request.arguments, status="denied", detail="approval_id must be a string", request_id=request.request_id)
+            return response(request.request_id, "denied", audit_id=audit_id, error="approval_id must be a string")
+
+        ok, reason = allowed(capability, arguments=arguments, approval_id=approval_id)
         if not ok:
-            if "approval" in reason:
+            if reason == "explicit approval required":
                 approval = create_approval(
                     capability=capability.id,
-                    arguments=request.arguments,
+                    arguments=arguments,
                     profile=current_profile(),
                     reason=reason,
                 )
-                audit_id = audit_write(actor="agent", capability=request.capability, arguments=request.arguments, status="approval-required", detail=approval["approval_id"], request_id=request.request_id)
+                audit_id = audit_write(actor="agent", capability=request.capability, arguments=arguments, status="approval-required", detail=approval["approval_id"], request_id=request.request_id)
                 return response(request.request_id, "approval-required", approval_id=approval["approval_id"], audit_id=audit_id)
-            audit_id = audit_write(actor="agent", capability=request.capability, arguments=request.arguments, status="denied", detail=reason, request_id=request.request_id)
-            return response(request.request_id, "approval-required" if "approval" in reason else "denied", audit_id=audit_id, error=reason)
+            audit_id = audit_write(actor="agent", capability=request.capability, arguments=arguments, status="denied", detail=reason, request_id=request.request_id)
+            return response(request.request_id, "denied", audit_id=audit_id, error=reason)
         try:
-            result = await asyncio.wait_for(asyncio.to_thread(capability.handler, request.arguments), timeout=capability.timeout)
+            result = await asyncio.wait_for(asyncio.to_thread(capability.handler, arguments), timeout=capability.timeout)
         except Exception as exc:
-            audit_id = audit_write(actor="agent", capability=request.capability, arguments=request.arguments, status="failed", detail=str(exc), request_id=request.request_id)
+            audit_id = audit_write(actor="agent", capability=request.capability, arguments=arguments, status="failed", detail=str(exc), request_id=request.request_id)
             return response(request.request_id, "failed", audit_id=audit_id, error=str(exc))
-        audit_id = audit_write(actor="agent", capability=request.capability, arguments=request.arguments, status="completed", request_id=request.request_id)
+        audit_id = audit_write(actor="agent", capability=request.capability, arguments=arguments, status="completed", request_id=request.request_id)
         return response(request.request_id, "completed", capability=request.capability, result=result, audit_id=audit_id)
 
 

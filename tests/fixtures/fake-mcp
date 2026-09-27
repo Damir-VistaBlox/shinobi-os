@@ -1,0 +1,137 @@
+#!/usr/bin/env python3
+"""A fake MCP server: real JSON-RPC over real stdio, a recorded call history.
+
+Used by tests/test-llm.sh to exercise the client against the transport an
+external agent already uses, rather than against a mock of the client's own
+reader. It deliberately misbehaves in the ways a real server does -- it sends a
+notification before its reply, it answers a notification-only method, and it can
+be told to fail -- because those are exactly the cases where a hand-rolled
+JSON-RPC client hangs or misreads.
+
+Environment:
+  FAKE_MCP_HISTORY  append each tools/call as one JSON line here
+  FAKE_MCP_BEHAVIOUR normal | no-schema | crash | refuse
+"""
+from __future__ import annotations
+
+import json
+import os
+import sys
+
+HISTORY = os.environ.get("FAKE_MCP_HISTORY", "")
+BEHAVIOUR = os.environ.get("FAKE_MCP_BEHAVIOUR", "normal")
+
+TOOLS = [
+    {
+        "name": "port_scan",
+        "description": "Scan the ports open on an in-scope target.",
+        "inputSchema": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "type": "object",
+            "properties": {"target": {"type": "string"}},
+            "required": ["target"],
+        },
+    },
+    {
+        "name": "note",
+        "description": "Record a note.",
+        "inputSchema": {"type": "object", "properties": {"text": {"type": "string"}}},
+    },
+]
+
+if BEHAVIOUR == "no-schema":
+    TOOLS[0] = {"name": "port_scan", "description": "no schema at all"}
+
+
+def send(payload: dict) -> None:
+    sys.stdout.write(json.dumps(payload) + "\n")
+    sys.stdout.flush()
+
+
+def main() -> None:
+    for line in sys.stdin:
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            message = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+
+        method = message.get("method")
+        request_id = message.get("id")
+
+        if method == "initialize":
+            # A notification before the reply, which a client that assumes the
+            # next line is the answer will read as one.
+            send({"jsonrpc": "2.0", "method": "notifications/message", "params": {"level": "info"}})
+            send(
+                {
+                    "jsonrpc": "2.0",
+                    "id": request_id,
+                    "result": {
+                        "protocolVersion": "2025-06-18",
+                        "capabilities": {"tools": {}},
+                        "serverInfo": {"name": "fake-recon", "version": "1"},
+                    },
+                }
+            )
+            continue
+
+        if method == "notifications/initialized":
+            continue
+
+        if method == "tools/list":
+            if BEHAVIOUR == "crash":
+                sys.exit(3)
+            send({"jsonrpc": "2.0", "id": request_id, "result": {"tools": TOOLS}})
+            continue
+
+        if method == "tools/call":
+            params = message.get("params") or {}
+            if HISTORY:
+                with open(HISTORY, "a", encoding="utf-8") as handle:
+                    handle.write(
+                        json.dumps(
+                            {"name": params.get("name"), "arguments": params.get("arguments")}
+                        )
+                        + "\n"
+                    )
+            if BEHAVIOUR == "refuse" and params.get("name") == "note":
+                send(
+                    {
+                        "jsonrpc": "2.0",
+                        "id": request_id,
+                        "result": {
+                            "isError": True,
+                            "content": [{"type": "text", "text": "target is not in scope"}],
+                        },
+                    }
+                )
+                continue
+            target = (params.get("arguments") or {}).get("target", "the target")
+            send(
+                {
+                    "jsonrpc": "2.0",
+                    "id": request_id,
+                    "result": {
+                        "content": [
+                            {"type": "text", "text": f"22/tcp open ssh\n80/tcp open http\nscanned {target}"}
+                        ]
+                    },
+                }
+            )
+            continue
+
+        if request_id is not None:
+            send(
+                {
+                    "jsonrpc": "2.0",
+                    "id": request_id,
+                    "error": {"code": -32601, "message": f"method not found: {method}"},
+                }
+            )
+
+
+if __name__ == "__main__":
+    main()

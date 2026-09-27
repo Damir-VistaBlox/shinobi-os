@@ -1,0 +1,85 @@
+name: Source checks
+
+# Runs on every pull request, on GitHub-hosted runners.
+#
+# This is deliberately separate from build-preview.yml, which is restricted to
+# the dedicated self-hosted build VM and holds a workflow-wide `contents: write`
+# token. Before this workflow existed, the only automated gate was that build,
+# so the checks below simply did not run on changes -- and because
+# run-all.sh required an ISO path, they could not be run locally either
+# without a full image build. Source checks are cheap, so they now gate every
+# change instead of only the ones that happen to trigger a release build.
+on:
+  pull_request:
+  merge_group:
+
+# Read-only. Nothing in this workflow needs write access, and a pull request
+# from a fork must never be able to reach a mutating scope.
+permissions:
+  contents: read
+
+concurrency:
+  group: shinobi-source-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  source:
+    # GitHub-hosted on purpose: pull requests, including from forks, must
+    # never be dispatched to the self-hosted builder.
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out Shinobi OS
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          # distro/kali-live is a large build submodule and is not needed to
+          # run the source-level suite.
+          submodules: false
+
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.12'
+
+      - name: Install test dependencies
+        # pyyaml backs scope loading and mcp backs the real-server end-to-end
+        # test. Both are needed *before* run-all.sh, not after: test-mcp-e2e.sh
+        # skips when mcp is absent, so installing it later would leave that check
+        # silently unexercised on every pull request.
+        #
+        # Installed from the same requirements file the build runner uses, and
+        # test-docs.sh asserts the two agree with the recon package's own
+        # pyproject.toml. The bounds used to be repeated here, which is a third
+        # copy of a pin that already drifted once when only one copy existed.
+        run: |
+          python -m pip install --disable-pip-version-check \
+            -r ./packaging/control-plane-requirements.txt
+          python -c 'import yaml, mcp, mcp.server.fastmcp'
+
+      - name: Check that every test script is executable
+        # A test committed without the executable bit exits 126 and silently
+        # takes the rest of the suite with it. That shipped once.
+        run: |
+          status=0
+          while IFS= read -r -d '' test; do
+            if [[ ! -x "$test" ]]; then
+              echo "::error file=$test::not executable (mode $(stat -c '%a' "$test"))"
+              status=1
+            fi
+          done < <(find tests -maxdepth 1 -type f -name '*.sh' -print0)
+          exit "$status"
+
+      - name: Run source test suite
+        run: ./tests/run-all.sh
+
+      - name: Verify the Python package is installable
+        run: |
+          python -m pip install --disable-pip-version-check ./mcp-servers/shinobi-recon
+          python -c 'import shinobi_recon.scope, shinobi_recon.httpclient, shinobi_recon.process'
+
+      - name: Verify the MCP server imports with its real dependencies
+        # mcp is now installed above so the end-to-end test runs against the
+        # suite rather than after it. This step keeps a direct import of
+        # server.py visible: the unit suites exercise its pieces, so a bad
+        # top-level import there would otherwise only surface here.
+        run: python -c 'import shinobi_recon.server'

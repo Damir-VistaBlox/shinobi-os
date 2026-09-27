@@ -1,0 +1,20 @@
+# OpenAI. Cloud: every prompt leaves this machine, so an engagement needs
+# explicit clearance in its scope.yaml before this provider will be used.
+id = "openai"
+name = "OpenAI"
+api = "openai"
+base_url = "https://api.openai.com/v1"
+egress = "cloud"
+requires_key = true
+default_model = "gpt-4o"
+
+# A starting set, not the full catalogue. The model list exists so the CLI can
+# offer choices and validate a default; the API is the authority on what this
+# account can actually reach. Edit or override in /etc/shinobi/providers.d.
+models = [
+  "gpt-4o",
+  "gpt-4o-mini",
+  "gpt-4.1",
+  "gpt-4.1-mini",
+  "o4-mini",
+]

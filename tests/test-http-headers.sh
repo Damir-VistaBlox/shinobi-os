@@ -1,0 +1,363 @@
+#!/bin/bash
+# Regression test for the redirect scope bypass.
+#
+# Before this test existed, http_headers followed 30x redirects without
+# re-checking scope, so any in-scope host could redirect the agent to any
+# host on the internet. The response was then written to the engagement's
+# audit log as verdict "allowed", making the bypass invisible after the fact.
+#
+# The test drives two real loopback servers: one in scope (localhost) that
+# 302s to a second one (127.0.0.1) that is not in the scope file. The
+# assertion that matters is not the text of the refusal but that the
+# off-scope server was never contacted.
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+export PYTHONPATH="$ROOT/mcp-servers/shinobi-recon${PYTHONPATH:+:$PYTHONPATH}"
+
+python3 - <<'PY'
+import http.server as httpserver
+import socket
+import sys
+import threading
+
+# Aliased: this script has a flat namespace, so importing the stdlib `http`
+# and shinobi_recon.httpclient under the same name would shadow one of them.
+from shinobi_recon import httpclient as recon
+
+failures = []
+
+
+def check(condition, message):
+    if condition:
+        print(f"  ok   {message}")
+    else:
+        print(f"  FAIL {message}")
+        failures.append(message)
+
+
+def _loopback_targets():
+    """Every loopback address the name `localhost` resolves to on this host.
+
+    The scope file names `localhost`, so a server that stands in for an
+    in-scope host has to be reachable however this host resolves that name.
+    Binding only 127.0.0.1 is not enough: on a host whose `localhost` is
+    `::1` alone, urllib has no address left to try and the test fails for a
+    property of the machine rather than of the redirect handling it exists to
+    check. It passed for years on a workstation that also had a 127.0.0.1
+    entry, then failed on the CI runner.
+    """
+    targets = []
+    for family, _stype, _proto, _canon, sockaddr in socket.getaddrinfo(
+        "localhost", 0, type=socket.SOCK_STREAM
+    ):
+        address = sockaddr[0].split("%", 1)[0]
+        # Only real loopback. A routable or link-local v6 answer for
+        # `localhost` would put a test server on a real interface.
+        if family == socket.AF_INET6 and address != "::1":
+            continue
+        if (family, address) not in targets:
+            targets.append((family, address))
+    return targets or [(socket.AF_INET, "127.0.0.1")]
+
+
+class _Server6(httpserver.HTTPServer):
+    address_family = socket.AF_INET6
+
+
+_serving = []
+
+
+def serve(handler):
+    """Serve `handler` on every loopback address, all on one port.
+
+    Sharing a port keeps the URLs interchangeable: `localhost` reaches whichever
+    family the client happens to prefer.
+    """
+    servers = []
+    port = 0
+    for family, address in _loopback_targets():
+        klass = _Server6 if family == socket.AF_INET6 else httpserver.HTTPServer
+        server = klass((address, port), handler)
+        if port == 0:
+            port = server.server_port
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        servers.append(server)
+    _serving.extend(servers)
+    return servers[0]
+
+
+# --- the off-scope host: any request that lands here is the vulnerability ---
+off_scope_hits = []
+
+
+class OffScopeHandler(httpserver.BaseHTTPRequestHandler):
+    def do_HEAD(self):
+        off_scope_hits.append(self.path)
+        self.send_response(200)
+        self.send_header("X-Who", "off-scope-secret")
+        self.end_headers()
+
+    def log_message(self, *args):
+        pass
+
+
+off_scope = serve(OffScopeHandler)
+off_scope_url = f"http://127.0.0.1:{off_scope.server_port}/"
+
+# --- the in-scope host: redirects to the off-scope host ---
+redirector_port = {}
+
+
+class RedirectorHandler(httpserver.BaseHTTPRequestHandler):
+    def do_HEAD(self):
+        self.send_response(302)
+        self.send_header("Location", off_scope_url)
+        self.end_headers()
+
+    def do_GET(self):
+        self.do_HEAD()
+
+    def log_message(self, *args):
+        pass
+
+
+redirector = serve(RedirectorHandler)
+redirector_url = f"http://localhost:{redirector.server_port}/"
+
+# A scope that covers localhost only. 127.0.0.1 is deliberately absent, which
+# is realistic: operators routinely scope a name and not the address it
+# resolves to, and this is exactly the case the old code walked straight
+# through.
+IN_SCOPE = {"localhost", "127.0.0.1"}
+SCOPE = {"engagement": "redirect-test", "targets": ["localhost"]}
+
+
+def authorizer(host):
+    if host not in SCOPE["targets"]:
+        raise recon.RedirectRefused(f"out-of-scope redirect target {host!r}")
+
+
+print("== redirect scope bypass ==")
+
+result = recon.fetch_headers(redirector_url, authorize=authorizer)
+
+check(
+    off_scope_hits == [],
+    f"off-scope host was never contacted (hits={off_scope_hits})",
+)
+check(result.verdict == "refused", f"verdict is 'refused' (got {result.verdict!r})")
+check(
+    "off-scope-secret" not in result.output,
+    "off-scope response body/headers never reached the caller",
+)
+check(
+    "refused redirect" in result.output,
+    f"refusal reason is reported to the caller (got {result.output!r})",
+)
+check(
+    result.detail != "",
+    "refusal carries a non-empty detail for the audit log",
+)
+
+# --- an in-scope redirect must still work: the guard cannot be a blanket ban ---
+# Both hops are addressed as `localhost` because that is the name the scope
+# file actually contains. Pointing this at 127.0.0.1 would (correctly) be
+# refused, which is the previous test case, not this one.
+print("== in-scope redirect still followed ==")
+
+allowed_hits = []
+allowed_methods = []
+
+
+class AllowedHandler(httpserver.BaseHTTPRequestHandler):
+    def do_HEAD(self):
+        allowed_hits.append(self.path)
+        allowed_methods.append(self.command)
+        self.send_response(200)
+        self.send_header("X-Who", "in-scope")
+        self.end_headers()
+
+    def log_message(self, *args):
+        pass
+
+
+allowed = serve(AllowedHandler)
+allowed_url = f"http://localhost:{allowed.server_port}/"
+
+
+class AllowedRedirectorHandler(httpserver.BaseHTTPRequestHandler):
+    def do_HEAD(self):
+        self.send_response(301)
+        self.send_header("Location", allowed_url)
+        self.end_headers()
+
+    def do_GET(self):
+        self.do_HEAD()
+
+    def log_message(self, *args):
+        pass
+
+
+allowed_redirector = serve(AllowedRedirectorHandler)
+
+ok_result = recon.fetch_headers(
+    f"http://localhost:{allowed_redirector.server_port}/",
+    authorize=authorizer,
+)
+# The output is included in every message here. A connection failure used to
+# surface as verdict "allowed" (see the URLError arm in fetch_headers), so a
+# broken network path and a working one could look identical in the verdict
+# alone -- which is exactly how this pair of assertions failed on CI for a
+# reason the test could not report. That arm now records "error", asserted
+# separately below.
+check(ok_result.verdict == "allowed", f"in-scope redirect is allowed (got {ok_result.verdict!r})")
+# The method is the invariant, not an implementation detail. urllib builds the
+# redirected request without a method on Python 3.11/3.12 and Request then
+# infers GET, so on those interpreters a HEAD became a GET after any redirect
+# while a newer one kept it. Asserting the method is what makes the difference
+# visible on every interpreter instead of on whichever one CI happens to run.
+check(
+    allowed_methods == ["HEAD"],
+    f"the redirect preserved HEAD (target saw {allowed_methods})",
+)
+check(allowed_hits != [], f"in-scope redirect target was actually contacted (output: {ok_result.output!r})")
+check("X-Who: in-scope" in ok_result.output, f"in-scope headers are returned (output: {ok_result.output!r})")
+
+# --- hop limit: an in-scope redirect loop must terminate ---
+
+
+# --- a redirect chain must terminate ---
+print("== redirect chain is bounded ==")
+
+chain_ports = {}
+
+
+def hop(n):
+    class Hop(httpserver.BaseHTTPRequestHandler):
+        def do_HEAD(self):
+            if n >= len(chain_ports):
+                self.send_response(200)
+                self.send_header("X-Hops", str(n))
+                self.end_headers()
+            else:
+                self.send_response(302)
+                self.send_header("Location", f"http://localhost:{chain_ports[n + 1]}/hop{n + 1}")
+                self.end_headers()
+
+        def do_GET(self):
+            self.do_HEAD()
+
+        def log_message(self, *args):
+            pass
+
+    return serve(Hop)
+
+
+# Eight distinct in-scope URLs: longer than the default five-hop limit, with
+# no URL repeated, so urllib's cycle detection cannot fire and only the
+# explicit hop limit can stop this.
+servers = [hop(n) for n in range(8)]
+for n, srv in enumerate(servers):
+    chain_ports[n] = srv.server_port
+
+chain_result = recon.fetch_headers(
+    f"http://localhost:{chain_ports[0]}/hop0",
+    authorize=authorizer,
+)
+check(
+    chain_result.verdict == "refused" and "redirect limit" in chain_result.output,
+    f"over-long redirect chain is refused at the hop limit (got {chain_result.output!r})",
+)
+
+# --- a self-referential loop is also refused, by whichever guard trips first ---
+print("== self-referential redirect loop is refused ==")
+
+
+class LoopHandler(httpserver.BaseHTTPRequestHandler):
+    def do_HEAD(self):
+        self.send_response(302)
+        self.send_header("Location", f"http://localhost:{self.server.server_port}/loop")
+        self.end_headers()
+
+    def do_GET(self):
+        self.do_HEAD()
+
+    def log_message(self, *args):
+        pass
+
+
+loop = serve(LoopHandler)
+loop_result = recon.fetch_headers(f"http://localhost:{loop.server_port}/", authorize=authorizer)
+check(
+    loop_result.verdict == "refused" and "refused redirect" in loop_result.output,
+    f"infinite redirect loop is refused (got {loop_result.output!r})",
+)
+
+# --- a request that never got an answer is not an allowed call ---
+# The verdict used to be "allowed" here, on the reasoning that the authorizer
+# had not raised. But nothing was fetched, so the record claimed an authorized,
+# completed call to a target that was never reached -- and a broken network
+# path became indistinguishable from a working one. Recording it as "refused"
+# would be a different lie, asserting a policy denial that never happened.
+print("== a request that cannot be delivered ==")
+
+# A port nothing is listening on: the connection is refused by the kernel, so
+# this is a delivery failure rather than a policy decision. Chosen over an
+# unresolvable name because DNS failure varies by resolver and can be answered
+# from a cache, which would make the check depend on the machine. And it has to
+# be `localhost`, the name this test's scope actually covers -- an address the
+# authorizer refuses would be stopped before the network was ever involved, and
+# would prove nothing about this arm.
+with socket.socket() as probe:
+    probe.bind(("127.0.0.1", 0))
+    dead_port = probe.getsockname()[1]
+
+dead_url = f"http://localhost:{dead_port}/"
+check("localhost" in SCOPE["targets"], "the dead-port host is in scope, so policy allows it")
+
+dead = recon.fetch_headers(dead_url, authorize=authorizer)
+check(
+    dead.verdict == "error",
+    f"a refused connection is 'error', not 'allowed' (got {dead.verdict!r})",
+)
+check(
+    "request failed" in dead.output,
+    f"the output says the request failed (got {dead.output!r})",
+)
+
+# Even a policy that would refuse everything still does not produce 'refused'
+# here: the authorizer is not what stopped this call, the network was. That is
+# the distinction the third value exists to keep.
+def deny_everything(host):
+    raise recon.RedirectRefused(f"denied {host}")
+
+
+denied = recon.fetch_headers(dead_url, authorize=deny_everything)
+check(
+    denied.verdict == "refused",
+    f"a policy that refuses up front is 'refused' (got {denied.verdict!r})",
+)
+check(
+    dead.verdict != denied.verdict,
+    "a delivery failure and a policy refusal are distinguishable",
+)
+
+# --- a url with no host is a caller error, not a network result ---
+print("== malformed url ==")
+try:
+    recon.fetch_headers("http:///nohost", authorize=authorizer)
+except ValueError as exc:
+    check("no host" in str(exc), f"hostless url raises ValueError (got {exc})")
+else:
+    check(False, "hostless url raises ValueError")
+
+for server in (off_scope, redirector, allowed, allowed_redirector, loop, *servers):
+    server.shutdown()
+
+if failures:
+    print(f"\nhttp-headers-test: FAIL ({len(failures)} failed)")
+    sys.exit(1)
+
+print("\nhttp-headers-test: PASS")
+PY

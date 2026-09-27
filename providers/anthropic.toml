@@ -1,0 +1,15 @@
+# Anthropic. Cloud, same clearance requirement as any other provider that
+# carries engagement data off this machine.
+id = "anthropic"
+name = "Anthropic"
+api = "anthropic"
+base_url = "https://api.anthropic.com"
+egress = "cloud"
+requires_key = true
+default_model = "claude-sonnet-4-5"
+
+models = [
+  "claude-opus-4-1",
+  "claude-sonnet-4-5",
+  "claude-haiku-4-5",
+]

@@ -1,2 +1,37 @@
 Place executable system hooks under <event>/ directories.
 User hooks under ~/.config/shinobi/hooks take effect for that user only.
+
+Only executables sitting directly in <root>/<event>/ are ever run. Anything
+nested deeper is ignored, by `run` and by `validate` alike.
+
+## Event names
+
+An event name becomes a path component, so it must match `[a-z0-9][a-z0-9-]*`
+and be at most 64 characters. `shinobi hook install ../../cron.d/x ./payload`
+is rejected rather than writing an executable outside the hooks tree.
+
+## Roots must not be writable by anyone else
+
+`shinobi hook run` executes whatever executables it finds in a hooks
+directory, so a group- or world-writable root means any local user can plant a
+hook that the next run will execute. Both roots are checked and a writable or
+symlinked one is refused.
+
+## User hooks ask first
+
+A system hook under `/etc` is root-owned and runs without prompting: the live
+image and scripts call `hook run` with no terminal, and gating those would
+break the ISO for no security gain.
+
+A user hook is code the current user planted, so it is confirmed first. With no
+terminal to ask on, it is refused and the run reports what it skipped and
+exits non-zero. To accept a hook you have read:
+
+    shinobi hook run <event> --yes
+    SHINOBI_HOOK_ASSUME_YES=1 shinobi hook run <event>
+
+## install checks the script
+
+`shinobi hook install` refuses a source with no shebang, a script that fails
+`bash -n`, or a symlink, so a broken or redirected hook is not installed in the
+first place. It prints a reminder that the result is executable code.

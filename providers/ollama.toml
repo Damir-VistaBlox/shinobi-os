@@ -1,0 +1,21 @@
+# Ollama, as the reference `local` provider. Nothing sent here leaves the
+# machine, so no cloud clearance is required -- which is exactly why this
+# manifest is worth reading: `egress` is what the scope gate will check, and a
+# local endpoint is exempt by being local, not by being trusted.
+#
+# reachable_on is the address the model server is expected on. It is compared
+# against the peer address of every connection, so pointing base_url at a
+# public host does not quietly turn this into a cloud provider.
+id = "ollama"
+name = "Ollama (local)"
+api = "openai-compatible"
+base_url = "http://127.0.0.1:11434/v1"
+reachable_on = ["127.0.0.1", "::1", "localhost"]
+egress = "local"
+requires_key = false
+default_model = "llama3.1"
+
+models = [
+  "llama3.1",
+  "qwen2.5-coder",
+]

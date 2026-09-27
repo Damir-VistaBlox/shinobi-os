@@ -6,4 +6,5 @@ risk = "active"
 requires_scope = true
 requires_approval = true
 supports_live = true
+mcp_tool = "nmap_scan"
 timeout_seconds = 900

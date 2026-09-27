@@ -23,11 +23,17 @@
 set -euo pipefail
 
 SHINOBI_VARIANT="${SHINOBI_VARIANT:-shinobi}"
-SHINOBI_SQUASHFS_COMPRESSION="${SHINOBI_SQUASHFS_COMPRESSION:-zstd}"
-SHINOBI_SQUASHFS_LEVEL="${SHINOBI_SQUASHFS_LEVEL:-3}"
-export SHINOBI_SQUASHFS_COMPRESSION SHINOBI_SQUASHFS_LEVEL
 ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 DISTRO_DIR="$ROOT/distro"
+
+# These two are interpolated into kali-live/auto/config, which is a bash script
+# live-build executes, so they are validated against live-build's own list before
+# anything is written. See distro/lib/build-config.sh.
+# shellcheck source=distro/lib/build-config.sh
+. "$DISTRO_DIR/lib/build-config.sh"
+shinobi_resolve_squashfs \
+  "${SHINOBI_SQUASHFS_COMPRESSION:-zstd}" \
+  "${SHINOBI_SQUASHFS_LEVEL:-3}"
 SUBMODULE="$DISTRO_DIR/kali-live"
 OVERLAY="$DISTRO_DIR/overlay"
 BOOTLOADER_OVERLAY="$OVERLAY/bootloaders"

@@ -5,26 +5,64 @@ import datetime as dt
 import hashlib
 import json
 import os
+import re
 import shutil
 import sys
 import tarfile
 from pathlib import Path
 
 
+_ENGAGEMENT_NAME_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}")
+
+
+def engagements_root() -> Path:
+    """Root directory holding all engagements.
+
+    Kept in step with _engagements_root() in the shinobi-recon MCP server
+    (mcp-servers/shinobi-recon/shinobi_recon/scope.py). The two ship as
+    separate packages and cannot import each other, so the resolution rule
+    is duplicated deliberately rather than shared by import.
+    """
+    root = os.environ.get("SHINOBI_ENGAGEMENTS_DIR", "").strip()
+    if not root:
+        base = os.environ.get("XDG_DATA_HOME", "").strip() or str(Path.home() / ".local" / "share")
+        root = str(Path(base) / "shinobi" / "engagements")
+    return Path(root).expanduser()
+
+
 def engagement_dir() -> Path:
-    value = os.environ.get("SHINOBI_ENGAGEMENT_DIR")
-    if value:
-        return Path(value)
-    name = os.environ.get("SHINOBI_ENGAGEMENT")
+    """Resolve the active engagement by name, inside the engagements root.
+
+    SHINOBI_ENGAGEMENT_DIR is deliberately ignored. It is an ordinary
+    environment variable, so anything able to invoke this command could point
+    the evidence store -- and therefore `shinobi evidence export` -- at a
+    directory of its own choosing.
+    """
+    name = os.environ.get("SHINOBI_ENGAGEMENT", "").strip()
     if not name:
         state = Path(os.environ.get("XDG_STATE_HOME", Path.home() / ".local/state")) / "shinobi/current-engagement"
         try:
             name = state.read_text(encoding="utf-8").strip()
         except OSError:
             name = ""
-    if not name or "/" in name or "\\" in name:
+    if not name:
+        raise ValueError("no active engagement")
+    # The old check only rejected "/" and "\", which let ".." through: it has
+    # no separator, so `root / ".."` walked straight out of the root.
+    if not _ENGAGEMENT_NAME_RE.fullmatch(name):
         raise ValueError("no safe active engagement")
-    return Path(os.environ.get("SHINOBI_ENGAGEMENTS_DIR", Path(os.environ.get("XDG_DATA_HOME", Path.home() / ".local/share")) / "shinobi/engagements")) / name
+
+    root = engagements_root()
+    candidate = root / name
+    if candidate.is_symlink():
+        raise ValueError(f"refusing symlinked engagement directory: {candidate}")
+    resolved_root = root.resolve()
+    resolved = candidate.resolve()
+    if resolved.parent != resolved_root:
+        raise ValueError(
+            f"engagement {name!r} resolves to {resolved}, outside {resolved_root}"
+        )
+    return resolved
 
 
 def evidence_dir() -> Path:
@@ -43,6 +81,19 @@ def digest(path: Path) -> str:
 
 def metadata_path(path: Path) -> Path:
     return path.with_name(path.name + ".evidence.json")
+
+
+def evidence_name(name: str) -> str:
+    """Validate a caller-supplied evidence filename.
+
+    ".." is rejected explicitly: it contains no separator, so a check for "/"
+    alone lets `shinobi evidence verify ..` name the engagement directory.
+    """
+    if not name or "/" in name or "\\" in name or name in {".", ".."}:
+        raise ValueError("invalid evidence name")
+    if name.startswith("."):
+        raise ValueError("invalid evidence name")
+    return name
 
 
 def add(source: Path, label: str = "") -> dict[str, object]:
@@ -80,9 +131,7 @@ def records() -> list[dict[str, object]]:
 
 
 def find_record(name: str) -> tuple[Path, dict[str, object]]:
-    if "/" in name or "\\" in name:
-        raise ValueError("invalid evidence name")
-    path = evidence_dir() / name
+    path = evidence_dir() / evidence_name(name)
     meta = metadata_path(path)
     if not path.is_file() or not meta.is_file():
         raise ValueError(f"evidence not found: {name}")

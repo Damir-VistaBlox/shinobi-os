@@ -13,10 +13,40 @@ doctor_security() {
   [[ ! -e "$audit" || "$(stat -c '%a' "$audit" 2>/dev/null)" == 600 ]] || { echo 'security: audit journal must be mode 0600'; failures=$((failures + 1)); }
   profile="$(cat "$(shinobi_state_home)/profile" 2>/dev/null || echo observer)"
   case "$profile" in observer|analyst|operator|administrator|emergency) ;; *) echo "security: invalid trust profile: $profile"; failures=$((failures + 1)) ;; esac
-  if [[ -f /usr/share/polkit-1/actions/org.shinobi.policy || -f "$(dirname -- "$(readlink -f -- "${BASH_SOURCE[0]}")")/../packaging/shinobi-core/usr/share/polkit-1/actions/org.shinobi.policy" ]]; then
-    echo 'security: Polkit action policy present'
-  else
-    echo 'security: Polkit action policy missing'; failures=$((failures + 1))
+  doctor_privilege_boundary
+  (( failures == 0 ))
+}
+
+# Privilege escalation is a real boundary, so check real invariants.
+#
+# The old check here required a Polkit action policy to be present. That policy
+# declared five org.shinobi.* actions granting auth_admin, and nothing ever
+# invoked them: shinobi-package and shinobi-update call `pkexec apt-get`, which
+# raises org.freedesktop.policykit.exec and is governed by the distribution's
+# own rules. So the file authorised nothing while reading as a control, and
+# failing when it was absent pushed people to keep a file that did nothing --
+# exactly backwards.
+doctor_privilege_boundary() {
+  local failures=0 found dir
+  # The default roots cover a dpkg install. SHINOBI_DOCTOR_EXTRA_PATHS adds
+  # colon-separated directories for a non-standard prefix; it can only add
+  # places to look, never skip one.
+  local extra=()
+  if [[ -n "${SHINOBI_DOCTOR_EXTRA_PATHS:-}" ]]; then
+    read -r -a extra <<<"${SHINOBI_DOCTOR_EXTRA_PATHS//:/ }"
+  fi
+  for dir in /usr/bin /usr/lib/shinobi /usr/libexec/shinobi "${extra[@]}"; do
+    [[ -d "$dir" ]] || continue
+    found="$(find "$dir" -maxdepth 1 \( -perm -4000 -o -perm -2000 \) -name 'shinobi*' -print 2>/dev/null || true)"
+    if [[ -n "$found" ]]; then
+      echo "security: setuid/setgid shinobi binary: $found"
+      failures=$((failures + 1))
+    fi
+  done
+  local policy="/usr/share/polkit-1/actions/org.shinobi.policy"
+  if [[ -e "$policy" ]]; then
+    echo "security: dead Polkit action policy present at $policy (it authorises nothing)"
+    failures=$((failures + 1))
   fi
   (( failures == 0 ))
 }

@@ -1,32 +1,95 @@
 # Shinobi OS local test suite
 
-Run the fast source checks from the repository root:
+## Running it
+
+The source checks need no ISO and no build:
 
 ```sh
-./tests/test-static.sh
+./tests/run-all.sh
 ```
 
-Run the complete suite against a built ISO:
+That is the fast path and the one CI runs. An ISO argument adds the image
+checks on top:
 
 ```sh
 ./tests/run-all.sh distro/kali-live/images/kali-linux-rolling-live-shinobi-amd64.iso
 ```
 
-The suite checks package-profile policy, shell syntax, systemd unit syntax,
-theme completeness, overlay links and permissions, service ownership, and
-the theme-switch contract,
-ISO El Torito metadata and boot files, extracts the live SquashFS to verify
-installed files, package policy, and compression, then boots the image through
-both BIOS and UEFI in a disposable QEMU snapshot. QEMU boot logs are written to
-`qemu-test-logs/` (the directory is intentionally suitable for CI artifacts).
+The ISO argument used to be mandatory, which made the quick checks impossible to
+run without a multi-gigabyte artifact in hand — and CI ended up running a
+hand-picked subset of this script instead. Individual suites can also be run
+directly, which is usually what you want while working on one of them.
 
-Host requirements for the full suite are `xorriso`, `qemu-system-x86_64`,
-UEFI firmware (OVMF), and `systemd-analyze`. The static suite only requires
-Bash; image-only executable checks are deferred until the package is installed
-inside the image.
+## Suites
 
-The QEMU checks are deliberately disposable: they use `-snapshot`, never
-write to the ISO, and retain serial output under `qemu-test-logs/` for CI
-diagnosis. A boot that exits early fails; a graphical-only guest with no serial
-console is recorded as a survival check rather than being misreported as a
-full in-guest health check.
+Every suite is standalone, prints `PASS`/`FAIL` with a count, and exits non-zero
+on failure. `run-all.sh` runs them in this order and stops at the first failure.
+
+### Source-level (no ISO required)
+
+| Suite | What it covers |
+| --- | --- |
+| `test-static.sh` | Shell syntax, systemd unit syntax, overlay symlinks and permissions, service ownership, theme completeness |
+| `test-source-integrity.sh` | Files the package ships are the files in the tree — no hand-maintained copies |
+| `test-scope-gate.sh` | The engagement scope gate: authorized/refused targets, host resolution, engagement containment, date windows, durable audit records |
+| `test-http-headers.sh` | Redirect re-authorization and bounded redirect chains |
+| `test-mcp-layout.sh` | No module in the server package shadows a stdlib name, and the stdlib still resolves correctly with the package directory on `sys.path` |
+| `test-mcp-e2e.sh` | The assembled `shinobi-recon` server driven over stdio by a real MCP client: all four tools served, in-scope allowed, out-of-scope refused, `nmap_scan` refused until a human approves that exact call, approval not replayable, and both outcomes audited. Skips when the `mcp` package is absent |
+| `test-tool-registry.sh` | `tools/*.toml` is the single source of truth: every MCP tool has a manifest, values come from the manifest, the old hardcoded timeout constants stay gone |
+| `test-providers.sh` | `providers/*.toml` is the LLM provider registry: every manifest classifies its `egress`, cloud endpoints are refused when they are not https or point at loopback, private, CGNAT or metadata addresses, a `local` provider must declare the peers that make it local, unknown fields and duplicate ids are refused, layers compose without silently shadowing, and the credential broker round-trips keys at 0600 while refusing bad ids, empty keys, loose modes and planted symlinks |
+| `test-egress.sh` | The egress gate: an engagement with no `llm:` block cannot use a cloud provider, a misspelled or mistyped block denies rather than defaults, the scope file and engagement directory must be trustworthy, a `local` provider must still be reaching the peers it declared, cloud egress needs written clearance *and* an operator profile *and* a stored key *and* a single-use approval bound to this prompt's digest, provider and model, allowlists narrow but never widen and an empty list means none, and every refusal lands in both audit trails with the prompt itself nowhere in either |
+| `test-llm.sh` | The native client, end to end against a real local HTTP provider and a real MCP subprocess: a tool call runs through `shinobi-recon` and its result goes back to the model, every turn is approved separately and bound to a different digest, a spent approval cannot be claimed twice, the connected socket is checked rather than the hostname, redirects are refused without the target being contacted, an https request is pinned to the vetted address while the certificate is verified against the name in the manifest with a verifying context actually supplied to the socket, an over-sized response is refused rather than buffered, a tool result carrying an image is described rather than forwarded, the tool server is resolved by preference order -- an installed entry point over a `bin/` script over the Python project in `mcp-servers/`, with names that are not package names refused rather than turned into an argv -- and the real `shinobi_recon` server is asked for its tools and its refusals, not only a fake that already agrees with the client; non-JSON tool arguments and a server that dies or lies are refused, an api key travels in the `Authorization` header and appears in no body, conversation, or audit record, the prompt is never in argv, and a local provider needs no approval while a cloud one does |
+| `test-approvals.sh` | Approval lifecycle end to end: exact-argument binding, single use, atomic claim, expiry, and that scope is still checked first |
+| `test-control-plane.sh` | The control plane over a real socket |
+| `test-control-paths.sh` | Every command in the control plane resolves to a real implementation |
+| `test-tool-process.sh` | Manifest-declared tool binaries actually run, and the ones that must stay in-process do |
+| `test-launcher-env.sh` | `shinobi-agent` exports the engagement root the gate expects |
+| `test-agent-egress.sh` | `shinobi-agent` wires the governed recon server into the agent and refuses to launch on ungoverned egress without an acknowledgement |
+| `test-migrate.sh` | The config-version stamp: a corrupt stamp migrates rather than silently skipping forever |
+| `test-build-config.sh` | The squashfs settings are validated against live-build's list before becoming build config |
+| `test-package-layout.sh` | The staged `.deb` tree, on any host: the recon server is shipped and importable from where it was put, its entry point and postinst check are executable and resolve *this* package's copy rather than one already on the machine, the declared dependencies cover what the shipped code actually imports, the postinst check passes with the dependency present and fails without it, and no bytecode residue ships |
+| `test-fonts-hook.sh` | Build hooks: the font download is checksum-verified before unpacking |
+| `test-doctor.sh` | `shinobi-doctor` really checks what it claims, including setuid/setgid files |
+| `test-hook.sh` | Hook install/run: event validation, secure roots, user-hook confirmation |
+| `test-webapp.sh` | The webapp record cannot choose the program or URL that runs, and `.desktop` `Exec=` cannot be used to inject flags |
+| `test-variant-parity.sh` | Both variants install the same integration layer, and the console variant stays console-only |
+| `test-package.sh` | The real `.deb`: control metadata, expected file list, executables still executable, no bytecode residue, and packaged manifests byte-identical to the source and still loading with policy intact |
+| `test-docs.sh` | Documentation matches the tree: tool lists, suite lists, build knobs, command references, pinned actions |
+
+### Image-level (require the ISO argument)
+
+| Suite | What it covers |
+| --- | --- |
+| `test-iso-structure.sh` | El Torito metadata, boot files, embedded SquashFS, compression |
+| `test-image-content.sh` | Extracts the live SquashFS and verifies the installed files, package policy and service ownership |
+| `test-qemu-boot.sh` | Boots the image through BIOS and UEFI in a disposable QEMU snapshot |
+
+## Requirements
+
+Source-level suites need Bash and `python3`. `test-mcp-e2e.sh` needs the `mcp`
+package and reports `SKIPPED` without it rather than failing, because a missing
+client library is not a broken server.
+
+`test-package.sh` builds and inspects the real `.deb`, so it needs `dpkg-deb` and
+therefore Debian-family tooling. That is the target platform rather than an
+inconvenience: Kali is Debian-based and the hosted PR runners are Ubuntu, so it
+runs wherever the result matters. On other hosts it reports `SKIPPED`.
+
+`test-package-layout.sh` exists because of that gap. Everything
+`test-package.sh` checks about *what goes in* the package needs no Debian
+tooling at all — `build-deb.sh --stage` is file copying — so that is checked in
+the source suite, on every host, and the archive is still checked where it can
+be.
+
+The image-level suites need `xorriso`, `qemu-system-x86_64`, UEFI firmware
+(OVMF) and `systemd-analyze`.
+
+`shellcheck` and `pytest` are not used. The suites are plain Bash and inline
+Python so they run on a stock Kali box with no extra packages.
+
+## QEMU checks are disposable
+
+They use `-snapshot` and never write to the ISO. Serial output is kept under
+`qemu-test-logs/` (suitable for CI artifacts). A boot that exits early fails; a
+graphical-only guest with no serial console is recorded as a survival check
+rather than misreported as a full in-guest health check.

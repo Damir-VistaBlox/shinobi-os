@@ -6,4 +6,5 @@ risk = "passive"
 requires_scope = true
 requires_approval = false
 supports_live = true
+mcp_tool = "dns_lookup"
 timeout_seconds = 30

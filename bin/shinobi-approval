@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # shinobi:summary=Inspect or resolve agent approval requests
-# shinobi:args=<list|show|approve|deny> [approval-id]
+# shinobi:args=<list|show|request|approve|deny|consume> [approval-id]
 # shinobi:examples=shinobi approval list | shinobi approval deny <id>
 set -euo pipefail
 root="$(dirname -- "$(readlink -f -- "${BASH_SOURCE[0]}")")/../libexec/shinobi"
@@ -8,21 +8,69 @@ export PYTHONPATH="$root${PYTHONPATH:+:$PYTHONPATH}"
 action="${1:-list}"
 shift || true
 python3 - "$action" "$@" <<'PY'
-import json, sys
+import argparse, json, sys
 from shinobi_control import approval
-action = sys.argv[1]
+
+parser = argparse.ArgumentParser(prog="shinobi approval", add_help=False)
+parser.add_argument("action")
+parser.add_argument("approval_id", nargs="?")
+parser.add_argument("--capability")
+parser.add_argument("--args-json", default="{}")
+parser.add_argument("--reason", default="requested by agent")
+parser.add_argument("--profile", default=None)
+parser.add_argument("--ttl", type=int, default=300)
+known, rest = parser.parse_known_args()
+
+try:
+    arguments = json.loads(known.args_json)
+    if not isinstance(arguments, dict):
+        raise ValueError("--args-json must be a JSON object")
+except json.JSONDecodeError as exc:
+    raise SystemExit(f"shinobi approval: --args-json is not valid JSON: {exc}")
+
+action = known.action
 try:
     if action == "list":
         print(json.dumps(approval.list_records(), indent=2, sort_keys=True))
     elif action == "show":
-        print(json.dumps(approval.get(sys.argv[2]), indent=2, sort_keys=True))
+        print(json.dumps(approval.get(known.approval_id), indent=2, sort_keys=True))
+    elif action == "request":
+        if not known.capability:
+            raise SystemExit("shinobi approval request: --capability is required")
+        from shinobi_control.policy import current_profile
+        record = approval.create(
+            capability=known.capability,
+            arguments=arguments,
+            profile=known.profile or current_profile(),
+            reason=known.reason,
+            ttl_seconds=known.ttl,
+        )
+        print(json.dumps(record, indent=2, sort_keys=True))
     elif action in {"approve", "deny"}:
         state = "approved" if action == "approve" else "denied"
-        print(json.dumps(approval.set_state(sys.argv[2], state), indent=2, sort_keys=True))
+        print(json.dumps(approval.set_state(known.approval_id, state), indent=2, sort_keys=True))
+    elif action == "consume":
+        # Claims the approval for one exact call. This is what makes an
+        # approval binding: the capability, the exact arguments, the profile
+        # and live/installed mode must all match, and the claim is
+        # single-use. The MCP server calls this rather than reimplementing
+        # the check, so the rule has one implementation.
+        record = approval.consume(
+            known.approval_id,
+            capability=known.capability or "",
+            arguments=arguments,
+            profile=known.profile,
+        )
+        print(json.dumps(record, indent=2, sort_keys=True))
     elif action in {"help", "-h", "--help"}:
-        print("Usage: shinobi approval <list|show|approve|deny> [approval-id]")
+        print("Usage: shinobi approval <list|show|request|approve|deny|consume> [approval-id]")
+        print()
+        print("  request --capability ID [--args-json JSON] [--reason TEXT] [--ttl SECONDS]")
+        print("  consume APPROVAL_ID --capability ID [--args-json JSON] [--profile NAME]")
     else:
         raise SystemExit(f"unknown approval action: {action}")
+except approval.ApprovalError as exc:
+    raise SystemExit(f"shinobi approval: {exc}")
 except (IndexError, FileNotFoundError, ValueError) as exc:
     raise SystemExit(f"shinobi approval: {exc}")
 PY

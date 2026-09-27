@@ -32,12 +32,24 @@ mode="${1:-}"
 engagement="$(shinobi_current_engagement)"
 if [[ -n "$engagement" && -d "$ENGAGEMENTS_DIR/$engagement" ]]; then
   out_dir="$ENGAGEMENTS_DIR/$engagement/evidence"
+  # Client-confidential: same reason engagement data is owner-only elsewhere.
+  (umask 077 && mkdir -p "$out_dir")
+  chmod 0700 "$out_dir"
 else
   out_dir="$HOME/Pictures/shinobi"
+  mkdir -p "$out_dir"
 fi
-mkdir -p "$out_dir"
 
-out_file="$out_dir/$(date +%Y%m%d-%H%M%S).png"
+# A second-resolution timestamp silently overwrote an earlier capture taken in
+# the same second, destroying evidence that the evidence store had already
+# hashed -- leaving a record whose file no longer exists. Disambiguate instead.
+base="$(date +%Y%m%d-%H%M%S)"
+out_file="$out_dir/$base.png"
+suffix=1
+while [[ -e "$out_file" ]]; do
+  out_file="$out_dir/$base-$suffix.png"
+  ((suffix++))
+done
 
 if [[ "$mode" == "full" ]]; then
   grim "$out_file"
@@ -46,7 +58,20 @@ else
   grim -g "$region" "$out_file"
 fi
 
+# Evidence registration is part of taking the screenshot, not a best-effort
+# extra. Swallowing the failure meant a capture could be reported as saved
+# while never being hashed, so `shinobi evidence verify` silently did not
+# cover it.
+registered=0
+if command -v shinobi-evidence >/dev/null 2>&1; then
+  if shinobi-evidence add "$out_file" screenshot >/dev/null; then
+    registered=1
+  else
+    notify "Warning: saved to $out_file but evidence registration FAILED (file is not hashed)"
+  fi
+fi
+
 command -v wl-copy >/dev/null 2>&1 && wl-copy <"$out_file"
-command -v shinobi-evidence >/dev/null 2>&1 && shinobi-evidence add "$out_file" screenshot >/dev/null 2>&1 || true
 notify "Saved: $out_file"
 echo "$out_file"
+((registered)) || [[ -z "${SHINOBI_EVIDENCE_STRICT:-}" ]] || exit 1

@@ -1,0 +1,47 @@
+#!/usr/bin/env python3
+"""The recon MCP server, from the copy this package ships.
+
+The server lives in /usr/lib/shinobi/mcp-servers rather than in
+dist-packages on purpose. It is not a library: it is the component that enforces
+the engagement scope gate and writes the audit log, and a `shinobi_recon` on the
+system import path could be shadowed by anything installed later -- a `pip
+install --user`, another distribution's package -- leaving the tools the agent
+can reach quietly answering from somewhere that enforces nothing. This wrapper
+puts the shipped copy first and runs it.
+
+Its dependency goes the other way. `mcp` is not shipped here; it comes from apt
+as python3-mcp and is imported from dist-packages like any other library. The
+postinst checks that it can actually be imported, so a version whose
+`mcp.server.fastmcp` has moved does not leave an installed package that cannot
+start.
+"""
+from __future__ import annotations
+
+import sys
+from pathlib import Path
+
+
+def _shipped_root() -> Path:
+    """Where this package put the server, relative to this script.
+
+    Derived from the script's own real path rather than hardcoded, so the same
+    file works in an installed tree and in a staged one, and so a test cannot
+    accidentally exercise the copy on the machine instead of the one it staged.
+    The `..` accounts for this living in usr/bin beside usr/lib.
+    """
+    return Path(__file__).resolve().parent.parent / "lib" / "shinobi" / "mcp-servers"
+
+
+root = _shipped_root()
+if not (root / "shinobi_recon" / "server.py").is_file():
+    print(
+        f"shinobi-recon: no server at {root} -- this package is installed wrong.",
+        file=sys.stderr,
+    )
+    raise SystemExit(1)
+sys.path.insert(0, str(root))
+
+from shinobi_recon.server import main  # noqa: E402  (path set above, on purpose)
+
+if __name__ == "__main__":
+    main()

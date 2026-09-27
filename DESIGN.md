@@ -31,25 +31,132 @@ Every MCP tool call that touches a target must be checked against an
 hosts/CIDRs, a client name, a time window) before it runs. Out-of-scope
 targets are refused, not warned about. Every call — allowed or refused — is
 appended to an engagement log (`engagements/<name>/log.jsonl`) with
-timestamp, tool, args, target, and verdict. This is what makes "AI runs nmap
+timestamp, tool, args, target, and verdict. A third verdict, `error`, exists
+for a call the policy allowed and the network did not deliver: a DNS failure or
+a refused connection used to be recorded as `allowed`, which claimed an
+authorized, completed call to a target that was never reached, and `refused`
+would have asserted a policy denial that never happened. This is what makes "AI runs nmap
 for you" defensible instead of reckless: authorization is enforced in code,
 not left to the model's judgment or a prompt in CLAUDE.md.
+
+Scope is necessary but not sufficient, which is the part that needed a second
+mechanic. An in-scope target still does not authorize a tool that is
+`live_mode` in its manifest: `nmap_scan` is refused and a human has to approve
+that specific call with `shinobi approval approve` before it runs. The approval
+is bound to the exact arguments, is single-use, and expires. Scope is checked
+first, so an out-of-scope target is refused without an approval ever being
+created. Both halves matter — scope says *which* targets, the approval says
+*whether this particular active probe* — and neither is a substitute for the
+other.
 
 No tool in this repo shells out to an arbitrary command string from the
 model. Each MCP tool takes structured parameters (target, a closed set of
 flags) and builds the argv itself — never string-interpolates model output
 into a shell.
 
+## Egress-gating is the third mechanic
+
+Scope and approval both decide whether a *probe* may run. Neither decides
+whether the *question* may leave the machine, and that is a separate decision
+with a separate set of ways to get it wrong. A prompt is client-confidential —
+it is the part of an engagement that describes the target — so `shinobi llm`
+sends it through a gate (`shinobi_control/egress.py`) that treats the network
+as hostile:
+
+- **A provider is a manifest, not a URL.** `providers/*.toml` declares the
+  endpoint, the API dialect, the model list, whether egress is `local` or
+  `cloud`, and the peers that make it local. A `local` provider must name
+  `reachable_on`; that field is what makes the waiver mean something. Unknown
+  manifest fields are refused rather than ignored, because a misspelled
+  `cloud = true` that silently reads as local is the failure this project
+  exists to prevent.
+- **The prompt is never in argv.** It is read from stdin or a file, because
+  argv is world-readable through `/proc` and lands in shell history. What
+  crosses the wire instead is a digest of the request — canonical versioned
+  JSON, hashed — so an approval can be bound to *this exact question* without
+  the text being stored anywhere.
+- **Every turn is its own approval.** A tool result changes the next request,
+  so a conversation cannot ride on one approval: turn two is a different digest
+  and needs a new grant, bound to digest, provider and model, expiring and
+  single-use. Reusing turn one's approval would be approving a request nobody
+  read. A `local` provider needs no approval at all, which is also why the
+  loop's approval step has to be tested where it actually runs.
+- **The address that answers is the address that was checked.** Names are
+  resolved per request, every resolved address must be permitted, the socket is
+  pinned to a vetted address, and then the connected peer is read back off the
+  socket and compared. That last step is not redundant: a rebind exists
+  precisely because the answer to a DNS query and the address a connection
+  reaches need not be the same one.
+- **TLS is verified against the name, not the address.** Pinning the socket to
+  an address literal while verifying the certificate against that literal would
+  fail every legitimate provider, since certificates are issued for names. So
+  the name decides *who* is being talked to and the vetted address decides
+  *where the bytes go* — and the verifying context is passed explicitly rather
+  than left to whatever the stdlib defaults to, because a client that weakens
+  certificate checking to reach one provider has weakened it for the key.
+- **Redirects are refused.** Following one would send the prompt and the API
+  key to a host that was never resolved, checked, or approved.
+- **The API key goes in the `Authorization` header and reaches nothing else** —
+  not the body, not the conversation, not the audit trail. A key in a log
+  outlives the rotation that was supposed to remove it.
+- **Nothing is persisted.** No transcript, no prompt, no tool output. There is
+  nothing to leak later because there is no later copy.
+- **Tools still run through the recon server**, as a subprocess speaking MCP.
+  The client is not a second source of scope policy: it offers the server's
+  tools to the model and the server remains the authority on scope, on
+  approval, and on its own argument names. It deliberately does not
+  re-validate tool arguments, because two copies of a schema drift and the laxer
+  one wins.
+
+Refusals land in both audit trails — the engagement log and the control-plane
+journal — carrying the digest and a call id so a specific send can be
+correlated, and never the prompt.
+
 ## MVP built now
 
 - `bin/shinobi` — subcommands: `engagement new/list/use`, `scope show`,
-  `agent` (launches the configured agent with the current engagement's
-  MCP config wired in).
-- `mcp-servers/shinobi-recon` — Python MCP server, one tool family (`nmap_scan`)
-  as the proof of concept for the scope-gate + audit-log pattern. Built to
-  make adding the next tool (gobuster, nikto, whatweb...) mechanical: each
-  new tool is a thin function that calls the same `require_in_scope()` +
-  `log_call()` helpers.
+  `agent` (launches the configured agent against the current engagement: it
+  requires an active engagement, exports the engagement name, the engagements
+  root and the operator profile, records the launch, and hands over). It also
+  does two things about governance that it used to leave entirely to the
+  operator. It offers the agent the recon server, through the agent's own CLI
+  (`shinobi mcp register`, using the same server resolution `shinobi llm` uses,
+  so there is one server rather than two with one name), and it refuses to
+  launch at all until the operator passes
+  `--accept-ungoverned-egress`, because the agent's model traffic is not
+  governed and the launcher will not imply that it is. Both facts — that the
+  egress was acknowledged, and whether the server was wired, already present, or
+  the agent has no way to be given one — go into the run record, so a launch
+  that left the gate is findable afterwards rather than only visible on the
+  terminal that ran it. `--no-wire-mcp` is the opt-out for an operator who has
+  configured the server themselves.
+- `bin/shinobi-mcp` + `libexec/shinobi/shinobi_control/mcpctl.py` — `resolve`
+  answers how a server name resolves here, `register` offers it to an agent,
+  `support` says whether an agent can be wired at all. Registration is the
+  vendor CLI's own `mcp add`, with the syntaxes read off `claude mcp add
+  --help` and `codex mcp add --help`: the formats are the vendors' to change,
+  and a hand-written `mcpServers` entry that has quietly stopped being right
+  looks exactly like a server that is registered and never being called. An
+  existing registration is left alone rather than re-added.
+- `mcp-servers/shinobi-recon` — Python MCP server. `nmap_scan` was the proof of
+  concept for the scope-gate + audit-log pattern; `dns_lookup`,
+  `whatweb_scan` and `http_headers` followed it, and each is a thin function
+  calling the same `require_in_scope()` + `log_call()` helpers. The next tool
+  (gobuster, nikto...) is meant to be mechanical too, with one addition: a
+  manifest in `tools/` is now required, because each tool's policy — binary,
+  timeout, risk, scope and approval requirements — is read from there at import
+  rather than restated as constants. A tool with no valid manifest stops the
+  server from starting rather than being served ungoverned. See
+  `mcp-servers/shinobi-recon/README.md` for the procedure.
+- `bin/shinobi-llm` + `libexec/shinobi/shinobi_control/llm/` — the governed
+  client itself. `shinobi llm ask <provider>` runs a conversation through the
+  egress gate and offers the recon server's tools to the model; `shinobi llm
+  check <provider>` describes a provider and what it would take to use it
+  without sending anything. `bin/shinobi-egress` exposes the same decisions on
+  their own (`check`, `show`, `trail`) for inspecting them.
+- `providers/*.toml` + `shinobi_control/providerctl.py` — the provider
+  registry and its credential broker, layered so a site can narrow what the
+  shipped manifests allow without editing them.
 - `install.sh` — apt + pipx provisioning for a fresh Kali box.
 
 ## Custom ISO (`distro/`)
@@ -96,7 +203,7 @@ the first attempt, but booting the resulting ISO surfaced a real bug —
 `mcp` 2.x, which renamed `FastMCP` to `MCPServer` and broke `shinobi-recon` at
 import time. Fixed by pinning `mcp>=1.2.0,<2`. Verified end-to-end on the
 booted image afterward: `shinobi help` lists all commands correctly, an
-in-scope `nmap_scan` runs and logs `"verdict": "allowed"`, an out-of-scope
+in-scope `nmap_scan` is authorized and logged, an out-of-scope
 target is refused *before* nmap runs and logs `"verdict": "refused"` — the
 core safety mechanism this whole project exists for, confirmed working on a
 real built-and-booted system, not just the earlier host-side unit tests.
@@ -228,6 +335,67 @@ not reproduced here since it doesn't change often enough to duplicate.
   `omarchy-snapshot` solves "keep a rolling install in sync with upstream."
   Only matters if Shinobi OS becomes an installed rolling distro rather than a
   one-shot ISO — that's an open decision, not just unbuilt code.
+- **External agent CLIs are outside the egress gate. Their tools are not.**
+  There are two gates, and an external agent was outside both at once.
+  `shinobi agent` now closes the first: it registers the recon server with the
+  agent through the agent's own CLI, so the tools it can reach are the ones
+  behind `require_in_scope()`, the same approval and the same audit record the
+  native client uses. What it cannot close is the second. A third-party binary
+  opens its own connection to its model provider, using whatever endpoint and
+  authentication it was configured with, and nothing in this tree is on that
+  path. So the launcher now stops and says so, and launches only on an explicit
+  acknowledgement that is recorded in the run record. That is a real reduction
+  in the gap and it is not a closure: the launch is a decision, made knowingly
+  and in writing, to run a model outside the gate. Closing it properly means
+  intercepting or replacing a third-party binary's transport, which is a
+  decision about what `shinobi agent` is for, not a patch. An agent the launcher
+  cannot wire (`gemini`, `aider`, `opencode`) is launched with no Shinobi tools
+  at all, and is told so on stderr rather than left to look armed.
+- **The `.deb` carries the recon server.** It did not, which meant a real image
+  and a checkout had tools while a bare `shinobi-core` install had none — and
+  said so, pointing at `--server ''` rather than quietly running a toolless
+  conversation. The blocker was never willingness but the dependency, and it is
+  no longer a blocker: Kali rolling ships `python3-mcp` at 1.26.0, the major
+  version this server imports (`mcp.server.fastmcp`), so the package depends on
+  it instead of vendoring a pip install at install time.
+
+  The server goes to `/usr/lib/shinobi/mcp-servers` with an entry point at
+  `/usr/bin/shinobi-recon`, not into `dist-packages`. It is not a library other
+  code should import: it is the component that enforces the scope gate and
+  writes the audit log, and a `shinobi_recon` on the system import path could be
+  shadowed by anything installed after it. That choice is also what removes the
+  `dh_python3` question — there is no dist-packages path of ours to compute and
+  no code of ours outside this package to byte-compile. `mcp` still comes from
+  apt and is imported normally.
+
+  Because Kali is rolling, `python3-mcp` will reach 2.x, where `fastmcp` no
+  longer exists, and every `shinobi-recon` will fail to import. That failure is
+  loud and fail-closed — never a silent ungoverned server — and the postinst
+  checks for it rather than letting an unusable package look installed. Failing
+  a postinst leaves the package unconfigured with the reason printed, so the
+  repair is `apt install python3-mcp && dpkg --configure shinobi-core` instead
+  of a reinstall. The check is a shipped script that resolves the server
+  relative to itself, which is what lets `tests/test-package-layout.sh` exercise
+  it against a staged tree instead of only ever against a real install.
+
+  `python3-yaml` is now declared too, and it should have been all along: the
+  egress policy and the scope policy are both parsed with it, so the control
+  plane already shipped code that could not be imported on a host without it,
+  and `shinobi egress check` was one import away from failing.
+- **Response streaming is deferred.** Requests are non-streaming, so a provider
+  that only streams is not supported yet. Nothing in the gate depends on it.
+- **The image has not been built since the agent and packaging work.** The
+  source suite is green, and the package was installed into a Kali container and
+  checked end to end — build, dependency resolution, postinst, one
+  `shinobi-recon` on `PATH`, all four tools served from the installed copy. That
+  is not the same as a booted image, and the checks that would be are exactly the
+  ones that were skipped: live-build's chroot, the image's own contents, and
+  BIOS/UEFI boot. Two things in particular are unproven on real hardware — that
+  `apt-get install` of the package resolves `python3-mcp` inside live-build's
+  chroot, and that the image ends up with the recon server from the package and
+  no second copy. The first is the same apt call the container test made; the
+  second is asserted statically in `tests/test-package-layout.sh`. Run
+  `gh workflow run build-preview.yml --ref audit-remediation` to close it.
 - The full `shinobi` image still needs a graphical live-boot test: confirm
   SDDM, Hyprland, Quickshell, and keybindings work together in a real session.
 - Which additional recon tools get MCP wrappers, and in what order —

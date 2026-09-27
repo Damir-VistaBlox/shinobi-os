@@ -1,0 +1,14 @@
+# Third-party Python dependencies of the shipped control plane.
+#
+# Used by the CI build runner (see .github/workflows/build-preview.yml) so the
+# source suite exercises the real MCP server instead of skipping it. The pins
+# are identical to mcp-servers/shinobi-recon/pyproject.toml on purpose, and
+# tests/test-docs.sh fails if the two ever drift apart.
+#
+# The mcp upper bound is load-bearing, not caution about an imaginary future:
+# mcp 2.x renamed FastMCP to MCPServer and moved the import path, so an
+# unbounded `mcp>=1.2.0` breaks shinobi-recon at import time. That was found by
+# booting a real build, not by reading a changelog.
+
+mcp>=1.2.0,<2
+pyyaml>=6.0
