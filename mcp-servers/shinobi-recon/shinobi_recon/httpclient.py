@@ -84,7 +84,22 @@ class _ScopedRedirectHandler(urllib.request.HTTPRedirectHandler):
         if self._authorize is not None:
             self._authorize(host)
         self._remaining -= 1
-        return super().redirect_request(req, fp, code, msg, headers, newurl)
+        new_request = super().redirect_request(req, fp, code, msg, headers, newurl)
+        # Preserve the caller's method across the hop.
+        #
+        # urllib builds the redirected request without passing a method on
+        # Python 3.11 and 3.12, and Request then infers GET. Python 3.13 added
+        # `method="HEAD" if m == "HEAD" else "GET"`, so a HEAD silently became a
+        # GET after any redirect -- and only on the newer interpreter, which is
+        # why it passed here and failed on CI running 3.12.
+        #
+        # This module exists to answer "what headers does this host serve", so
+        # a redirect must not turn it into a request for a body the caller
+        # never asked for. Scope re-checking is unaffected: that already
+        # happened above, and it is the property that matters.
+        if new_request is not None and new_request.get_method() != req.get_method():
+            new_request.method = req.get_method()
+        return new_request
 
 
 def fetch_headers(

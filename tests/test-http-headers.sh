@@ -167,11 +167,13 @@ check(
 print("== in-scope redirect still followed ==")
 
 allowed_hits = []
+allowed_methods = []
 
 
 class AllowedHandler(httpserver.BaseHTTPRequestHandler):
     def do_HEAD(self):
         allowed_hits.append(self.path)
+        allowed_methods.append(self.command)
         self.send_response(200)
         self.send_header("X-Who", "in-scope")
         self.end_headers()
@@ -209,6 +211,15 @@ ok_result = recon.fetch_headers(
 # which is exactly how this pair of assertions failed on CI for a reason the
 # test could not report.
 check(ok_result.verdict == "allowed", f"in-scope redirect is allowed (got {ok_result.verdict!r})")
+# The method is the invariant, not an implementation detail. urllib builds the
+# redirected request without a method on Python 3.11/3.12 and Request then
+# infers GET, so on those interpreters a HEAD became a GET after any redirect
+# while a newer one kept it. Asserting the method is what makes the difference
+# visible on every interpreter instead of on whichever one CI happens to run.
+check(
+    allowed_methods == ["HEAD"],
+    f"the redirect preserved HEAD (target saw {allowed_methods})",
+)
 check(allowed_hits != [], f"in-scope redirect target was actually contacted (output: {ok_result.output!r})")
 check("X-Who: in-scope" in ok_result.output, f"in-scope headers are returned (output: {ok_result.output!r})")
 
