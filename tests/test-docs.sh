@@ -95,6 +95,26 @@ for verb in $(grep -oE '`shinobi [a-z][a-z-]*' "$ROOT/README.md" | awk '{print $
        grep -q "^Usage: shinobi $verb" <<<"$bin_out" && echo yes || echo no)" "yes"
 done
 
+echo "== the CI dependency pins match the recon package =="
+# The build runner installs from packaging/control-plane-requirements.txt, and
+# the shipped server installs from its own pyproject.toml. If those two drift,
+# the runner validates a different stack than the product ships -- and the mcp
+# upper bound is exactly the kind of pin that gets "tidied up" by accident.
+pyproject="$ROOT/mcp-servers/shinobi-recon/pyproject.toml"
+requirements="$ROOT/packaging/control-plane-requirements.txt"
+for pin in "mcp>=1.2.0,<2" "pyyaml>=6.0"; do
+  in_pyproject="$(grep -qF "\"$pin\"," "$pyproject" && echo yes || echo no)"
+  in_requirements="$(grep -qF "$pin" "$requirements" && echo yes || echo no)"
+  check "pyproject.toml pins $pin" "$in_pyproject" "yes"
+  check "control-plane-requirements.txt pins $pin" "$in_requirements" "yes"
+done
+check "CI installs the pinned requirements file" \
+  "$(grep -qF 'control-plane-requirements.txt' "$ROOT/.github/workflows/build-preview.yml" \
+    && echo yes || echo no)" "yes"
+check "CI puts the dependency venv ahead of the system python" \
+  "$(grep -qF 'GITHUB_PATH' "$ROOT/.github/workflows/build-preview.yml" \
+    && echo yes || echo no)" "yes"
+
 echo "== every workflow action is pinned to a commit =="
 for workflow in "$ROOT"/.github/workflows/*.yml; do
   name="$(basename "$workflow")"

@@ -48,6 +48,33 @@ jobs:
           printf 'Using Node.js %s\n' "$node_version"
           [[ "$node_version" =~ ^v24\.[0-9]+\.[0-9]+$ ]]
 
+      - name: Install control-plane Python dependencies
+        # Two things the suite needs that a bare runner does not have.
+        #
+        # PyYAML is not optional: the egress gate imports it, so without this the
+        # suite fails for a reason that has nothing to do with the change under
+        # test. `mcp` is optional by design -- the MCP checks skip when it is
+        # absent, which is right on a developer machine and wrong here, because a
+        # runner that quietly skipped them would still report PASS. Installing it
+        # explicitly and importing it afterwards makes the skip impossible to
+        # reach by accident.
+        #
+        # The version bounds are copied from
+        # mcp-servers/shinobi-recon/pyproject.toml, and tests/test-docs.sh
+        # asserts the two agree. The upper bound is not decoration: an unbounded
+        # `mcp>=1.2.0` once pulled 2.x, which renamed FastMCP and broke
+        # shinobi-recon at import time on a real built image (see DESIGN.md).
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends python3-venv
+          venv="${RUNNER_TEMP}/shinobi-deps"
+          python3 -m venv "$venv"
+          "$venv/bin/pip" install --quiet --upgrade pip
+          "$venv/bin/pip" install --quiet -r "${GITHUB_WORKSPACE}/packaging/control-plane-requirements.txt"
+          echo "$venv/bin" >> "$GITHUB_PATH"
+          "$venv/bin/python" -c 'import yaml, mcp, mcp.server.fastmcp; print("control-plane deps importable")'
+
       - name: Run source test suite
         # Source-level tests plus the package validation, which needs dpkg-deb
         # and so is skipped elsewhere. Runs before the build so a regression
