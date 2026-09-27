@@ -234,7 +234,7 @@ def _validate_base_url(value: str, egress: str, source: Path) -> str:
                 "and every prompt on the wire in clear"
             )
         literal = _as_ip(host)
-        if literal is not None and not _is_public(literal):
+        if literal is not None and not is_public_address(literal):
             raise ProviderError(
                 f"{source}: a cloud provider must not point at {host}, which is not a "
                 "public address"
@@ -261,7 +261,7 @@ def _as_ip(host: str):
         return None
 
 
-def _is_public(address) -> bool:
+def is_public_address(address) -> bool:
     if address.is_loopback or address.is_private or address.is_link_local:
         return False
     if address in _LINK_LOCAL:
@@ -293,7 +293,7 @@ def _validate_reachable_on(value, source: Path) -> tuple[str, ...]:
         literal = _as_ip(host)
         if literal is None and not _HOSTNAME_RE.fullmatch(host):
             raise ProviderError(f"{source}: {host!r} in reachable_on is not a host or address")
-        if literal is not None and _is_public(literal):
+        if literal is not None and is_public_address(literal):
             # A local provider that names a public address as its peer is asking
             # to skip the clearance check for an off-box destination. An operator
             # who genuinely wants that is describing a cloud provider, and the

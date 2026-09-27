@@ -36,11 +36,15 @@ sandbox() {
   export SHINOBI_PROVIDERS_DIR="$SANDBOX/providers"
   unset SHINOBI_LIVE 2>/dev/null || true
 
+  # A literal public address, not a hostname: the gate resolves the endpoint
+  # before it spends an approval, and these tests must not need a network to do
+  # that. A literal needs no resolver, so this works offline while still
+  # exercising the resolution step. The shipped manifest names the real host.
   cat >"$SANDBOX/providers/openai.toml" <<'EOF'
 id = "openai"
 name = "OpenAI"
 api = "openai"
-base_url = "https://api.openai.com/v1"
+base_url = "https://93.184.216.34/v1"
 egress = "cloud"
 requires_key = true
 default_model = "gpt-4o"
@@ -278,6 +282,67 @@ ok.write_text(
 decision = egress.authorize("honest", "hi")
 if decision.peer != "127.0.0.1":
     problems.append(f"honest local provider reported peer {decision.peer!r}")
+
+for line in problems:
+    print(f"    {line}")
+raise SystemExit(1 if problems else 0)
+PYEOF
+
+echo "egress: a cloud name that resolves onto this network is refused"
+sandbox
+py "a rebound cloud name is refused, and the approval is not spent" <<'PYEOF'
+import os, pathlib
+from shinobi_control import approval, credentials, egress, policy
+
+scope = pathlib.Path(os.environ["SHINOBI_ENGAGEMENTS_DIR"]) / "acme" / "scope.yaml"
+scope.write_text("llm:\n  cloud: true\n")
+scope.chmod(0o600)
+pathlib.Path(os.environ["XDG_STATE_HOME"], "shinobi").mkdir(parents=True, exist_ok=True)
+pathlib.Path(policy.profile_path()).write_text("operator\n")
+credentials.set_key("rebound", "sk-test")
+problems = []
+
+# A cloud manifest whose *hostname* resolves onto this network. The loader only
+# checks literal addresses, so this loads cleanly -- which is the point: the
+# answer can change after the manifest is written.
+rebound = pathlib.Path(os.environ["SHINOBI_PROVIDERS_DIR"]) / "rebound.toml"
+rebound.write_text(
+    'id = "rebound"\nname = "Rebound"\napi = "openai"\n'
+    'base_url = "https://localhost:8443/v1"\n'
+    'egress = "cloud"\nrequires_key = true\ndefault_model = "m"\n'
+)
+providerctl = __import__("shinobi_control.providerctl", fromlist=["x"])
+loaded = providerctl.load_all([os.environ["SHINOBI_PROVIDERS_DIR"]])
+if "rebound" not in loaded:
+    problems.append("the manifest should load; the rebind is a request-time fact")
+
+# Everything else is in order: clearance, profile, key, and a valid approval.
+# The refusal must come from the address, and must not consume the approval.
+prompt = "what is in the instance metadata?"
+record = approval.create(
+    capability=egress.EGRESS_CAPABILITY,
+    arguments={
+        "prompt_sha256": egress.prompt_digest(prompt),
+        "provider": "rebound",
+        "model": "m",
+    },
+    profile="operator",
+    reason="test",
+)
+approval.set_state(record["approval_id"], "approved")
+try:
+    egress.authorize("rebound", prompt, approval_id=record["approval_id"])
+    problems.append("a cloud name resolving to loopback was authorized")
+except egress.EgressRefused as exc:
+    if "not a public address" not in str(exc):
+        problems.append(f"refused for the wrong reason: {exc}")
+
+# The whole point of checking the address first: the operator's approval is
+# still unspent, so a fixed manifest does not need a second trip to the desk.
+if pathlib.Path(approval.approval_dir(), f"{record['approval_id']}.claimed").exists():
+    problems.append("the approval was spent on a request that was refused")
+if approval.get(record["approval_id"])["state"] != "approved":
+    problems.append("the approval was consumed by the refusal")
 
 for line in problems:
     print(f"    {line}")

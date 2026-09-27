@@ -41,12 +41,14 @@ dpkg-deb --info "$package" | grep -Fq 'Maintainer: Shinobi OS Maintainers' \
 # --contents prefixes each entry with mode, owner and size, so compare on the
 # path, which is the part the file-list check is about.
 contents="$(dpkg-deb --contents "$package" | awk '{print $NF}')"
+expected=0
 for path in \
   ./usr/bin/shinobi \
   ./usr/bin/shinobi-version \
   ./usr/bin/shinobi-config \
   ./usr/bin/shinobi-provider \
   ./usr/bin/shinobi-egress \
+  ./usr/bin/shinobi-llm \
   ./usr/lib/systemd/user/shinobi-desktop.target \
   ./usr/lib/systemd/user/shinobi-agentd.service \
   ./usr/lib/systemd/user/shinobi-contextd.service \
@@ -58,6 +60,12 @@ for path in \
   ./usr/lib/shinobi/shinobi_control/providerctl.py \
   ./usr/lib/shinobi/shinobi_control/credentials.py \
   ./usr/lib/shinobi/shinobi_control/egress.py \
+  ./usr/lib/shinobi/shinobi_control/llm/__init__.py \
+  ./usr/lib/shinobi/shinobi_control/llm/transport.py \
+  ./usr/lib/shinobi/shinobi_control/llm/wire.py \
+  ./usr/lib/shinobi/shinobi_control/llm/mcp.py \
+  ./usr/lib/shinobi/shinobi_control/llm/agent.py \
+  ./usr/lib/shinobi/shinobi-llmctl \
   ./usr/share/shinobi/version \
   ./usr/share/shinobi/policy/README \
   ./usr/share/shinobi/capabilities/README \
@@ -71,8 +79,11 @@ for path in \
   ./usr/share/shinobi/themes/kali-dark/theme.toml
 do
   grep -Fxq "$path" <<<"$contents" || { echo "package-test: missing $path" >&2; exit 1; }
+  expected=$((expected + 1))
 done
-echo 'package-test: all 29 expected paths are present in the archive'
+# Counted rather than written down, so adding a shipped file cannot leave a
+# stale number claiming a smaller package was fully checked.
+echo "package-test: all $expected expected paths are present in the archive"
 
 dpkg-deb -x "$package" "$stage"
 

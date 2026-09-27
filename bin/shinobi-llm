@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+# shinobi:summary=Ask a governed LLM provider a question, with Shinobi's tools
+# shinobi:args=<ask|check> <provider> [options]
+# shinobi:examples=echo 'what is open on the target?' | shinobi llm ask ollama
+set -euo pipefail
+llm_ctl=/usr/lib/shinobi/shinobi-llmctl
+[[ -x "$llm_ctl" ]] || llm_ctl="$(dirname -- "$(readlink -f -- "${BASH_SOURCE[0]}")")/../libexec/shinobi/shinobi-llmctl"
+root="$(dirname -- "$(readlink -f -- "${BASH_SOURCE[0]}")")/../libexec/shinobi"
+export PYTHONPATH="$root${PYTHONPATH:+:$PYTHONPATH}"
+exec python3 "$llm_ctl" "$@"

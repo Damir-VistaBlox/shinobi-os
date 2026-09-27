@@ -42,8 +42,10 @@ done
 setuid_shipped="$(find "$ROOT/bin" "$ROOT/libexec" -type f \( -perm -4000 -o -perm -2000 \) -print 2>/dev/null || true)"
 [[ -z "$setuid_shipped" ]] || fail "setuid/setgid file shipped: $setuid_shipped"
 python3 -m py_compile "$ROOT"/libexec/shinobi/shinobi_control/*.py \
+  "$ROOT"/libexec/shinobi/shinobi_control/llm/*.py \
   "$ROOT/libexec/shinobi/shinobi-agentd" "$ROOT/libexec/shinobi/shinobi-agentctl" \
   "$ROOT/libexec/shinobi/shinobi-contextd" "$ROOT/libexec/shinobi/shinobi-contextctl" \
+  "$ROOT/libexec/shinobi/shinobi-llmctl" \
   "$ROOT"/mcp-servers/shinobi-recon/shinobi_recon/*.py
 
 echo "== Checking Hyprland theme bootstrap =="

@@ -41,6 +41,7 @@ SOURCE_TESTS=(
   tests/test-tool-registry.sh
   tests/test-providers.sh
   tests/test-egress.sh
+  tests/test-llm.sh
   tests/test-source-integrity.sh
 )
 

@@ -52,7 +52,13 @@ import yaml
 from . import audit
 from .approval import ApprovalError, consume as consume_approval
 from .policy import current_profile
-from .providerctl import Provider, ProviderError, get as get_provider, load_all as load_providers
+from .providerctl import (
+    Provider,
+    ProviderError,
+    get as get_provider,
+    is_public_address,
+    load_all as load_providers,
+)
 
 # The capability an approval is granted under. Not a control-plane capability
 # and deliberately not registered as one: that registry's entries are things
@@ -131,6 +137,7 @@ class Decision:
     model: str
     prompt_sha256: str
     peer: str
+    peers: Peers
     approval_id: str
 
     @property
@@ -140,6 +147,22 @@ class Decision:
     @property
     def requires_key(self) -> bool:
         return self.provider.requires_key
+
+
+def effective_model(provider_id: str, model: str | None) -> str:
+    """The model a request will actually name, defaulting from the manifest.
+
+    Exposed because the client has to know the model *before* it asks a human to
+    approve a send: an approval is bound to the model, so approving "whatever
+    this provider defaults to" and then letting the gate pick is a mismatch the
+    gate will refuse, which looks to an operator like the approval mechanism is
+    broken. One definition, so the two cannot disagree about what will be sent.
+    """
+    try:
+        provider = get_provider(provider_id)
+    except ProviderError:
+        return model or ""
+    return model or provider.default_model
 
 
 def prompt_digest(prompt: str, system: str | None = None) -> str:
@@ -344,18 +367,39 @@ def _resolve(host: str, port: int) -> set[str]:
     return {info[4][0] for info in infos}
 
 
-def check_local_peer(provider: Provider) -> str:
-    """Confirm a `local` provider is really talking to the peers it declared.
+@dataclass(frozen=True)
+class Peers:
+    """Where a provider's requests may actually land, resolved at request time.
+
+    `candidates` are the addresses the provider's host resolves to right now, and
+    every one of them is permitted. `allowed` is the wider set a connection is
+    allowed to end up on, which for a local provider is its declared peers and
+    for a cloud provider is any public address.
+
+    The transport connects to an address from `candidates` and then checks the
+    socket's own idea of the peer against `allowed`. That second check is not
+    redundant: the whole point of a rebind is that the answer to a DNS query
+    and the address a connection reaches need not be the same one.
+    """
+
+    host: str
+    port: int
+    candidates: tuple[str, ...]
+    allowed: frozenset[str]
+
+
+def resolve_peers(provider: Provider) -> Peers:
+    """Resolve this provider's endpoint and decide where it may connect.
 
     This is the request-time half of the check the manifest loader cannot do.
     The loader reads a hostname; this resolves it. A name that resolved to
     loopback when the manifest was written and to a public address now is the
-    DNS-rebinding case, and the only place it can be caught is at connect time.
+    DNS-rebinding case, and the only place it can be caught is here.
 
-    Every resolved address must be inside the declared set, not merely one of
-    them: a name that resolves to both 127.0.0.1 and a public address is not a
-    local provider, and accepting it because one answer looked right is exactly
-    the mistake.
+    Every resolved address must be permitted, not merely one of them: a name
+    that resolves to both 127.0.0.1 and a public address is not a local
+    provider, and accepting it because one answer looked right is exactly the
+    mistake.
     """
     from urllib.parse import urlparse
 
@@ -365,29 +409,75 @@ def check_local_peer(provider: Provider) -> str:
     if not actual:
         raise EgressRefused(f"{provider.id}: {parsed.hostname} resolved to no addresses")
 
-    allowed: set[str] = set()
-    for entry in provider.reachable_on:
-        literal = _as_ip(entry)
-        if literal is not None:
-            allowed.add(str(literal))
-            continue
-        try:
-            allowed |= _resolve(entry, port)
-        except EgressRefused:
-            # A declared peer that will not resolve cannot be vouched for.
-            raise EgressRefused(
-                f"{provider.id}: declared peer {entry!r} does not resolve, so it cannot "
-                "be confirmed as local"
-            ) from None
+    if provider.egress == "local":
+        allowed: set[str] = set()
+        for entry in provider.reachable_on:
+            literal = _as_ip(entry)
+            if literal is not None:
+                allowed.add(str(literal))
+                continue
+            try:
+                allowed |= _resolve(entry, port)
+            except EgressRefused:
+                # A declared peer that will not resolve cannot be vouched for.
+                raise EgressRefused(
+                    f"{provider.id}: declared peer {entry!r} does not resolve, so it cannot "
+                    "be confirmed as local"
+                ) from None
+    else:
+        # A cloud provider has no declared peer list, so "permitted" means the
+        # one thing that is not negotiable: the address has to be off-box. The
+        # manifest was already checked for a public literal at load time; this
+        # is that same rule applied to whatever the name resolves to now.
+        allowed = {addr for addr in actual if _public(addr)}
 
     outside = sorted(addr for addr in actual if addr not in allowed)
     if outside:
+        if provider.egress == "local":
+            detail = (
+                f"which is outside the peers this manifest declared "
+                f"({', '.join(provider.reachable_on)}). Refusing: a local provider that "
+                "reaches off-box skips the clearance check."
+            )
+        else:
+            detail = (
+                "which is not a public address. Refusing: a cloud provider resolving "
+                "onto this network would send the prompt and the API key to a host the "
+                "engagement never cleared."
+            )
         raise EgressRefused(
             f"{provider.id}: {parsed.hostname} resolves to {', '.join(sorted(actual))}, "
-            f"which is outside the peers this manifest declared ({', '.join(provider.reachable_on)}). "
-            "Refusing: a local provider that reaches off-box skips the clearance check."
+            f"{detail}"
         )
-    return sorted(actual)[0]
+    return Peers(
+        host=parsed.hostname,
+        port=port,
+        candidates=tuple(sorted(actual)),
+        allowed=frozenset(allowed),
+    )
+
+
+def peer_permitted(peers: Peers, address: str) -> bool:
+    """Whether a connected socket may be talking to this provider.
+
+    Takes the resolved `Peers` rather than a Provider so that a local provider's
+    declared hostnames are not resolved a second time, on the request path, with
+    a different answer than the one the check above just used.
+    """
+    literal = _as_ip(address)
+    if literal is None:
+        return False
+    return str(literal) in peers.allowed
+
+
+def _public(address: str) -> bool:
+    literal = _as_ip(address)
+    return literal is not None and is_public_address(literal)
+
+
+def check_local_peer(provider: Provider) -> str:
+    """Confirm a `local` provider is really talking to the peers it declared."""
+    return resolve_peers(provider).candidates[0]
 
 
 def _as_ip(host: str):
@@ -587,7 +677,7 @@ def authorize(
     except ProviderError as exc:
         raise refuse(str(exc)) from None
     egress = provider.egress
-    model_name = model or provider.default_model
+    model_name = effective_model(provider_id, model)
     if not model_name:
         raise refuse("no model given and the manifest names no default", egress_=egress)
     if provider.models and model_name not in provider.models:
@@ -616,15 +706,17 @@ def authorize(
             egress_=egress,
         )
 
-    # 3. A local provider must still be reaching the peers it declared. This is
-    #    resolved here, not at load time, so a rebind is caught.
-    peer = ""
-    if provider.egress == "local":
-        try:
-            peer = check_local_peer(provider)
-        except EgressRefused as exc:
-            raise refuse(str(exc), egress_=egress) from None
-    else:
+    # 3. Where this request would actually land. Resolved for both egresses, and
+    #    before the approval is touched: a name that has been rebound onto this
+    #    network is refused outright rather than spending an operator's approval
+    #    on a request that was never going to be allowed.
+    try:
+        peers = resolve_peers(provider)
+    except EgressRefused as exc:
+        raise refuse(str(exc), egress_=egress) from None
+    peer = peers.candidates[0]
+
+    if provider.egress == "cloud":
         if not allowed.cloud:
             raise refuse(
                 f"{provider.id} is a cloud provider and this engagement has not "
@@ -696,7 +788,7 @@ def authorize(
         verdict="allowed",
         digest=digest,
         egress=provider.egress,
-        detail=f"peer={peer}" if peer else f"base_url={provider.base_url}",
+        detail=f"peer={peer}",
     )
 
     return Decision(
@@ -706,6 +798,7 @@ def authorize(
         model=model_name,
         prompt_sha256=digest,
         peer=peer,
+        peers=peers,
         approval_id=approval_id or "",
     )
 
