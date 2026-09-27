@@ -203,9 +203,14 @@ ok_result = recon.fetch_headers(
     f"http://localhost:{allowed_redirector.server_port}/",
     authorize=authorizer,
 )
+# The output is included in every message here. A connection failure surfaces
+# as verdict "allowed" (see the URLError arm in fetch_headers), so a broken
+# network path and a working one can look identical in the verdict alone --
+# which is exactly how this pair of assertions failed on CI for a reason the
+# test could not report.
 check(ok_result.verdict == "allowed", f"in-scope redirect is allowed (got {ok_result.verdict!r})")
-check(allowed_hits != [], "in-scope redirect target was actually contacted")
-check("X-Who: in-scope" in ok_result.output, "in-scope headers are returned")
+check(allowed_hits != [], f"in-scope redirect target was actually contacted (output: {ok_result.output!r})")
+check("X-Who: in-scope" in ok_result.output, f"in-scope headers are returned (output: {ok_result.output!r})")
 
 # --- hop limit: an in-scope redirect loop must terminate ---
 
