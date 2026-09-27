@@ -100,6 +100,38 @@ check "the env defaults are passed through the validator, not used directly" \
   "$(grep -q 'shinobi_resolve_squashfs \\' "$ROOT/distro/build.sh" && \
      grep -q '"\${SHINOBI_SQUASHFS_COMPRESSION:-zstd}"' "$ROOT/distro/build.sh" && echo yes || echo no)" "yes"
 
+echo "== the staged chroot tree has everything the package build reads =="
+# distro/build.sh stages a subset of the repo into the overlay's
+# /opt/shinobi, and the image's tooling hook runs packaging/build-deb.sh from
+# there rather than from the checkout. So a top-level path that build-deb.sh
+# reads but build.sh does not stage is not a warning, it is a build that dies in
+# the chroot: `providers` was missing, and the ISO build failed after fifteen
+# minutes of live-build at `cp: cannot stat '/opt/shinobi/providers/.'`, on a
+# branch whose source suite was green the whole time. Nothing local could see it,
+# because the checkout has providers/ -- only the staged copy did not.
+#
+# Comparing the two lists is the whole check. It cannot tell you the staged tree
+# is otherwise correct, but it catches the failure that costs a build.
+staged_paths() {
+  grep -oE '"\$ROOT/[a-z-]+"' "$ROOT/distro/build.sh" \
+    | tr -d '"' | sed 's|\$ROOT/||' | sort -u
+}
+needed_paths() {
+  grep -oE '\$root/[a-z-]+' "$ROOT/packaging/build-deb.sh" \
+    | sed 's|\$root/||' | grep -v '^shinobi-core$' | sort -u
+}
+missing="$(comm -13 <(staged_paths) <(needed_paths))"
+check "every path build-deb.sh reads is staged for the chroot" \
+  "$([[ -z $missing ]] && echo yes || echo "no: $(tr '\n' ' ' <<<"$missing")")" "yes"
+for path in bin libexec mcp-servers providers themes tools packaging; do
+  # Matched as fixed text, not a pattern: the path is inside a quoted rsync
+  # argument, and building the needle by concatenation keeps grep from reading
+  # the dollars as anchors or the slashes as anything but slashes.
+  needle='"$ROOT/'"$path"'"'
+  check "$path is actually staged" \
+    "$(grep -qF "$needle" "$ROOT/distro/build.sh" && echo yes || echo no)" "yes"
+done
+
 echo
 if (( failures > 0 )); then
   printf 'build-config-test: FAIL (%d of %d checks failed)\n' "$failures" "$checks"
