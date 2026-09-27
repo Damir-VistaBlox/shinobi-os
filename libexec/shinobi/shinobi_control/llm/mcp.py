@@ -117,6 +117,17 @@ def _resolve_server(command: str | list[str]) -> tuple[list[str], dict[str, str]
     )
 
 
+def resolve_server(command: str | list[str]) -> tuple[list[str], dict[str, str]]:
+    """The argv and environment a server name or argv resolves to.
+
+    Public because `shinobi mcp resolve` has to answer the same question
+    `Server` acts on. If the two could disagree, the command an operator is told
+    to run by hand and the server Shinobi would have launched would be two
+    different servers.
+    """
+    return _resolve_server(command)
+
+
 def source_tree_server(command: str) -> tuple[list[str], dict[str, str]] | None:
     """How to launch a Python MCP server out of this checkout, if one is named.
 
@@ -146,6 +157,111 @@ def source_tree_server(command: str) -> tuple[list[str], dict[str, str]] | None:
         [sys.executable, "-c", f"import {package}.server as _s; _s.main()"],
         {"PYTHONPATH": f"{root}{os.pathsep}{existing}" if existing else root},
     )
+
+
+# The agents whose own CLI can be told to offer an MCP server, and the options
+# each one's `mcp add` takes. These are the vendors' syntaxes, read off
+# `claude mcp add --help` and `codex mcp add --help` rather than guessed at:
+#
+#   claude mcp add [options] <name> <commandOrUrl> [args...]
+#   codex mcp add [OPTIONS] <NAME> (--url <URL> | -- <COMMAND>...)
+#
+# Both take the server's own arguments after a literal `--`, so a server that
+# has flags of its own is not read as flags of the agent's. Both put the
+# registration in the user's own configuration, which is where a tool an
+# operator keeps should live: claude --scope user writes ~/.claude.json, and
+# codex writes [mcp_servers.<name>] into ~/.codex/config.toml.
+#
+# The options come first for both. Codex declares the command as a trailing var
+# arg, so anything after the name is the command: an `--env` written after the
+# name would be handed to the server instead of to Codex.
+_AGENT_MCP_ADD: dict[str, tuple[str, ...]] = {
+    "claude": ("mcp", "add", "--scope", "user"),
+    "codex": ("mcp", "add"),
+}
+
+# Both agents answer `mcp get <name>` with the registration, and a non-zero exit
+# when there is none. That is how a repeat run learns the server is already
+# there instead of finding out by trying to add it twice.
+_AGENT_MCP_GET: dict[str, tuple[str, ...]] = {
+    "claude": ("mcp", "get"),
+    "codex": ("mcp", "get"),
+}
+
+
+def supports_mcp_registration(agent: str) -> bool:
+    """Whether `agent`'s own CLI can be told to offer an MCP server.
+
+    Only a bare executable counts. An agent given as a command with arguments
+    (`env claude`, say) has no single argv[0] to hand to `mcp add`, and
+    guessing at where the arguments end would be building a command line out of
+    a string nobody parsed.
+    """
+    if agent.split() != [agent]:
+        return False
+    return Path(agent).name in _AGENT_MCP_ADD
+
+
+def agent_registration(agent: str, server: str = "shinobi-recon") -> tuple[list[str], dict[str, str]] | None:
+    """The argv that registers `server` with `agent`, or None if it cannot.
+
+    The server is resolved through the same preference order `Server` applies,
+    so an external agent is handed the very server the native client would have
+    launched -- the installed entry point on an image, the source tree in a
+    checkout -- together with the environment the source-tree fallback needs.
+    Wiring an agent to a *different* server than the one Shinobi governs would
+    leave two servers with the same name and the same tools, one of which
+    answers.
+    """
+    if not supports_mcp_registration(agent):
+        return None
+    argv, env = _resolve_server(server)
+    options = [*_AGENT_MCP_ADD[Path(agent).name]]
+    for key, value in sorted(env.items()):
+        options += ["--env", f"{key}={value}"]
+    return [agent, *options, server, "--", *argv], env
+
+
+def _is_registered(agent: str, server: str) -> bool:
+    """Whether `agent` already has a registration named `server`.
+
+    A launcher that adds on every run would either fail on the second run or,
+    worse, depend on whether the vendor's add happens to overwrite. Asking
+    first makes a repeat launch a no-op and leaves whatever the operator
+    already configured alone; `--force` is the way to replace it on purpose.
+    """
+    argv = [agent, *_AGENT_MCP_GET[Path(agent).name], server]
+    try:
+        return subprocess.run(argv, capture_output=True, timeout=30).returncode == 0
+    except (OSError, subprocess.SubprocessError):
+        return False
+
+
+def register_agent_server(agent: str, server: str = "shinobi-recon", *, force: bool = False) -> dict[str, Any]:
+    """Register `server` with `agent`'s own CLI and report what happened.
+
+    Registration is delegated to the vendor's CLI rather than by writing its
+    config file. The formats are the vendors' to change -- a hand-written
+    `mcpServers` entry or TOML table is a guess at a file we do not own, and a
+    guess that has silently stopped being right looks exactly like a server
+    that is registered and not being called.
+    """
+    registration = agent_registration(agent, server)
+    if registration is None:
+        raise MCPError(
+            f"do not know how to register an MCP server with {agent!r}; "
+            f"add {server} to it by hand and re-run with --no-wire-mcp"
+        )
+    argv, _env = registration
+    if not force and _is_registered(agent, server):
+        return {"status": "already-registered", "agent": agent, "server": server, "argv": argv}
+    proc = subprocess.run(argv, capture_output=True, text=True, timeout=120)
+    if proc.returncode != 0:
+        detail = (proc.stderr or proc.stdout).strip().replace("\n", " ")[:400]
+        raise MCPError(
+            f"{Path(agent).name} refused to register {server} (exit {proc.returncode}): {detail}"
+        )
+    return {"status": "registered", "agent": agent, "server": server, "argv": argv}
 
 
 class Server:

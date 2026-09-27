@@ -65,7 +65,7 @@ the routing hop); a person would more likely type the `shinobi <group>` form.
 
 | Binary | Dispatcher route | What it does | Keybinding |
 |---|---|---|---|
-| `shinobi-agent [--pick]` | `shinobi agent` | Launch the default (or picked) AI agent in the active engagement | `SUPER+SHIFT+CTRL+A` |
+| `shinobi-agent [--pick] [--accept-ungoverned-egress] [--no-wire-mcp]` | `shinobi agent` | Launch the default (or picked) AI agent in the active engagement, after registering the governed recon server with it. Refuses to launch without `--accept-ungoverned-egress`: the agent's own model traffic is outside the egress gate | `SUPER+SHIFT+CTRL+A` (prints the refusal — see the binding's comment) |
 | `shinobi-engagement <new\|list\|use>` | `shinobi engagement` | Scaffold/list/switch engagements | — |
 | `shinobi-scope show` | `shinobi scope show` | Print the active engagement's scope | — |
 | `shinobi-doctor` | `shinobi doctor` | Check the local runtime and engagement state | — |

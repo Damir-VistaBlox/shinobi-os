@@ -22,8 +22,11 @@ process could point the scope gate at a `scope.yaml` it had written itself --
 and the gate would authorize exactly what that file said. See
 `shinobi_recon/scope.py:current_engagement`.
 
-Normally this is launched for you by `shinobi agent`, which sets these env
-vars from the active engagement before starting the agent.
+Normally this is launched for you by `shinobi agent`, which registers it with
+your agent through the agent's own CLI (`shinobi mcp register <agent>`) and sets
+these env vars from the active engagement before starting the agent. Registering
+it is what puts the agent's tools behind this scope gate rather than leaving it
+with none.
 
 ## Adding a new tool
 

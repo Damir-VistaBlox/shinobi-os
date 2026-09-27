@@ -44,6 +44,7 @@ on failure. `run-all.sh` runs them in this order and stops at the first failure.
 | `test-control-paths.sh` | Every command in the control plane resolves to a real implementation |
 | `test-tool-process.sh` | Manifest-declared tool binaries actually run, and the ones that must stay in-process do |
 | `test-launcher-env.sh` | `shinobi-agent` exports the engagement root the gate expects |
+| `test-agent-egress.sh` | `shinobi-agent` wires the governed recon server into the agent and refuses to launch on ungoverned egress without an acknowledgement |
 | `test-migrate.sh` | The config-version stamp: a corrupt stamp migrates rather than silently skipping forever |
 | `test-build-config.sh` | The squashfs settings are validated against live-build's list before becoming build config |
 | `test-fonts-hook.sh` | Build hooks: the font download is checksum-verified before unpacking |

@@ -57,7 +57,12 @@ echo "== the launcher exports the root the scope gate reads =="
 # Run the real launcher and capture the environment it hands the agent, by
 # pointing it at /usr/bin/env. Reconstructing the variables here instead would
 # test this script's own idea of the launcher rather than the launcher.
-SHINOBI_AGENT_CMD=/usr/bin/env "$work/bin/shinobi-agent" > "$work/agent-env.txt" 2>/dev/null
+#
+# The acknowledgement is what this launcher requires before it will start an
+# agent whose model traffic is outside the egress gate; /usr/bin/env is not an
+# agent and has no MCP registration either. tests/test-agent-egress.sh is where
+# the refusal and the wiring are pinned down.
+SHINOBI_AGENT_CMD=/usr/bin/env "$work/bin/shinobi-agent" --accept-ungoverned-egress --no-wire-mcp > "$work/agent-env.txt" 2>/dev/null
 launcher_env="$(grep -E '^SHINOBI_(ENGAGEMENT|ENGAGEMENTS_DIR)=' "$work/agent-env.txt" || true)"
 check "launcher exports SHINOBI_ENGAGEMENT" "$(sed -n 's/^SHINOBI_ENGAGEMENT=//p' <<<"$launcher_env")" "acme"
 check "launcher exports the engagements root" "$(sed -n 's/^SHINOBI_ENGAGEMENTS_DIR=//p' <<<"$launcher_env")" "$work/engagements"

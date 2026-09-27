@@ -49,6 +49,7 @@ for path in \
   ./usr/bin/shinobi-provider \
   ./usr/bin/shinobi-egress \
   ./usr/bin/shinobi-llm \
+  ./usr/bin/shinobi-mcp \
   ./usr/lib/systemd/user/shinobi-desktop.target \
   ./usr/lib/systemd/user/shinobi-agentd.service \
   ./usr/lib/systemd/user/shinobi-contextd.service \
@@ -66,6 +67,7 @@ for path in \
   ./usr/lib/shinobi/shinobi_control/llm/mcp.py \
   ./usr/lib/shinobi/shinobi_control/llm/agent.py \
   ./usr/lib/shinobi/shinobi-llmctl \
+  ./usr/lib/shinobi/shinobi_control/mcpctl.py \
   ./usr/share/shinobi/version \
   ./usr/share/shinobi/policy/README \
   ./usr/share/shinobi/capabilities/README \

@@ -113,13 +113,27 @@ correlated, and never the prompt.
 - `bin/shinobi` — subcommands: `engagement new/list/use`, `scope show`,
   `agent` (launches the configured agent against the current engagement: it
   requires an active engagement, exports the engagement name, the engagements
-  root and the operator profile, records the launch, and hands over. It does
-  *not* register MCP servers — `config/claude/mcp-servers.json` is an example
-  the operator copies into their agent's own configuration, which is the step
-  that decides whether the agent has scope-gated tools at all. This document
-  used to claim the launcher wired that in. It does not, and the difference
-  matters: an external agent launched without it has no recon tools, so the
-  governance question for those agents starts one step earlier than it looks.
+  root and the operator profile, records the launch, and hands over). It also
+  does two things about governance that it used to leave entirely to the
+  operator. It offers the agent the recon server, through the agent's own CLI
+  (`shinobi mcp register`, using the same server resolution `shinobi llm` uses,
+  so there is one server rather than two with one name), and it refuses to
+  launch at all until the operator passes
+  `--accept-ungoverned-egress`, because the agent's model traffic is not
+  governed and the launcher will not imply that it is. Both facts — that the
+  egress was acknowledged, and whether the server was wired, already present, or
+  the agent has no way to be given one — go into the run record, so a launch
+  that left the gate is findable afterwards rather than only visible on the
+  terminal that ran it. `--no-wire-mcp` is the opt-out for an operator who has
+  configured the server themselves.
+- `bin/shinobi-mcp` + `libexec/shinobi/shinobi_control/mcpctl.py` — `resolve`
+  answers how a server name resolves here, `register` offers it to an agent,
+  `support` says whether an agent can be wired at all. Registration is the
+  vendor CLI's own `mcp add`, with the syntaxes read off `claude mcp add
+  --help` and `codex mcp add --help`: the formats are the vendors' to change,
+  and a hand-written `mcpServers` entry that has quietly stopped being right
+  looks exactly like a server that is registered and never being called. An
+  existing registration is left alone rather than re-added.
 - `mcp-servers/shinobi-recon` — Python MCP server. `nmap_scan` was the proof of
   concept for the scope-gate + audit-log pattern; `dns_lookup`,
   `whatweb_scan` and `http_headers` followed it, and each is a thin function
@@ -317,16 +331,22 @@ not reproduced here since it doesn't change often enough to duplicate.
   `omarchy-snapshot` solves "keep a rolling install in sync with upstream."
   Only matters if Shinobi OS becomes an installed rolling distro rather than a
   one-shot ISO — that's an open decision, not just unbuilt code.
-- **External agent CLIs are outside both gates.** There are two, not one, and
-  an external agent can be outside both at once. `shinobi agent` launches
-  `claude`/`codex` with the engagement's scope variables exported, but it does
-  not register the MCP server, so the agent has no recon tools unless the
-  operator wired them in — and if it does have them, the *tools* are
-  scope-gated while the agent's own model traffic uses whatever authentication
-  and endpoint that CLI was configured with, which is never checked. The native
-  client exists to close the second half, and closing it for a third-party
-  binary means intercepting or replacing that binary's transport. That is a
-  decision about what `shinobi agent` is for, not a patch.
+- **External agent CLIs are outside the egress gate. Their tools are not.**
+  There are two gates, and an external agent was outside both at once.
+  `shinobi agent` now closes the first: it registers the recon server with the
+  agent through the agent's own CLI, so the tools it can reach are the ones
+  behind `require_in_scope()`, the same approval and the same audit record the
+  native client uses. What it cannot close is the second. A third-party binary
+  opens its own connection to its model provider, using whatever endpoint and
+  authentication it was configured with, and nothing in this tree is on that
+  path. So the launcher now stops and says so, and launches only on an explicit
+  acknowledgement that is recorded in the run record. That is a real reduction
+  in the gap and it is not a closure: the launch is a decision, made knowingly
+  and in writing, to run a model outside the gate. Closing it properly means
+  intercepting or replacing a third-party binary's transport, which is a
+  decision about what `shinobi agent` is for, not a patch. An agent the launcher
+  cannot wire (`gemini`, `aider`, `opencode`) is launched with no Shinobi tools
+  at all, and is told so on stderr rather than left to look armed.
 - **The `.deb` does not carry the recon server. It should; the dependency is
   available and the decision is made.** Today the image hook pip-installs it
   into `/opt/shinobi/venv`, so a real image and a

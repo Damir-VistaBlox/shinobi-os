@@ -1,23 +1,42 @@
 #!/usr/bin/env bash
 # shinobi:summary=Launch the AI agent with the active engagement's MCP config
-# shinobi:args=[--pick] [prompt <text...>]
-# shinobi:examples=shinobi agent | shinobi agent --pick | shinobi agent prompt "review this scope"
+# shinobi:args=[--pick] [--accept-ungoverned-egress] [--no-wire-mcp] [prompt <text...>]
+# shinobi:examples=shinobi agent --accept-ungoverned-egress | shinobi agent --pick | shinobi agent prompt "review this scope"
 set -euo pipefail
 source "$(dirname -- "$(readlink -f -- "${BASH_SOURCE[0]}")")/_shinobi-common.sh"
 
 agent_ctl=/usr/lib/shinobi/shinobi-agentctl
 [[ -x "$agent_ctl" ]] || agent_ctl="$(dirname -- "$(readlink -f -- "${BASH_SOURCE[0]}")")/../libexec/shinobi/shinobi-agentctl"
+mcp_ctl="$(dirname -- "$(readlink -f -- "${BASH_SOURCE[0]}")")/shinobi-mcp"
+recon_server=shinobi-recon
 
 ENGAGEMENTS_DIR="$(shinobi_engagements_dir)"
 
 usage() {
   cat <<'USAGE'
-Usage: shinobi-agent [--pick] [prompt <text...>]
+Usage: shinobi-agent [--pick] [--accept-ungoverned-egress] [--no-wire-mcp] [prompt <text...>]
 
   --pick          Choose and save a default agent first (wofi, or a terminal
                    menu with no display), then launch it
+
+  --accept-ungoverned-egress
+                   Acknowledge that the agent's model traffic is NOT governed
+                   by Shinobi's egress gate, and launch anyway. Required: the
+                   agent calls its own provider directly, where the gate cannot
+                   see it. Its *tools* are still governed -- the recon server
+                   runs behind the scope gate and the same approval. The
+                   acknowledgement is recorded in the run record.
+
+  --no-wire-mcp   Do not register the recon server with the agent first. Use
+                   this when you have configured the server yourself; otherwise
+                   the launcher offers the agent the same governed server
+                   `shinobi llm` uses.
+
   prompt <text>   Launch the agent with an initial prompt
   runs            List recorded agent launches
+
+  To acknowledge for a whole session instead of per launch:
+      export SHINOBI_ACCEPT_UNGOVERNED_EGRESS=1
 
 Default agent resolution order: $SHINOBI_AGENT_CMD env var, then
 `shinobi-default-agent` (see that command), then "claude".
@@ -72,10 +91,14 @@ case "${1:-}" in
 esac
 
 pick=false
+wire=true
+ack=""
 prompt=""
 while (($#)); do
   case "$1" in
     --pick) pick=true; shift ;;
+    --accept-ungoverned-egress) ack=flag; shift ;;
+    --no-wire-mcp) wire=false; shift ;;
     prompt)
       shift
       prompt="$*"
@@ -108,7 +131,84 @@ if ! command -v "$agent" >/dev/null 2>&1; then
   exit 1
 fi
 
-echo "Launching '$agent' for engagement '$name' (scope: $dir/scope.yaml)"
+# Fail closed on egress, before anything has been changed.
+#
+# `shinobi llm` goes through the egress gate, so a model reached that way is
+# governed: no provider call without an approval bound to the exact prompt. An
+# external agent is not reached that way. It dials its own provider over its own
+# socket, inside its own process, and no proxy or hook in this tree is on that
+# path. The tools can be put back under the gate -- the server below is the one
+# the scope gate audits -- but the model's own traffic cannot, and pretending
+# otherwise would be the exact kind of claim this project has been removing.
+#
+# So the launch stops here unless somebody says they know that, and the saying
+# is recorded. This is deliberately ahead of the wiring below: a refused launch
+# should not have edited the agent's configuration on its way out.
+if [[ -z "$ack" && "${SHINOBI_ACCEPT_UNGOVERNED_EGRESS:-}" == "1" ]]; then
+  ack=env
+fi
+if [[ -z "$ack" ]]; then
+  cat >&2 <<EOF
+shinobi-agent: refusing to launch '$agent' without --accept-ungoverned-egress.
+
+  '$agent' talks to its model provider directly. Shinobi's egress gate governs
+  'shinobi llm', which routes through it; it cannot intercept a process that
+  opens its own connection to the provider, and this launcher will not pretend
+  it does.
+
+  What IS governed is the agent's tools: '$recon_server' runs the same scope
+  gate, the same approval and the same audit record as the native client, and
+  this launcher offers it to the agent below.
+
+  To launch anyway, accepting that the model's traffic is outside the gate:
+      shinobi agent --accept-ungoverned-egress
+      export SHINOBI_ACCEPT_UNGOVERNED_EGRESS=1   # for the session
+EOF
+  exit 1
+fi
+
+# Offer the agent the governed server. Registration goes through the agent's own
+# CLI rather than by writing its config file: the formats belong to the vendors
+# and change under us, and a stale hand-written entry looks exactly like a
+# server that is registered and never being called.
+mcp_status="operator-wired"
+if [[ "$wire" == "true" ]]; then
+  if "$mcp_ctl" support "$agent" >/dev/null 2>&1; then
+    if wire_out="$("$mcp_ctl" register "$agent" --server "$recon_server" 2>&1)"; then
+      # The first line is "<status>: <server> on <agent>"; the status is one of
+      # our own words, and it is what the run record needs.
+      mcp_status="${wire_out%%:*}"
+    else
+      echo "shinobi-agent: could not offer '$recon_server' to '$agent':" >&2
+      printf '%s\n' "$wire_out" | sed 's/^/  /' >&2
+      echo "  Fix the registration ('shinobi mcp register $agent'), or pass --no-wire-mcp" \
+        "if you have configured it yourself." >&2
+      exit 1
+    fi
+  else
+    mcp_status="unsupported"
+    cat >&2 <<EOF
+shinobi-agent: warning -- '$agent' has no known way to register an MCP server.
+  It will have no Shinobi tools unless you configured '$recon_server' in it
+  yourself. Its model traffic is outside the egress gate either way.
+EOF
+  fi
+fi
+
+# A run record that is not valid JSON is not a record. Everything interpolated
+# here can be set by an operator -- SHINOBI_AGENT_CMD above all -- so values are
+# escaped rather than pasted between quotes.
+json_str() {
+  local s=$1
+  s=${s//\\/\\\\}
+  s=${s//\"/\\\"}
+  s=${s//$'\n'/\\n}
+  s=${s//$'\r'/\\r}
+  s=${s//$'\t'/\\t}
+  printf '"%s"' "$s"
+}
+
+echo "Launching '$agent' for engagement '$name' (scope: $dir/scope.yaml, egress: ungoverned, mcp: $mcp_status)"
 export SHINOBI_ENGAGEMENT="$name"
 # Export the engagements *root*, not this engagement's directory. The scope
 # gate and evidencectl resolve an engagement by name under the root and refuse
@@ -121,13 +221,25 @@ export SHINOBI_AGENT_PROTOCOL=1
 export SHINOBI_AGENT_SOCKET="${SHINOBI_AGENT_SOCKET:-${XDG_RUNTIME_DIR:-/tmp}/shinobi/agent.sock}"
 export SHINOBI_CONTEXT_SOCKET="${SHINOBI_CONTEXT_SOCKET:-${XDG_RUNTIME_DIR:-/tmp}/shinobi/context.sock}"
 export SHINOBI_AGENT_PROFILE="$(cat "$(shinobi_state_home)/profile" 2>/dev/null || echo observer)"
+# Visible to the agent and to anything reading its hooks, so a run can be
+# attributed to an acknowledged-ungoverned launch rather than to the gate.
+export SHINOBI_AGENT_EGRESS=ungoverned
+export SHINOBI_AGENT_MCP_STATUS="$mcp_status"
 run_id="$(date +%Y%m%d-%H%M%S)-$$"
 run_dir="$(shinobi_state_home)/agent-runs"
 mkdir -p "$run_dir"
-printf '{"run_id":"%s","agent":"%s","engagement":"%s","profile":"%s","started_at":"%s","pid":%s}\n' \
-  "$run_id" "$agent" "$name" "$SHINOBI_AGENT_PROFILE" "$(date --iso-8601=seconds)" "$$" >"$run_dir/$run_id.json"
+# The egress and MCP facts are in the record, not only on the terminal: a launch
+# that left the gate is the one an operator most needs to be able to find later.
+{
+  printf '{"run_id":%s,"agent":%s,"engagement":%s,"profile":%s,"started_at":%s,"pid":%s' \
+    "$(json_str "$run_id")" "$(json_str "$agent")" "$(json_str "$name")" \
+    "$(json_str "$SHINOBI_AGENT_PROFILE")" "$(json_str "$(date --iso-8601=seconds)")" "$$"
+  printf ',"egress":"ungoverned","egress_acknowledged":true,"egress_ack_source":%s' "$(json_str "$ack")"
+  printf ',"mcp_status":%s,"mcp_server":%s}\n' "$(json_str "$mcp_status")" "$(json_str "$recon_server")"
+} >"$run_dir/$run_id.json"
 chmod 0600 "$run_dir/$run_id.json"
-shinobi_emit_event agent.started "{\"run_id\":\"$run_id\",\"agent\":\"$agent\",\"engagement\":\"$name\"}"
+shinobi_emit_event agent.started \
+  "{\"run_id\":$(json_str "$run_id"),\"agent\":$(json_str "$agent"),\"engagement\":$(json_str "$name"),\"egress\":\"ungoverned\",\"mcp_status\":$(json_str "$mcp_status")}"
 cd "$dir"
 if [[ -n "$prompt" ]]; then
   exec "$agent" "$prompt"

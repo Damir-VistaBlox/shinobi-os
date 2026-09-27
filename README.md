@@ -49,14 +49,22 @@ interfaces without overwriting user configuration.
 ./install.sh
 shinobi engagement new acme-pentest   # prints the scope.yaml path it created
 $EDITOR <that path>                  # fill in client, dates, authorized targets
-shinobi agent
+shinobi agent --accept-ungoverned-egress
 ```
 
 (`shinobi engagement new` also activates the engagement it creates, so
 `engagement use` is only needed to switch back to one later.)
 
-Register `shinobi-recon` as an MCP server with your agent — see
-`config/claude/mcp-servers.json` for a Claude Code example.
+`shinobi agent` registers the `shinobi-recon` MCP server with your agent, so the
+tools it can reach are the ones behind Shinobi's scope gate — see
+`config/claude/mcp-servers.json` for the registration it writes, and
+`shinobi mcp register` to do it yourself.
+
+It also refuses to start an agent without `--accept-ungoverned-egress`, because
+an external agent calls its model provider over its own connection, outside
+Shinobi's egress gate. That is the one part of an agent launch this project does
+not govern, and the flag is how you say you know that. Use
+`--no-wire-mcp` if you have configured the server yourself.
 
 On the live desktop, press `Super+Space` for the Shinobi command palette and
 run `shinobi doctor` to check the local runtime before starting an engagement.
