@@ -22,3 +22,14 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["shinobi_recon"]
+
+# The manifests are the policy this server enforces -- binary, risk, and
+# whether a tool needs scope or a human approval -- so they ship inside the
+# wheel rather than being left beside it. Leaving them outside meant a plain
+# `pip install shinobi-recon` could not start at all: the registry found
+# neither the source tree nor /usr/share/shinobi/tools and refused, which is
+# the correct fail-closed behaviour pointed at a packaging mistake. On the ISO
+# the .deb installs them to /usr/share/shinobi/tools, which still wins, so an
+# operator editing site policy keeps doing so.
+[tool.hatch.build.targets.wheel.force-include]
+"../../tools" = "shinobi_recon/tools"

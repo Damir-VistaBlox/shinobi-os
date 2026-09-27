@@ -126,6 +126,25 @@ check "CI puts the dependency venv ahead of the system python" \
   "$(grep -qF 'GITHUB_PATH' "$ROOT/.github/workflows/build-preview.yml" \
     && echo yes || echo no)" "yes"
 
+echo "== the recon package ships the policy it enforces =="
+# The manifests decide which tools are governed and which need a human
+# approval, so a wheel that carries the enforcing code without them cannot
+# start: the registry fails closed on "tool manifest directory not found". That
+# is the right behaviour pointed at a packaging mistake, and it is how a plain
+# `pip install shinobi-recon` used to fail.
+check "the wheel includes the repo tool manifests" \
+  "$(grep -qF '"../../tools" = "shinobi_recon/tools"' \
+    "$ROOT/mcp-servers/shinobi-recon/pyproject.toml" && echo yes || echo no)" "yes"
+check "the registry falls back to the manifests inside the package" \
+  "$(grep -qF 'Path(__file__).resolve().parent / "tools"' \
+    "$ROOT/mcp-servers/shinobi-recon/shinobi_recon/registry.py" && echo yes || echo no)" "yes"
+check "the site-installed copy still takes precedence over the packaged one" \
+  "$(grep -qF 'if packaged.is_dir():' \
+    "$ROOT/mcp-servers/shinobi-recon/shinobi_recon/registry.py" && echo yes || echo no)" "yes"
+manifest_count="$(find "$ROOT/tools" -maxdepth 1 -name '*.toml' | wc -l)"
+check "there are tool manifests to ship ($manifest_count found)" \
+  "$(printf '%s' "$manifest_count" | grep -qE '^[1-9]' && echo yes || echo no)" "yes"
+
 echo "== workflow structure GitHub would reject or misroute =="
 # GitHub validates workflow files far more strictly than any local YAML parser.
 # A step-level `permissions:` key is the specific case that bit us: GitHub

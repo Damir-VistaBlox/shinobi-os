@@ -115,8 +115,16 @@ class ToolManifest:
 def tools_dir() -> Path:
     """Locate the manifest directory.
 
-    Order: explicit override, the packaged location, then the source tree, so
-    the same code works installed, from an ISO, and in a checkout.
+    Order: explicit override, the site-installed location, the copy shipped
+    inside the wheel, then the source tree, so the same code works installed
+    from a package, from an ISO, and in a checkout.
+
+    The site-installed location comes before the packaged one so an operator
+    editing /usr/share/shinobi/tools keeps doing so. The packaged copy is what
+    makes a plain `pip install shinobi-recon` work at all: without it the
+    wheel carries the code that enforces the policy but not the policy, and the
+    registry fails closed with "tool manifest directory not found" pointing at
+    site-packages.
     """
     override = os.environ.get("SHINOBI_TOOLS_DIR", "").strip()
     if override:
@@ -124,6 +132,9 @@ def tools_dir() -> Path:
     packaged = Path("/usr/share/shinobi/tools")
     if packaged.is_dir():
         return packaged
+    inside_package = Path(__file__).resolve().parent / "tools"
+    if inside_package.is_dir():
+        return inside_package
     return Path(__file__).resolve().parents[3] / "tools"
 
 

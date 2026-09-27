@@ -32,6 +32,12 @@ vars from the active engagement before starting the agent.
    approval. Every field is required except `binary`, and an unknown field is an
    error, so a typo like `requries_scope` is caught rather than silently read as
    "not set".
+
+   That directory is also the source for the two installed copies: the `.deb`
+   puts it in `/usr/share/shinobi/tools`, and the wheel carries it inside the
+   package. Edit `../../tools/` and both follow, because both are built from it.
+   `registry.tools_dir()` prefers `/usr/share/shinobi/tools`, so an operator who
+   edits that copy on a live image is deliberately overriding the shipped one.
 2. Add a function in `server.py` decorated with `@mcp.tool()`, and resolve its
    policy at module scope with `_TOOL = registry.require("your_mcp_tool")`.
    Because that runs at import, a tool with no valid manifest stops the server
