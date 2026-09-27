@@ -99,8 +99,13 @@ async def main() -> int:
     env["SHINOBI_ENGAGEMENT"] = "e2e"
     env["SHINOBI_ENGAGEMENTS_DIR"] = str(engagements)
     env["SHINOBI_TOOLS_DIR"] = str(REPO / "tools")
-    env["SHINOBI_APPROVAL_CLI"] = str(REPO / "bin/shinobi-approval")
     env["PYTHONPATH"] = str(REPO / "mcp-servers/shinobi-recon")
+    # Deliberately no SHINOBI_APPROVAL_CLI. The server resolves its approval
+    # helper itself -- installed name, then the source tree -- and there is no
+    # environment override, because an override would let anyone who can set
+    # this process's environment point approval enforcement at a binary of
+    # their choosing. That is the same reasoning as not letting the provider
+    # client relax TLS, and it is why the test does not try to configure it.
 
     # Launch the way the shipped entry point does: import the package and call
     # main(), exactly what the shinobi-recon console script runs. Importing by
@@ -236,6 +241,33 @@ async def main() -> int:
                 str(out.content[0].text),
                 "different arguments",
             )
+
+    print("== the approval helper cannot be redirected by the environment ==")
+    # The helper is what decides a call was approved, so an override would hand
+    # that decision to whoever can set this process's environment. Set it to a
+    # path that does not exist and confirm resolution ignores it rather than
+    # falling back to something weaker.
+    probe = subprocess.run(
+        [
+            PYTHON, "-c",
+            "import shinobi_recon.server as s; print(s._approval_cli() or '')",
+        ],
+        capture_output=True,
+        text=True,
+        # The same environment the server itself is launched with, so the probe
+        # imports the package the same way the server does.
+        env={**env, "SHINOBI_APPROVAL_CLI": "/nonexistent/approves-anything"},
+    )
+    check_contains(
+        "an SHINOBI_APPROVAL_CLI override is ignored",
+        probe.stdout + probe.stderr,
+        "shinobi-approval",
+    )
+    check(
+        "the override path was not adopted",
+        "/nonexistent/approves-anything" in probe.stdout,
+        False,
+    )
 
     print("== the audit trail records intent and result, allowed and refused ==")
     records = audit_records(engagement)

@@ -108,6 +108,12 @@ def _approval_cli() -> str | None:
     argument binding, expiry, single use -- lives there in one place. This
     server shells out to it rather than reimplementing those checks, because
     two copies of a security rule eventually disagree and the laxer one wins.
+
+    There is deliberately no environment override. This helper is the thing that
+    decides whether a tool call was approved, so a variable that could redirect
+    it would hand that decision to whoever can set this process's environment --
+    which is a weaker guarantee than the approval it is meant to enforce. The
+    same reasoning keeps the provider client from relaxing certificate checking.
     """
     found = shutil.which("shinobi-approval")
     if found:
