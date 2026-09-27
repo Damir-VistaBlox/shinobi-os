@@ -384,6 +384,18 @@ not reproduced here since it doesn't change often enough to duplicate.
   and `shinobi egress check` was one import away from failing.
 - **Response streaming is deferred.** Requests are non-streaming, so a provider
   that only streams is not supported yet. Nothing in the gate depends on it.
+- **The image has not been built since the agent and packaging work.** The
+  source suite is green, and the package was installed into a Kali container and
+  checked end to end — build, dependency resolution, postinst, one
+  `shinobi-recon` on `PATH`, all four tools served from the installed copy. That
+  is not the same as a booted image, and the checks that would be are exactly the
+  ones that were skipped: live-build's chroot, the image's own contents, and
+  BIOS/UEFI boot. Two things in particular are unproven on real hardware — that
+  `apt-get install` of the package resolves `python3-mcp` inside live-build's
+  chroot, and that the image ends up with the recon server from the package and
+  no second copy. The first is the same apt call the container test made; the
+  second is asserted statically in `tests/test-package-layout.sh`. Run
+  `gh workflow run build-preview.yml --ref audit-remediation` to close it.
 - The full `shinobi` image still needs a graphical live-boot test: confirm
   SDDM, Hyprland, Quickshell, and keybindings work together in a real session.
 - Which additional recon tools get MCP wrappers, and in what order —
