@@ -12,9 +12,15 @@ on:
     branches:
       - preview
 
-# Read-only by default. The one step that needs write (creating the pre-release)
-# asks for it at the step level, so a compromised action or a stray command in the
-# build cannot use the workflow token to push to the repository.
+# Read-only by default. The one thing that needs write -- creating the
+# pre-release -- is a separate job on a GitHub-hosted runner with its own
+# `contents: write`, so a compromised action or a stray command in the
+# multi-hour build never holds a token that can push to the repository.
+#
+# This started life as a step-level `permissions:` key, which is not a thing
+# GitHub accepts. The file was rejected as invalid, and because the rejection
+# also stopped the branch filter below from being applied, a broken workflow
+# was firing a full ISO build on every push to every branch.
 permissions:
   contents: read
 
@@ -28,6 +34,8 @@ jobs:
     # Deliberately no pull_request trigger: forks must never execute here.
     runs-on: [self-hosted, linux, x64, shinobi-builder]
     timeout-minutes: 360
+    outputs:
+      version: ${{ steps.metadata.outputs.version }}
     steps:
       - name: Check out Shinobi OS
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
@@ -162,14 +170,29 @@ jobs:
             shinobi-os-amd64.size
             distro/kali-live/images/kali-linux-rolling-live-shinobi-amd64.log
 
+  # The only job holding a write token, and the only one that ever runs off the
+  # build VM. It needs two small text files, not an image, so there is no reason
+  # for it to touch the machine that builds ISOs.
+  publish-metadata:
+    needs: build
+    if: github.event_name == 'workflow_dispatch' && inputs.publish_metadata == true
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - name: Fetch release metadata from the build
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: shinobi-os-${{ needs.build.outputs.version }}-metadata
+          path: metadata
+
       - name: Create GitHub pre-release metadata
-        if: github.event_name == 'workflow_dispatch' && inputs.publish_metadata == true
-        permissions:
-          contents: write
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          tag="v0.1.0-preview.${GITHUB_RUN_NUMBER}"
+          cd metadata
+          tag="v0.1.0-preview.$GITHUB_RUN_NUMBER"
           gh release create "$tag" \
             shinobi-os-amd64.sha256 shinobi-os-amd64.size \
             --target "$GITHUB_SHA" \

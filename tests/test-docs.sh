@@ -126,6 +126,65 @@ check "CI puts the dependency venv ahead of the system python" \
   "$(grep -qF 'GITHUB_PATH' "$ROOT/.github/workflows/build-preview.yml" \
     && echo yes || echo no)" "yes"
 
+echo "== workflow structure GitHub would reject or misroute =="
+# GitHub validates workflow files far more strictly than any local YAML parser.
+# A step-level `permissions:` key is the specific case that bit us: GitHub
+# rejected the whole file, and because the rejection also stopped the
+# `branches:` filter from being read, a broken workflow fired a full ISO build
+# on every push to every branch while the entire test suite reported PASS.
+# These are the two shapes of that failure worth being unable to reintroduce.
+python3 - "$ROOT" <<'PYEOF'
+import pathlib
+import sys
+
+import yaml
+
+root = pathlib.Path(sys.argv[1])
+failures = 0
+checks = 0
+
+
+def check(label, condition):
+    global failures, checks
+    checks += 1
+    ok = "ok" if condition else "FAIL"
+    if not condition:
+        failures += 1
+    print(f"  {ok}   {label}")
+
+
+for path in sorted((root / ".github" / "workflows").glob("*.yml")):
+    doc = yaml.safe_load(path.read_text())
+    jobs = doc.get("jobs") or {}
+
+    for job_name, job in jobs.items():
+        steps = job.get("steps") or []
+        for index, step in enumerate(steps, start=1):
+            check(
+                f"{path.name}:{job_name} step {index} has no step-level permissions",
+                "permissions" not in step,
+            )
+
+        perms = job.get("permissions") or {}
+        writes = perms.get("contents") == "write" or perms.get("write-all") is True
+        runs_on = job.get("runs-on")
+        labels = runs_on if isinstance(runs_on, list) else [runs_on]
+        on_builder = any("shinobi-builder" in str(label) for label in labels)
+        if writes:
+            check(
+                f"{path.name}:{job_name} holds a write token off the build VM",
+                not on_builder,
+            )
+
+print(f"  {checks} structural checks run")
+sys.exit(1 if failures else 0)
+PYEOF
+structure_status=$?
+if (( structure_status != 0 )); then
+  failures=$((failures + 1))
+fi
+checks=$((checks + 1))
+
 echo "== every workflow action is pinned to a commit =="
 for workflow in "$ROOT"/.github/workflows/*.yml; do
   name="$(basename "$workflow")"
