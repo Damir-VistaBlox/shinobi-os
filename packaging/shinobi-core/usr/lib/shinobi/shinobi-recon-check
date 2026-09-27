@@ -1,0 +1,74 @@
+#!/usr/bin/env python3
+"""Check that the recon server this package shipped can actually be imported.
+
+The postinst runs this and fails when it does not. That check is the only thing
+between "dpkg says installed" and "the agent has tools behind a scope gate", and
+it can go stale without anything in this package changing: `mcp` comes from apt
+and Kali is rolling, so when python3-mcp reaches 2.x the `mcp.server.fastmcp`
+module the server is built on is gone and every import of the server fails.
+
+A package that installed cleanly and then had no tools is the worst state
+available -- it looks armed and is not -- so the check distinguishes the two
+reasons it can fail and says which one it is:
+
+  * mcp is not installed at all        -> a missing dependency
+  * mcp is installed but has moved on  -> the rolling-release hazard, and the
+                                         operator needs a pin rather than an
+                                         install
+
+Both are a `postinst` failure. Neither is something to discover at first use.
+
+Run it directly to find out before `dpkg --configure` does.
+"""
+from __future__ import annotations
+
+import sys
+from pathlib import Path
+
+# This lives at usr/lib/shinobi, so the server is a sibling directory. Derived
+# from this file's own real path so the same check runs against a staged tree.
+SERVER_ROOT = Path(__file__).resolve().parent / "mcp-servers"
+
+
+def main() -> int:
+    server = SERVER_ROOT / "shinobi_recon" / "server.py"
+    if not server.is_file():
+        print(f"no recon server shipped at {SERVER_ROOT}", file=sys.stderr)
+        return 1
+
+    sys.path.insert(0, str(SERVER_ROOT))
+
+    try:
+        import mcp
+    except ImportError as exc:
+        print(f"mcp is not importable: {exc}", file=sys.stderr)
+        return 1
+
+    try:
+        import mcp.server.fastmcp  # noqa: F401
+    except ImportError as exc:
+        version = getattr(mcp, "__version__", "unknown")
+        print(
+            f"mcp {version} is installed but {exc} -- this server needs the "
+            "mcp.server.fastmcp API, which 2.x removed",
+            file=sys.stderr,
+        )
+        return 1
+
+    try:
+        import shinobi_recon.server  # noqa: F401
+    except ImportError as exc:
+        print(f"the shipped recon server does not import: {exc}", file=sys.stderr)
+        return 1
+    except Exception as exc:  # RegistryError and friends: policy, not imports
+        print(
+            f"the shipped recon server failed to start: {type(exc).__name__}: {exc}",
+            file=sys.stderr,
+        )
+        return 1
+
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

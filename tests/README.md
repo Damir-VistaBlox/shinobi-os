@@ -47,6 +47,7 @@ on failure. `run-all.sh` runs them in this order and stops at the first failure.
 | `test-agent-egress.sh` | `shinobi-agent` wires the governed recon server into the agent and refuses to launch on ungoverned egress without an acknowledgement |
 | `test-migrate.sh` | The config-version stamp: a corrupt stamp migrates rather than silently skipping forever |
 | `test-build-config.sh` | The squashfs settings are validated against live-build's list before becoming build config |
+| `test-package-layout.sh` | The staged `.deb` tree, on any host: the recon server is shipped and importable from where it was put, its entry point and postinst check are executable and resolve *this* package's copy rather than one already on the machine, the declared dependencies cover what the shipped code actually imports, the postinst check passes with the dependency present and fails without it, and no bytecode residue ships |
 | `test-fonts-hook.sh` | Build hooks: the font download is checksum-verified before unpacking |
 | `test-doctor.sh` | `shinobi-doctor` really checks what it claims, including setuid/setgid files |
 | `test-hook.sh` | Hook install/run: event validation, secure roots, user-hook confirmation |
@@ -73,6 +74,12 @@ client library is not a broken server.
 therefore Debian-family tooling. That is the target platform rather than an
 inconvenience: Kali is Debian-based and the hosted PR runners are Ubuntu, so it
 runs wherever the result matters. On other hosts it reports `SKIPPED`.
+
+`test-package-layout.sh` exists because of that gap. Everything
+`test-package.sh` checks about *what goes in* the package needs no Debian
+tooling at all — `build-deb.sh --stage` is file copying — so that is checked in
+the source suite, on every host, and the archive is still checked where it can
+be.
 
 The image-level suites need `xorriso`, `qemu-system-x86_64`, UEFI firmware
 (OVMF) and `systemd-analyze`.

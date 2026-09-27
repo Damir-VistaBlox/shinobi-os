@@ -16,6 +16,10 @@
 #   * packaged manifests byte-identical to source and still loading with policy
 #     intact, because a stale copy ships a different security policy than the
 #     repository documents, and the server would enforce that copy silently
+#
+# What goes *into* the package is checked on every host by
+# tests/test-package-layout.sh, which needs none of this tooling. This file is
+# about the archive dpkg actually receives.
 set -euo pipefail
 
 ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -68,6 +72,15 @@ for path in \
   ./usr/lib/shinobi/shinobi_control/llm/agent.py \
   ./usr/lib/shinobi/shinobi-llmctl \
   ./usr/lib/shinobi/shinobi_control/mcpctl.py \
+  ./usr/lib/shinobi/shinobi-recon-check \
+  ./usr/lib/shinobi/mcp-servers/shinobi_recon/__init__.py \
+  ./usr/lib/shinobi/mcp-servers/shinobi_recon/argcheck.py \
+  ./usr/lib/shinobi/mcp-servers/shinobi_recon/httpclient.py \
+  ./usr/lib/shinobi/mcp-servers/shinobi_recon/process.py \
+  ./usr/lib/shinobi/mcp-servers/shinobi_recon/registry.py \
+  ./usr/lib/shinobi/mcp-servers/shinobi_recon/scope.py \
+  ./usr/lib/shinobi/mcp-servers/shinobi_recon/server.py \
+  ./usr/bin/shinobi-recon \
   ./usr/share/shinobi/version \
   ./usr/share/shinobi/policy/README \
   ./usr/share/shinobi/capabilities/README \
@@ -93,10 +106,12 @@ for exe in \
   usr/bin/shinobi \
   usr/bin/shinobi-version \
   usr/bin/shinobi-config \
+  usr/bin/shinobi-recon \
   usr/lib/shinobi/shinobi-agentd \
   usr/lib/shinobi/shinobi-agentctl \
   usr/lib/shinobi/shinobi-contextd \
-  usr/lib/shinobi/shinobi-contextctl
+  usr/lib/shinobi/shinobi-contextctl \
+  usr/lib/shinobi/shinobi-recon-check
 do
   [[ -x "$stage/$exe" ]] || { echo "package-test: $exe is not executable in the package" >&2; exit 1; }
 done

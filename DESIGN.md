@@ -351,25 +351,37 @@ not reproduced here since it doesn't change often enough to duplicate.
   decision about what `shinobi agent` is for, not a patch. An agent the launcher
   cannot wire (`gemini`, `aider`, `opencode`) is launched with no Shinobi tools
   at all, and is told so on stderr rather than left to look armed.
-- **The `.deb` does not carry the recon server. It should; the dependency is
-  available and the decision is made.** Today the image hook pip-installs it
-  into `/opt/shinobi/venv`, so a real image and a
-  checkout have tools while a bare `shinobi-core` install has none — and says
-  so, pointing at `--server ''` rather than quietly running a toolless
-  conversation. The blocker was never willingness but the dependency: apt
-  cannot express a Python version bound.
+- **The `.deb` carries the recon server.** It did not, which meant a real image
+  and a checkout had tools while a bare `shinobi-core` install had none — and
+  said so, pointing at `--server ''` rather than quietly running a toolless
+  conversation. The blocker was never willingness but the dependency, and it is
+  no longer a blocker: Kali rolling ships `python3-mcp` at 1.26.0, the major
+  version this server imports (`mcp.server.fastmcp`), so the package depends on
+  it instead of vendoring a pip install at install time.
 
-  It is unblocked. Kali rolling ships `python3-mcp` at 1.26.0, which is the
-  major version this server imports (`mcp.server.fastmcp`), so the package can
-  depend on it instead of vendoring a pip install at install time. Two things
-  to keep in view when landing it: Kali is rolling, and when `python3-mcp`
-  reaches 2.x — where `fastmcp` no longer exists — every `shinobi-recon` will
-  fail to import. That failure is loud and fail-closed, never a silent
-  ungoverned server, but the postinst should verify the import rather than let
-  an unusable package look installed. And installing a Python package into
-  Debian properly wants `dh_python3`, which is not available on the machine
-  this decision was made on, so the layout is a question for a Debian host
-  rather than a guess.
+  The server goes to `/usr/lib/shinobi/mcp-servers` with an entry point at
+  `/usr/bin/shinobi-recon`, not into `dist-packages`. It is not a library other
+  code should import: it is the component that enforces the scope gate and
+  writes the audit log, and a `shinobi_recon` on the system import path could be
+  shadowed by anything installed after it. That choice is also what removes the
+  `dh_python3` question — there is no dist-packages path of ours to compute and
+  no code of ours outside this package to byte-compile. `mcp` still comes from
+  apt and is imported normally.
+
+  Because Kali is rolling, `python3-mcp` will reach 2.x, where `fastmcp` no
+  longer exists, and every `shinobi-recon` will fail to import. That failure is
+  loud and fail-closed — never a silent ungoverned server — and the postinst
+  checks for it rather than letting an unusable package look installed. Failing
+  a postinst leaves the package unconfigured with the reason printed, so the
+  repair is `apt install python3-mcp && dpkg --configure shinobi-core` instead
+  of a reinstall. The check is a shipped script that resolves the server
+  relative to itself, which is what lets `tests/test-package-layout.sh` exercise
+  it against a staged tree instead of only ever against a real install.
+
+  `python3-yaml` is now declared too, and it should have been all along: the
+  egress policy and the scope policy are both parsed with it, so the control
+  plane already shipped code that could not be imported on a host without it,
+  and `shinobi egress check` was one import away from failing.
 - **Response streaming is deferred.** Requests are non-streaming, so a provider
   that only streams is not supported yet. Nothing in the gate depends on it.
 - The full `shinobi` image still needs a graphical live-boot test: confirm

@@ -1,0 +1,37 @@
+#!/bin/sh
+# Verify this package is usable before dpkg calls it installed.
+#
+# The recon server is the part that can stop working without anything in this
+# package changing: `mcp` comes from apt, and Kali is rolling. When python3-mcp
+# reaches 2.x, mcp.server.fastmcp -- the module the server is built on -- is
+# gone, and every import of the server fails. An install that reported success
+# and then had no tools behind the scope gate is the worst outcome available: it
+# looks armed and is not.
+#
+# So the import is checked, and a failure fails the postinst. dpkg then leaves
+# the package unconfigured and says why, which is loud and fail-closed. It also
+# means the fix is `apt install python3-mcp && dpkg --configure shinobi-core`
+# rather than a reinstall.
+#
+# The check itself is a shipped script rather than inline here, for two reasons:
+# it resolves the server it is checking relative to its own path, so it is
+# testable against a staged tree instead of only ever against a real install,
+# and an operator can run it by hand to find out what is wrong before dpkg does.
+set -e
+
+check=/usr/lib/shinobi/shinobi-recon-check
+
+if [ ! -x "$check" ]; then
+  echo "shinobi-core: $check is missing or not executable; this package is installed wrong." >&2
+  exit 1
+fi
+
+if err=$("$check" 2>&1); then
+  exit 0
+fi
+
+echo "shinobi-core: the recon server cannot be imported, so it has no tools:" >&2
+printf '%s\n' "$err" | sed 's/^/  /' >&2
+echo "  Needs python3-mcp, which must still provide mcp.server.fastmcp (mcp < 2)." >&2
+echo "  After installing it: dpkg --configure shinobi-core" >&2
+exit 1

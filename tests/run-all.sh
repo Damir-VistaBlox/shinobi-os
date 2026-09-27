@@ -30,6 +30,7 @@ SOURCE_TESTS=(
   tests/test-agent-egress.sh
   tests/test-migrate.sh
   tests/test-build-config.sh
+  tests/test-package-layout.sh
   tests/test-docs.sh
   tests/test-fonts-hook.sh
   tests/test-variant-parity.sh
