@@ -1,0 +1,28 @@
+#!/usr/bin/env bash
+# shinobi:summary=Inspect or resolve agent approval requests
+# shinobi:args=<list|show|approve|deny> [approval-id]
+# shinobi:examples=shinobi approval list | shinobi approval deny <id>
+set -euo pipefail
+root="$(dirname -- "$(readlink -f -- "${BASH_SOURCE[0]}")")/../libexec/shinobi"
+export PYTHONPATH="$root${PYTHONPATH:+:$PYTHONPATH}"
+action="${1:-list}"
+shift || true
+python3 - "$action" "$@" <<'PY'
+import json, sys
+from shinobi_control import approval
+action = sys.argv[1]
+try:
+    if action == "list":
+        print(json.dumps(approval.list_records(), indent=2, sort_keys=True))
+    elif action == "show":
+        print(json.dumps(approval.get(sys.argv[2]), indent=2, sort_keys=True))
+    elif action in {"approve", "deny"}:
+        state = "approved" if action == "approve" else "denied"
+        print(json.dumps(approval.set_state(sys.argv[2], state), indent=2, sort_keys=True))
+    elif action in {"help", "-h", "--help"}:
+        print("Usage: shinobi approval <list|show|approve|deny> [approval-id]")
+    else:
+        raise SystemExit(f"unknown approval action: {action}")
+except (IndexError, FileNotFoundError, ValueError) as exc:
+    raise SystemExit(f"shinobi approval: {exc}")
+PY

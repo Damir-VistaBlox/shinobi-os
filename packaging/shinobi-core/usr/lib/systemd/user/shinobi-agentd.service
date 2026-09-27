@@ -1,0 +1,19 @@
+[Unit]
+Description=Shinobi AI control-plane broker
+PartOf=shinobi-desktop.target
+After=shinobi-migrate.service
+
+[Service]
+Type=simple
+ExecStart=/usr/lib/shinobi/shinobi-agentd
+Restart=on-failure
+RestartSec=2s
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=%h/.local/state/shinobi %t/shinobi
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+
+[Install]
+WantedBy=shinobi-desktop.target

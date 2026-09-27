@@ -1,0 +1,50 @@
+#!/usr/bin/env bash
+# shinobi:summary=List, validate, install, or run Shinobi hooks
+# shinobi:args=<list|validate|install|run> [event] [path]
+# shinobi:examples=shinobi hook list | shinobi hook run post-boot
+set -euo pipefail
+
+system_hooks="${SHINOBI_SYSTEM_HOOKS:-/etc/shinobi/hooks}"
+user_hooks="${SHINOBI_USER_HOOKS:-${XDG_CONFIG_HOME:-$HOME/.config}/shinobi/hooks}"
+action="${1:-list}"
+event="${2:-}"
+
+case "$action" in
+  list)
+    for root in "$system_hooks" "$user_hooks"; do
+      [[ -d "$root" ]] || continue
+      find "$root" -mindepth 2 -maxdepth 2 -type f -executable -print | sort
+    done
+    ;;
+  validate)
+    for root in "$system_hooks" "$user_hooks"; do
+      [[ -d "$root" ]] || continue
+      while IFS= read -r -d '' hook; do
+        bash -n "$hook" || { echo "invalid hook: $hook" >&2; exit 1; }
+      done < <(find "$root" -type f -name '*.sh' -print0)
+    done
+    echo 'hooks: valid'
+    ;;
+  install)
+    source_path="${3:?usage: shinobi hook install <event> <path>}"
+    [[ -f "$source_path" ]] || { echo "hook not found: $source_path" >&2; exit 1; }
+    mkdir -p "$user_hooks/$event"
+    target="$user_hooks/$event/$(basename "$source_path")"
+    install -m 0755 "$source_path" "$target"
+    echo "Installed hook: $target"
+    ;;
+  run)
+    [[ "$event" =~ ^[a-z0-9-]+$ ]] || { echo 'invalid hook event' >&2; exit 2; }
+    for root in "$system_hooks" "$user_hooks"; do
+      [[ -d "$root/$event" ]] || continue
+      while IFS= read -r -d '' hook; do
+        timeout "${SHINOBI_HOOK_TIMEOUT:-30}s" "$hook" || {
+          echo "hook failed: $hook" >&2
+          exit 1
+        }
+      done < <(find "$root/$event" -maxdepth 1 -type f -executable -print0 | sort -z)
+    done
+    ;;
+  -h|--help|help) echo 'Usage: shinobi hook <list|validate|install|run> [event] [path]' ;;
+  *) echo "shinobi-hook: unknown action '$action'" >&2; exit 2 ;;
+esac

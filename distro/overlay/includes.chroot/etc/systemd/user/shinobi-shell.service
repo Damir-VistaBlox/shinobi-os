@@ -1,6 +1,7 @@
 [Unit]
 Description=Shinobi OS Quickshell
-After=graphical-session-pre.target
+After=graphical-session-pre.target shinobi-migrate.service
+Requires=shinobi-migrate.service
 PartOf=graphical-session.target
 StartLimitIntervalSec=30
 StartLimitBurst=3

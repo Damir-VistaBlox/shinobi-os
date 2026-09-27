@@ -1,0 +1,2 @@
+Place executable system hooks under <event>/ directories.
+User hooks under ~/.config/shinobi/hooks take effect for that user only.

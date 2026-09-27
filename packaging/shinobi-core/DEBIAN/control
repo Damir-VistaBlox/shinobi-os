@@ -3,7 +3,8 @@ Version: 0.1.0
 Section: x11
 Priority: optional
 Architecture: all
-Depends: systemd, dbus-user-session, bash
+Maintainer: Shinobi OS Maintainers <maintainers@shinobi-os.local>
+Depends: systemd, dbus-user-session, python3, bash, coreutils, findutils, util-linux
 Description: Shinobi OS desktop integration layer
  Native systemd user services, session environment integration, and
  idempotent configuration migrations for the Shinobi desktop.

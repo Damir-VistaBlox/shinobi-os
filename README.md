@@ -6,6 +6,11 @@ valuable part isn't the themed terminal launcher, it's giving the agent safe,
 scope-gated access to Kali's tool suite. See [`DESIGN.md`](./DESIGN.md) for
 the full rationale and roadmap.
 
+The installed-system integration contract is documented in
+[`docs/architecture.md`](./docs/architecture.md). It defines how Shinobi uses
+Kali's apt, systemd, D-Bus, Wayland, PipeWire, NetworkManager, and BlueZ
+interfaces without overwriting user configuration.
+
 ## What's here
 
 - `bin/shinobi` — unified CLI dispatcher, ported from Omarchy's `omarchy`

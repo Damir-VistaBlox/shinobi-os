@@ -1,0 +1,19 @@
+[Unit]
+Description=Shinobi desktop context service
+PartOf=shinobi-desktop.target
+After=shinobi-agentd.service
+
+[Service]
+Type=simple
+ExecStart=/usr/lib/shinobi/shinobi-contextd
+Restart=on-failure
+RestartSec=2s
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=%t/shinobi
+RestrictAddressFamilies=AF_UNIX
+
+[Install]
+WantedBy=shinobi-desktop.target

@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+# shinobi:summary=Manage hashed engagement evidence
+# shinobi:args=<list|add|verify|tag|export> [args]
+# shinobi:examples=shinobi evidence verify | shinobi evidence tag report.txt finding
+set -euo pipefail
+root="$(dirname -- "$(readlink -f -- "${BASH_SOURCE[0]}")")/../libexec/shinobi"
+export PYTHONPATH="$root${PYTHONPATH:+:$PYTHONPATH}"
+exec python3 -m shinobi_control.evidencectl "$@"

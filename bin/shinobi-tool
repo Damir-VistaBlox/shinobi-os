@@ -1,0 +1,26 @@
+#!/usr/bin/env bash
+# shinobi:summary=Inspect the curated Kali tool registry
+# shinobi:args=<list|inspect <id>>
+# shinobi:examples=shinobi tool list | shinobi tool inspect tool.active.nmap
+set -euo pipefail
+tools_dir="${SHINOBI_TOOLS_DIR:-/usr/share/shinobi/tools}"
+if [[ ! -d "$tools_dir" ]]; then
+  tools_dir="$(dirname -- "$(readlink -f -- "${BASH_SOURCE[0]}")")/../tools"
+fi
+action="${1:-list}"
+case "$action" in
+  list)
+    find "$tools_dir" -maxdepth 1 -type f -name '*.toml' -printf '%f\n' 2>/dev/null | sort
+    ;;
+  inspect)
+    id="${2:?usage: shinobi tool inspect <id>}"
+    [[ "$id" =~ ^[a-z0-9]+([._-][a-z0-9]+)*$ ]] || { echo 'invalid tool id' >&2; exit 2; }
+    found=1
+    while IFS= read -r manifest; do
+      grep -Fq "id = \"$id\"" "$manifest" && { cat "$manifest"; found=0; break; }
+    done < <(find "$tools_dir" -maxdepth 1 -type f -name '*.toml' -print 2>/dev/null | sort)
+    [[ "$found" -eq 0 ]] || { echo "unknown tool: $id" >&2; exit 1; }
+    ;;
+  -h|--help|help) echo 'Usage: shinobi tool <list|inspect> [id]' ;;
+  *) echo "unknown tool action: $action" >&2; exit 2 ;;
+esac

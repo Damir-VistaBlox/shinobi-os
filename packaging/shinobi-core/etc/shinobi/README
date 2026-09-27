@@ -1,0 +1,3 @@
+Shinobi OS system administrator configuration.
+
+Files here override /usr/share/shinobi/default without replacing user files.

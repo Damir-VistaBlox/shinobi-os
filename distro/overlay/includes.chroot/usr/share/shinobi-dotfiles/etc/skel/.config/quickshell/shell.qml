@@ -20,6 +20,9 @@ ShellRoot {
   readonly property string workspace: Hyprland.focusedWorkspace ? Hyprland.focusedWorkspace.name : "1"
   property string clockText: ""
   property string activeWindow: "desktop"
+  property string agentState: "offline"
+  property string contextState: "offline"
+  property string trustProfile: "observer"
 
   function run(command) {
     // Process has one mutable command slot. Ignore an accidental rapid
@@ -42,10 +45,35 @@ ShellRoot {
     if (!windowProbe.running) windowProbe.running = true
   }
 
+  function refreshControlPlane() {
+    if (!controlProbe.running) controlProbe.running = true
+  }
+
+  function updateControlPlane(line) {
+    try {
+      var value = JSON.parse(String(line))
+      root.agentState = value.status === "completed" ? "ready" : "error"
+      if (value.result && value.result.profile) root.trustProfile = value.result.profile
+    } catch (error) {
+      root.agentState = "offline"
+    }
+    if (!contextProbe.running) contextProbe.running = true
+  }
+
+  function updateContext(line) {
+    try {
+      var value = JSON.parse(String(line))
+      root.contextState = value.status === "completed" ? "ready" : "error"
+    } catch (error) {
+      root.contextState = "offline"
+    }
+  }
+
   Component.onCompleted: {
     root.clockText = Qt.formatDateTime(new Date(), "ddd · dd MMM · HH:mm")
     root.refreshEngagement()
     root.refreshActiveWindow()
+    root.refreshControlPlane()
   }
 
   Timer {
@@ -55,6 +83,13 @@ ShellRoot {
     running: true
     repeat: true
     onTriggered: root.clockText = Qt.formatDateTime(new Date(), "ddd · dd MMM · HH:mm")
+  }
+
+  Timer {
+    interval: 10000
+    running: true
+    repeat: true
+    onTriggered: root.refreshControlPlane()
   }
 
   // FileView gives immediate updates for normal engagement changes. The slow
@@ -78,6 +113,18 @@ ShellRoot {
 
   Process {
     id: action
+  }
+
+  Process {
+    id: controlProbe
+    command: ["sh", "-c", "shinobi agent status 2>/dev/null | tr -d '\\n'"]
+    stdout: SplitParser { onRead: function(line) { root.updateControlPlane(line) } }
+  }
+
+  Process {
+    id: contextProbe
+    command: ["sh", "-c", "shinobi context 2>/dev/null | tr -d '\\n'"]
+    stdout: SplitParser { onRead: function(line) { root.updateContext(line) } }
   }
 
   Process {
@@ -182,6 +229,16 @@ ShellRoot {
           spacing: 6
 
           StatusPill { label: "󰣇  SHINOBI"; ink: theme.accent; fill: theme.surface }
+          StatusPill {
+            label: root.agentState === "ready" ? "󰚩  AI " + root.trustProfile : "󰚩  AI " + root.agentState
+            ink: root.agentState === "ready" ? theme.good : theme.muted
+            fill: root.agentState === "ready" ? theme.safeSurface : theme.inactiveSurface
+          }
+          StatusPill {
+            label: "CTX " + root.contextState
+            ink: root.contextState === "ready" ? theme.good : theme.muted
+            fill: root.contextState === "ready" ? theme.safeSurface : theme.inactiveSurface
+          }
           ShellButton { label: "WS " + root.workspace; command: "shinobi-menu keybindings" }
 
           Text {

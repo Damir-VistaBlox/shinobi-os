@@ -1,0 +1,8 @@
+[Unit]
+Description=Shinobi OS desktop integration
+Wants=shinobi-migrate.service shinobi-shell.service shinobi-agentd.service shinobi-contextd.service
+After=graphical-session-pre.target
+PartOf=graphical-session.target
+
+[Install]
+WantedBy=graphical-session.target

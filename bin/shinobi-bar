@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+# shinobi:summary=Inspect or reload the Shinobi desktop bar
+# shinobi:args=<status|reload>
+# shinobi:examples=shinobi bar status
+set -euo pipefail
+case "${1:-status}" in
+  status) exec shinobi-shellctl status ;;
+  reload) exec shinobi-shellctl reload ;;
+  -h|--help|help) echo 'Usage: shinobi bar <status|reload>' ;;
+  *) echo 'shinobi-bar: unknown action' >&2; exit 2 ;;
+esac

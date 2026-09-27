@@ -7,5 +7,8 @@ until dbus-update-activation-environment --systemd WAYLAND_DISPLAY XDG_CURRENT_D
   sleep 0.1
 done
 systemctl --user import-environment WAYLAND_DISPLAY XDG_CURRENT_DESKTOP XDG_SESSION_TYPE XDG_SESSION_DESKTOP || true
-systemctl --user start shinobi-migrate.service
-systemctl --user start shinobi-shell.service || echo "shinobi-session: Quickshell did not start" >&2
+if ! systemctl --user start shinobi-desktop.target; then
+  echo "shinobi-session: desktop target did not start; falling back to core services" >&2
+  systemctl --user start shinobi-migrate.service
+  systemctl --user start shinobi-shell.service || echo "shinobi-session: Quickshell did not start" >&2
+fi

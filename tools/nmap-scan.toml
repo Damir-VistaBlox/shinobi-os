@@ -1,0 +1,9 @@
+id = "tool.active.nmap"
+name = "Nmap scan"
+binary = "nmap"
+category = "network"
+risk = "active"
+requires_scope = true
+requires_approval = true
+supports_live = true
+timeout_seconds = 900

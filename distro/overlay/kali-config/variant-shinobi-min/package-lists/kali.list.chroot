@@ -12,10 +12,6 @@
 ## package isn't structurally required for a bootable live image).
 kali-linux-core
 
-## Metapackages
-##   For the complete list see: https://www.kali.org/tools/kali-meta/
-kali-linux-default
-
 ## Shinobi OS runtime deps — the shinobi CLI itself is installed by
 ## variant-shinobi-min/hooks/live/0020-shinobi-tooling.chroot, not apt.
 python3-venv
