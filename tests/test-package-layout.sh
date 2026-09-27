@@ -46,6 +46,17 @@ check() {
 # staged server is the point of several checks below, and importing it writes
 # __pycache__ next to it -- so a residue check placed afterwards measures this
 # test's own side effects and reports a build that is actually clean as dirty.
+echo "== the archive records root ownership, not the builder's =="
+# Staging copies with `cp -a`, so the staged files belong to whoever ran the
+# build, and dpkg-deb records that. install.sh builds from a user checkout, so
+# without --root-owner-group the package lands with /usr/bin/shinobi-recon, the
+# systemd user units and /etc/shinobi owned by a uid 1000 account -- including
+# the entry point `shinobi agent` runs. The ISO hook hid it by building as root.
+check "build-deb.sh asks dpkg-deb to use root ownership" \
+  "$(grep -c 'dpkg-deb --root-owner-group --build' "$ROOT/packaging/build-deb.sh" || true)" "1"
+check "and does not build the archive without it" \
+  "$(grep -cE '^\s*dpkg-deb --build' "$ROOT/packaging/build-deb.sh" || true)" "0"
+
 echo "== nothing installs the package in a way that cannot resolve Depends =="
 # `dpkg -i` resolves nothing. The package depends on python3-mcp and
 # python3-yaml, so a bare `dpkg -i` unpacks the files, fails, and leaves the

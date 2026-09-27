@@ -73,5 +73,11 @@ if [[ $stage_only == true ]]; then
 fi
 
 output="${1:-$root/shinobi-core.deb}"
-dpkg-deb --build "$stage" "$output" >/dev/null
+# --root-owner-group, because dpkg-deb otherwise records whatever owns the
+# staged files -- which is whoever ran the build. install.sh builds from a user
+# checkout, so without this every file in the package lands owned by that user:
+# /usr/bin/shinobi-recon, the systemd user units, /etc/shinobi. A uid 1000
+# account that can rewrite the entry point `shinobi agent` executes is not a
+# packaging nit, and the ISO hook hid the bug by building as root.
+dpkg-deb --root-owner-group --build "$stage" "$output" >/dev/null
 echo "$output"

@@ -13,6 +13,8 @@
 #   * the file list, so a shipped component cannot quietly go missing
 #   * exec bits, because a daemon that loses +x fails at start, not at build
 #   * no bytecode residue, so the package does not depend on build order
+#   * every archived path owned by root/root, so a user account cannot own the
+#     entry point or the systemd units the package installs
 #   * packaged manifests byte-identical to source and still loading with policy
 #     intact, because a stale copy ships a different security policy than the
 #     repository documents, and the server would enforce that copy silently
@@ -123,6 +125,19 @@ echo 'package-test: shipped executables are executable'
 stray="$(cd "$stage" && find . -name __pycache__ -o -name '*.pyc' -o -name '*.pyo' | head -5)"
 [[ -z "$stray" ]] || { printf 'package-test: build residue shipped:\n%s\n' "$stray" >&2; exit 1; }
 echo 'package-test: no bytecode residue in the package'
+
+# Checked against the real archive, because this is a property of what dpkg
+# receives rather than of the staging tree. Staging copies with `cp -a`, so
+# without --root-owner-group the builder's uid is recorded and installed
+# verbatim: install.sh builds from a user checkout, which would leave
+# /usr/bin/shinobi-recon and the systemd user units owned by a normal account.
+non_root="$(dpkg-deb --contents "$package" | awk '$2 != "root/root" {print $NF}' | head -5)"
+if [[ -n $non_root ]]; then
+  echo "package-test: these paths are not owned by root/root in the archive:" >&2
+  printf '  %s\n' $non_root >&2
+  exit 1
+fi
+echo 'package-test: every archived path is owned by root/root'
 
 # The server resolves every manifest at import time and refuses to start if one
 # is missing or malformed, so the packaged copies are checked by the same loader
