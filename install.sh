@@ -8,16 +8,24 @@ PREFIX="${PREFIX:-/usr/local}"
 
 echo "== Installing apt dependencies =="
 sudo apt-get update -y
-sudo apt-get install -y nmap python3-pip pipx dpkg-dev
+sudo apt-get install -y nmap python3-pip dpkg-dev
 
 echo "== Building and installing canonical shinobi-core package =="
 package="$SHINOBI_ROOT/shinobi-core.deb"
 "$SHINOBI_ROOT/packaging/build-deb.sh" "$package"
-sudo dpkg -i "$package"
+# apt, not dpkg -i. The package depends on python3-mcp and python3-yaml, and
+# dpkg -i does not resolve dependencies: it unpacks, fails, and leaves the
+# package unconfigured with nothing installed. apt given a local .deb pulls the
+# Depends in first, which is also what lets the postinst's import check mean
+# anything.
+sudo apt-get install -y "$package"
 rm -f "$package"
 
-echo "== Installing shinobi-recon MCP server (pipx) =="
-pipx install --force "$SHINOBI_ROOT/mcp-servers/shinobi-recon"
+# The recon MCP server comes from the package now, at /usr/bin/shinobi-recon,
+# and is verified by its postinst. It used to be pipx-installed here as well,
+# which put a second copy on the operator's PATH ahead of the package's -- an
+# unpinned one, since the dependency was resolved by pip at install time, and so
+# a version the postinst had never checked.
 
 echo ""
 echo "Installed. Next steps:"

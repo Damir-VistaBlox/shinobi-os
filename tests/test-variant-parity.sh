@@ -7,10 +7,12 @@
 # instead symlinked /opt/shinobi/bin/* straight into /usr/local/bin. That is not
 # a cosmetic difference. shinobi-core is what puts the tool manifests in
 # /usr/share/shinobi/tools, and the MCP server resolves them there first,
-# falling back to <parents[3]>/tools relative to its own file. Pip-installed
-# into /opt/shinobi/venv, that fallback is /opt/shinobi/venv/lib/tools, which
-# does not exist -- so on the min image the registry loads zero manifests and,
-# since the registry fails closed, shinobi-recon refuses to start at all.
+# falling back to <parents[3]>/tools relative to its own file. Back when the
+# server was pip-installed rather than packaged, that fallback was
+# /opt/shinobi/venv/lib/tools, which does not exist -- so on the min image the
+# registry loaded zero manifests and, since the registry fails closed,
+# shinobi-recon refused to start at all. The server is packaged now and the
+# fallback is never what saves a built image, but the drift is what this guards.
 #
 # These checks are static on purpose: the real proof needs an image build, but
 # the chain that matters can be checked here -- both variants install the

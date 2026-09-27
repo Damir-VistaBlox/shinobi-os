@@ -110,8 +110,8 @@ def _resolve_server(command: str | list[str]) -> tuple[list[str], dict[str, str]
     raise MCPError(
         f"no MCP server named {command!r} on PATH, and no {command} in the source tree; "
         "refusing to run a conversation with no tools.\n"
-        "  The recon server ships with the image (pip-installed into /opt/shinobi/venv),\n"
-        "  not with the .deb, which declares no Python MCP dependency.\n"
+        "  The recon server ships with the image and with shinobi-core, which puts\n"
+        "  it at /usr/bin/shinobi-recon -- no venv, and no second copy ahead of it.\n"
         "  In a checkout this resolves to mcp-servers/<name>/ automatically.\n"
         "  Or ask without tools: --server ''"
     )

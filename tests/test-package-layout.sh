@@ -46,6 +46,30 @@ check() {
 # staged server is the point of several checks below, and importing it writes
 # __pycache__ next to it -- so a residue check placed afterwards measures this
 # test's own side effects and reports a build that is actually clean as dirty.
+echo "== nothing installs the package in a way that cannot resolve Depends =="
+# `dpkg -i` resolves nothing. The package depends on python3-mcp and
+# python3-yaml, so a bare `dpkg -i` unpacks the files, fails, and leaves the
+# package unconfigured with the server's dependency absent -- and the postinst
+# check, the thing that stops a broken server looking installed, never runs.
+# Adding a Depends without fixing this broke both install paths, and only an
+# image build would have found it.
+installers=(
+  "$ROOT/install.sh"
+  "$ROOT/distro/overlay/kali-config/variant-shinobi/hooks/live/0020-shinobi-tooling.chroot"
+  "$ROOT/distro/overlay/kali-config/variant-shinobi-min/hooks/live/0020-shinobi-tooling.chroot"
+)
+for installer in "${installers[@]}"; do
+  label="${installer#"$ROOT/"}"
+  check "$label resolves dependencies" \
+    "$(grep -Eq 'apt-get install.*\.deb|apt(-get)? install.*\$package' "$installer" && echo yes || echo no)" "yes"
+  check "$label does not use a bare dpkg -i on it" \
+    "$(grep -Eq '^\s*(sudo )?dpkg -i\s+\S*\.deb' "$installer" && echo dpkg || echo no)" "no"
+  # A second server copy earlier on PATH is the failure the postinst cannot see:
+  # /usr/local/bin precedes /usr/bin, so an image would run the unverified one.
+  check "$label does not install a second recon server" \
+    "$(grep -Eq 'pip install.*shinobi-recon|pipx install|ln -sf.*shinobi-recon' "$installer" && echo yes || echo no)" "no"
+done
+
 echo "== no bytecode residue =="
 check "no __pycache__ directories" \
   "$(find "$stage" -type d -name __pycache__ | wc -l)" "0"

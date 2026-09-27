@@ -17,9 +17,15 @@ set -e
 # Install the integration layer as a real Debian package so systemd units,
 # session helpers, and migration logic have explicit ownership and upgrades
 # can replace them cleanly.
+#
+# apt, not dpkg -i, and that is load-bearing. The package depends on
+# python3-mcp and python3-yaml; dpkg -i resolves nothing, so it would unpack the
+# files, fail, and leave the package unconfigured with the server's dependency
+# missing — and the postinst's import check, the thing that keeps a broken
+# server from looking installed, would never get to run.
 if [ -x /opt/shinobi/packaging/build-deb.sh ]; then
   /opt/shinobi/packaging/build-deb.sh /tmp/shinobi-core.deb >/dev/null
-  dpkg -i /tmp/shinobi-core.deb >/dev/null
+  apt-get install -y --no-install-recommends /tmp/shinobi-core.deb >/dev/null
   rm -f /tmp/shinobi-core.deb
 fi
 
@@ -28,6 +34,9 @@ if [ ! -d /usr/share/shinobi/themes ]; then
   cp -r /opt/shinobi/themes /usr/share/shinobi/themes
 fi
 
-python3 -m venv /opt/shinobi/venv
-/opt/shinobi/venv/bin/pip install --no-cache-dir --quiet /opt/shinobi/mcp-servers/shinobi-recon
-ln -sf /opt/shinobi/venv/bin/shinobi-recon /usr/local/bin/shinobi-recon
+# No venv, and no second copy of the server. It used to be pip-installed into
+# /opt/shinobi/venv and symlinked into /usr/local/bin, which precedes /usr/bin in
+# PATH — so the image ran a copy of the server that the package's postinst never
+# verified, resolving its `mcp` by unpinned pip at build time. That is the exact
+# failure the package now checks for, and it would have been reintroduced from
+# the other side. The package ships one server, verified at install.
