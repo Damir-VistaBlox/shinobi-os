@@ -42,6 +42,13 @@ pipewire-pulse
 bluez
 network-manager
 
+## The Shinobi Installation Wizard, launched from the boot menu's "Install
+## Shinobi OS" entry. On the live image only: it is shinobi-installer's Depends
+## rather than shinobi-desktop's, because an installed system has no use for
+## Qt6 and the KPM partition libraries, and a CLI or headless install should not
+## carry a graphical installer it will never run.
+calamares
+
 ## Fonts — a Nerd Font is fetched directly from upstream by
 ## hooks/live/0030-fonts.chroot (see that file for why); these are just its
 ## build-time dependencies.

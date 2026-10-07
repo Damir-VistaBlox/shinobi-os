@@ -6,6 +6,8 @@
 
 | `test-installer.sh` | The Shinobi Installation Wizard's configuration: the sequence is complete and correctly ordered, the two shellprocess jobs have separate configs, the install is offline, the live session's home and sudoers grant are excluded from the copy and its account is removed, no autologin can be inherited, the branding names Shinobi rather than Kali, and Calamares itself loads the configuration and reports no unusable module, no empty job and no broken QML (in a container, headless under Xvfb) |
 
+| `test-branding.sh` | What the operator sees: a token sweep over boot menus, branding, session configs and desktop entries for `kali` appearing anywhere an operator would read it, with every allowance carrying a reason; the boot menu leading with Shinobi's installer and naming the live account; the installer marker set on exactly the entries that should carry it; and Calamares present on the image that installs but not on a package every CLI install would drag it into |
+
 ## Running it
 
 The source checks need no ISO and no build:

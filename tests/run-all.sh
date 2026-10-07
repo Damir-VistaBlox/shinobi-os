@@ -33,6 +33,7 @@ SOURCE_TESTS=(
   tests/test-package-layout.sh
   tests/test-setup.sh
   tests/test-installer.sh
+  tests/test-branding.sh
   tests/test-docs.sh
   tests/test-fonts-hook.sh
   tests/test-variant-parity.sh
