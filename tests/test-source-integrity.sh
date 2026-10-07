@@ -28,7 +28,7 @@ done < <(find "$ROOT/packaging" -path '*/DEBIAN/*' -prune -o -type f -path '*/us
 echo "== Checking theme-switch contract =="
 grep -Fq 'ln -sfn "$theme_dir/hypr.conf" "$HOME/.config/hypr/colors.conf"' "$ROOT/bin/shinobi-theme" \
   || fail "shinobi-theme does not update Hyprland colors"
-grep -Fq 'shinobi-theme set' "$ROOT/distro/overlay/includes.chroot/usr/local/bin/shinobi-session" \
+grep -Fq 'shinobi-theme set' "$ROOT/packaging/shinobi-core/usr/bin/shinobi-session" \
   || fail "session bootstrap does not apply the persisted theme"
 
 echo "== Checking GRUB menu color syntax =="
@@ -84,7 +84,7 @@ grep -Fq 'Wants=shinobi-migrate.service shinobi-shell.service shinobi-agentd.ser
   "$ROOT/packaging/shinobi-core/usr/lib/systemd/user/shinobi-desktop.target" \
   || fail "desktop target does not group core services"
 
-echo "== Checking systemd unit copies agree =="
+echo "== Checking nothing is shipped by two packages at once =="
 # The .deb (packaging/) and the ISO overlay (distro/overlay/) each install a
 # copy of the same user units to the same paths, so whichever is applied last
 # wins. The two copies had already drifted in their After= ordering and
@@ -92,21 +92,37 @@ echo "== Checking systemd unit copies agree =="
 # A unit may exist in only one place; where both exist they must be identical.
 packaged_units="$ROOT/packaging/shinobi-core/usr/lib/systemd/user"
 overlay_units="$ROOT/distro/overlay/includes.chroot/etc/systemd/user"
-[[ -d "$overlay_units" ]] || overlay_units=""
-if [[ -n "$overlay_units" && -d "$overlay_units" ]]; then
-  while IFS= read -r -d '' overlay_unit; do
-    name="$(basename "$overlay_unit")"
-    packaged_unit="$packaged_units/$name"
-    [[ -f "$packaged_unit" ]] || continue
-    if ! diff -u "$packaged_unit" "$overlay_unit" >/dev/null; then
-      fail "systemd unit $name differs between packaging/ and distro/overlay/ (diff: diff -u ${packaged_unit#$ROOT/} ${overlay_unit#$ROOT/})"
-    fi
-  done < <(find "$overlay_units" -maxdepth 1 -type f \( -name '*.service' -o -name '*.target' \) -print0)
+
+# The check this replaces compared the two copies while tolerating either being
+# absent -- so once the overlay copies were removed, it quietly tested nothing.
+# Duplication is now structurally impossible: the overlay is empty, and a unit
+# placed back there would be a second copy at the same path, which is what made
+# the RuntimeDirectory fix a two-file edit.
+if [[ -d "$overlay_units" ]] && [[ -n "$(find "$overlay_units" -maxdepth 1 -type f \( -name '*.service' -o -name '*.target' \) -print -quit)" ]]; then
+  fail "the image overlay carries systemd user units, which the shinobi-core package also ships; one copy, or the two drift again"
 fi
+
+# And the packages must not collide with each other on the same path.
+declare -A seen_paths=()
+collision=0
+for pkg_dir in "$ROOT"/packaging/shinobi-*; do
+  [[ -d "$pkg_dir" ]] || continue
+  pkg="$(basename "$pkg_dir")"
+  while IFS= read -r -d '' shipped; do
+    rel="${shipped#"$pkg_dir/"}"
+    case "$rel" in DEBIAN/*) continue ;; esac
+    if [[ -n "${seen_paths[$rel]:-}" ]]; then
+      fail "$pkg ships $rel, which ${seen_paths[$rel]} already ships; dpkg cannot own one path twice"
+      collision=1
+    fi
+    seen_paths["$rel"]="$pkg"
+  done < <(find "$pkg_dir" -type f -print0)
+done
+(( collision == 0 )) || true
 
 echo "== Checking optional static analyzers =="
 if command -v qmllint >/dev/null 2>&1; then
-  qmllint "$ROOT/distro/overlay/includes.chroot/usr/share/shinobi-dotfiles/etc/skel/.config/quickshell/shell.qml"
+  qmllint "$ROOT/packaging/shinobi-desktop/usr/share/shinobi-dotfiles/etc/skel/.config/quickshell/shell.qml"
 else
   echo "source-test: qmllint unavailable; QML syntax deferred to image runtime"
 fi

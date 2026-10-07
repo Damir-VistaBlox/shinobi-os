@@ -1,0 +1,29 @@
+#!/bin/sh
+# Verify this package is usable before dpkg calls it installed.
+#
+# The desktop layer is the part of Shinobi that fails quietly. Nothing about a
+# missing dotfile or an uninstalled command raises an error at login: the
+# compositor starts, the session comes up, and what is absent is the surface
+# the operator was about to judge.
+#
+# shinobi-desktop-check therefore validates the package against itself before
+# dpkg records it as installed -- the same reason shinobi-core verifies its own
+# import rather than trusting that it worked.
+set -e
+
+check=/usr/lib/shinobi/shinobi-desktop-check
+
+if [ ! -x "$check" ]; then
+  echo "shinobi-desktop: $check is missing or not executable; this package is installed wrong." >&2
+  exit 1
+fi
+
+if err=$("$check" 2>&1); then
+  exit 0
+fi
+
+echo "shinobi-desktop: the desktop layer is incomplete, so it would come up" >&2
+echo "broken rather than fail:" >&2
+printf '%s\n' "$err" | sed 's/^/  /' >&2
+echo "  To see what is missing without dpkg in the way: $check" >&2
+exit 1

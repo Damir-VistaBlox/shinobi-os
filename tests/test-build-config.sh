@@ -116,9 +116,12 @@ staged_paths() {
   grep -oE '"\$ROOT/[a-z-]+"' "$ROOT/distro/build.sh" \
     | tr -d '"' | sed 's|\$ROOT/||' | sort -u
 }
+# The trailing slash matters: without it the pattern also matches the output
+# path ($root/shinobi-$package.deb), and the check then reports a top-level path
+# called "shinobi-" as unstaged, which is nonsense rather than a real finding.
 needed_paths() {
-  grep -oE '\$root/[a-z-]+' "$ROOT/packaging/build-deb.sh" \
-    | sed 's|\$root/||' | grep -v '^shinobi-core$' | sort -u
+  grep -oE '\$root/[a-z-]+/' "$ROOT/packaging/build-deb.sh" \
+    | sed -e 's|\$root/||' -e 's|/$||' | sort -u
 }
 missing="$(comm -13 <(staged_paths) <(needed_paths))"
 check "every path build-deb.sh reads is staged for the chroot" \

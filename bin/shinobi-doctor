@@ -134,6 +134,34 @@ if [[ -n "$provider_readiness" ]]; then
   printf '\n%s\n' "$provider_readiness"
 fi
 
+# The desktop layer itself.
+#
+# "The control plane is up but the desktop is bare" and "this is a CLI-only box"
+# look identical from the compositor: no bar, no wallpaper, no Hyprland config.
+# shinobi-setup status answers which, and it answers without needing a session,
+# so a box that was provisioned half-way reports itself rather than looking fine.
+desktop_status=""
+if desktop_setup="$(dirname -- "$(readlink -f -- "${BASH_SOURCE[0]}")")/../libexec/shinobi/shinobi-setup"; then
+  desktop_status="$("$desktop_setup" status --json 2>/dev/null || true)"
+fi
+if [[ -n "$desktop_status" ]]; then
+  printf '\nDesktop layer:\n'
+  if [[ "$desktop_status" == *'"dotfiles":true'* ]]; then
+    printf '  dotfiles: applied to %s\n' \
+      "$(sed -n 's/.*"account":"\([^"]*\)".*/\1/p' <<<"$desktop_status")"
+  else
+    # The CLI works on a box with no desktop layer at all, so this is reported
+    # and not fatal -- but silently, a half-applied install is indistinguishable
+    # from a working one.
+    printf '  dotfiles: not applied. Run: shinobi-setup apply\n' >&2
+  fi
+  if [[ "$desktop_status" == *'"font":true'* ]]; then
+    printf '  Nerd Font: installed\n'
+  else
+    printf '  Nerd Font: missing (icon glyphs render as boxes). Run: shinobi-setup apply\n' >&2
+  fi
+fi
+
 # The console-only image intentionally has no Quickshell. Check it only from
 # the graphical Hyprland session, where a missing panel otherwise looks like a
 # silent desktop failure.

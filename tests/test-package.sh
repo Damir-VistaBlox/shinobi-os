@@ -37,7 +37,7 @@ stage="$(mktemp -d)"
 # inside a directory it cannot write, so restore write permission on the way out.
 trap 'chmod -R u+rwX "$stage" "$package" 2>/dev/null; rm -rf "$stage" "$package"' EXIT
 
-"$ROOT/packaging/build-deb.sh" "$package" >/dev/null
+"$ROOT/packaging/build-deb.sh" core "$package" >/dev/null
 
 dpkg-deb --info "$package" | grep -Fq 'Package: shinobi-core' \
   || { echo 'package-test: package name is not shinobi-core' >&2; exit 1; }

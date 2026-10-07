@@ -2,6 +2,8 @@
 
 | `test-repo.sh` | The apt overlay repository: index layout apt requires, per-arch indexes, checksums that match the files, a reproducible index, real GPG signing verified with `gpg --verify`, refusal to publish unsigned without the explicit opt-out, refusal of a natively-compiled or malformed package rather than mirroring it, and the operator-facing `shinobi repo` command's keyring and pinning contract |
 
+| `test-setup.sh` | The layer's engine, `shinobi-setup`, exercised in a real Kali chroot: refusing a system with no account to apply to, filling skel and the account's home, fixing ownership (the bug that made SDDM refuse logins), idempotence across repeated runs, an operator's local config surviving a re-apply unless `--force`, an account never being renamed unless asked by name, the sudoers rule that names the account being rewritten with it, and a missing desktop package failing loudly. Runs itself in a container when not root |
+
 ## Running it
 
 The source checks need no ISO and no build:

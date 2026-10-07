@@ -1,29 +1,35 @@
-# Byte-identical commands to variant-shinobi/hooks/live/0020-shinobi-tooling.chroot,
-# and tests/test-variant-parity.sh asserts that. This file used to be a hand-kept
-# older copy that skipped the package install and symlinked the CLI out of
-# /opt/shinobi instead. That was not a console/desktop difference: the package
-# is what populates /usr/share/shinobi/tools, which is where the MCP registry
-# looks for its tool manifests, so on this variant the server found none and
-# refused to start. If you need to change this, change both and let the test
-# tell you.
-set -e
-if [ -x /opt/shinobi/packaging/build-deb.sh ]; then
-  /opt/shinobi/packaging/build-deb.sh /tmp/shinobi-core.deb >/dev/null
-  apt-get install -y --no-install-recommends /tmp/shinobi-core.deb >/dev/null
-  rm -f /tmp/shinobi-core.deb
+#!/bin/sh
+# Install the Shinobi layer as a Debian package.
+#
+# The console variant carries shinobi-core only: no desktop stack, no dotfiles,
+# no compositor. Provenance is still written, because the base's identity is the
+# one fact that matters on an engagement host regardless of what is installed on
+# it.
+set -eu
+
+if [ ! -x /opt/shinobi/packaging/build-deb.sh ]; then
+  echo "0020-shinobi-tooling: /opt/shinobi/packaging/build-deb.sh is missing." >&2
+  echo "  distro/build.sh stages the repo's packaging/ into /opt/shinobi; without it there is nothing to build." >&2
+  exit 1
 fi
-mkdir -p /usr/share/shinobi
-if [ ! -d /usr/share/shinobi/themes ]; then
-  cp -r /opt/shinobi/themes /usr/share/shinobi/themes
-fi
-{
-  printf 'layer=shinobi-os\n'
-  printf 'layer_version=%s\n' "$(cat /usr/share/shinobi/version 2>/dev/null || printf 'unknown')"
-  printf 'base=kali\n'
-  printf 'base_id=%s\n' "$(. /etc/os-release 2>/dev/null; printf '%s' "${VERSION_ID:-unknown}")"
-  printf 'base_repo=http.kali.org/kali kali-rolling main\n'
-  printf 'relationship=overlay\n'
-  printf 'relationship_note=Kali is the unmodified base: tool suite, kernel and archive.\n'
-  printf 'The Shinobi layer sits on top and owns nothing Kali ships.\n'
-} >/usr/share/shinobi/provenance
-chmod 0644 /usr/share/shinobi/provenance
+
+# apt, not dpkg -i: the package depends on python3-mcp and python3-yaml, and
+# dpkg -i resolves nothing, so the postinst's import check would never run.
+deb=/tmp/shinobi-core.deb
+/opt/shinobi/packaging/build-deb.sh core "$deb" >/dev/null
+apt-get install -y --no-install-recommends "$deb" >/dev/null
+rm -f "$deb"
+
+# No dotfiles are applied: there is no desktop and no desktop account to apply
+# them to. The engine owns the provenance write so the ISO, install.sh and the
+# wizard all produce byte-identical provenance, and so this hook is not a third
+# copy of the format.
+shinobi-setup provenance
+
+# Assert rather than trust it. Provenance is the first artifact a reviewer of an
+# engagement host reads, and a hook that continued past a missing write would
+# ship a box with no answer to "is this Kali, or something wearing Kali's name?".
+[ -s /usr/share/shinobi/provenance ] || {
+  echo "0020-shinobi-tooling: provenance is missing; this image cannot state its base." >&2
+  exit 1
+}

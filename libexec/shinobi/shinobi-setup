@@ -1,0 +1,354 @@
+#!/bin/sh
+# shinobi-setup -- apply the Shinobi desktop layer to a system.
+#
+# This is the only implementation of "put the layer on this machine". The ISO
+# build hook, install.sh and the installation wizard's shellprocess all call
+# this file rather than each carrying their own copy, because the three paths
+# previously disagreed: the ISO's version did things install.sh's did not, and
+# neither knew what the wizard would need. A layer that is applied three ways is
+# three layers, and only one of them is the one that was tested.
+#
+# Usage:
+#   shinobi-setup apply [--account NAME] [--rename-from NAME] [--force]
+#                       [--skip-fonts] [--quiet]
+#   shinobi-setup status [--json]
+#   shinobi-setup provenance
+#   shinobi-setup man
+#
+# It is POSIX sh and never calls systemctl: it runs inside a build chroot, where
+# systemd is not running, and on a live system, where starting services is the
+# session's job. Every step is idempotent.
+set -eu
+
+DOTFILES_ROOT=/usr/share/shinobi-dotfiles/etc/skel
+
+FONT_DEST=/usr/share/fonts/shinobi-nerd-font
+
+quiet=false
+log() {
+  $quiet || echo "shinobi-setup: $*"
+}
+warn() {
+  echo "shinobi-setup: $*" >&2
+}
+
+usage() {
+  cat <<'EOF'
+shinobi-setup -- apply the Shinobi desktop layer
+
+  apply              Apply dotfiles, the account, the font and provenance
+    --account NAME   Apply to NAME's home instead of the auto-detected account
+    --rename-from N  Rename account N to shinobi (never done implicitly)
+    --force          Overwrite managed files that already exist
+    --skip-fonts     Do not install the Nerd Font (needs network)
+    --quiet          Only report problems
+  status             Report what is applied
+  provenance         Write /usr/share/shinobi/provenance only
+  man                This text
+
+Managed files are not overwritten unless --force is given: these are the
+operator's working configuration, and a login that resets their wofi colours
+because a package was re-applied is not a repair.
+
+An account is never renamed unless asked for by name. Renaming someone's
+account to match a branding decision is the kind of change that has to be
+someone's explicit instruction, and the image build passes --rename-from
+deliberately rather than inheriting it from a default.
+EOF
+}
+
+# ---------------------------------------------------------------------------
+# dotfiles
+# ---------------------------------------------------------------------------
+
+apply_dotfiles() {
+  _account="$1"
+  _force="$2"
+
+  if [ ! -d "$DOTFILES_ROOT" ]; then
+    warn "$DOTFILES_ROOT does not exist. Install shinobi-desktop; the dotfiles ship in that package."
+    return 1
+  fi
+
+  # /etc/skel is authoritative: it is the template for accounts created later,
+  # and nothing in it is anybody's working configuration yet. Homes are not --
+  # those get only what is missing unless --force was asked for.
+  rsync -a "$DOTFILES_ROOT/" /etc/skel/
+  log "dotfiles: /etc/skel updated"
+
+  rsync -a "$DOTFILES_ROOT/" /root/
+  log "dotfiles: /root updated"
+
+  _home=$(getent passwd "$_account" | cut -d: -f6)
+  if [ -z "$_home" ]; then
+    warn "account '$_account' has no home directory; skipping its dotfiles"
+    return 1
+  fi
+  mkdir -p "$_home"
+
+  if [ "$_force" = true ]; then
+    rsync -a --chown="$_account:$_account" "$DOTFILES_ROOT/" "$_home/"
+    log "dotfiles: $_account's home overwritten from skel (--force)"
+  else
+    rsync -a --ignore-existing --chown="$_account:$_account" "$DOTFILES_ROOT/" "$_home/"
+    log "dotfiles: $_account's home completed from skel"
+  fi
+
+  # rsync -a preserves the source tree's ownership, and /etc/skel is staged
+  # root-owned, so this rsync lands root-owned files in the user's home --
+  # which SDDM reports as "the home directory does not belong to the user you
+  # are currently creating", with the login then refused. The previous version
+  # chowned only .config, so whether the home came out right depended on which
+  # subdirectory happened to be listed. It is chowned whole or not at all.
+  chown -R "$_account:$_account" "$_home"
+  chown -R "$_account:$_account" /etc/skel 2>/dev/null || true
+  log "dotfiles: ownership set for $_account and /etc/skel"
+}
+
+# ---------------------------------------------------------------------------
+# account
+# ---------------------------------------------------------------------------
+
+# usermod -l keeps the uid, the groups and the account's identity, so anything
+# keyed to that uid keeps working; -m moves the home with it.
+rename_account() {
+  _from="$1"
+  _to=shinobi
+
+  getent passwd "$_from" >/dev/null 2>&1 || return 0
+
+  if getent passwd "$_to" >/dev/null 2>&1; then
+    log "account: '$_to' already exists; not renaming '$_from'"
+    return 0
+  fi
+
+  if usermod -l "$_to" -d "/home/$_to" -m "$_from"; then
+    log "account: '$_from' renamed to '$_to'"
+    fix_sudoers "$_from" "$_to"
+    return 0
+  fi
+
+  # Not fatal. This runs inside a chroot during an image build, where aborting
+  # costs a whole build for a step nobody has reproduced failing; and on a live
+  # system, where the operator can still log in under the old name. The system
+  # says so on the next login and the name is wrong, which is recoverable. A
+  # build that aborts is not.
+  warn "could not rename '$_from' to '$_to'; sessions will still start as '$_from'"
+  return 0
+}
+
+# A sudoers rule from the base image names the account, and usermod does not
+# rewrite rules in sudoers.d -- it rewrites /etc/passwd and /etc/shadow. A
+# rename without this leaves a system where the operator cannot install
+# anything, which reads as a broken image rather than a missed step.
+fix_sudoers() {
+  _from="$1"
+  _to="$2"
+
+  # Two substitutions rather than one pattern with alternation, because a group
+  # that does not take part in a match makes busybox sed abort the whole
+  # expression with "invalid reference \1 on 's' command's RHS" -- so the file is
+  # left untouched and the rule keeps naming an account that no longer exists.
+  # Both forms below have every group participate in every match.
+  #
+  # Boundaries are spelled out rather than written as \b, which is a GNU
+  # extension: without them a rule naming "kali" would also rewrite the package
+  # name in "kali-tools" into "shinobi-tools".
+  for rule in /etc/sudoers.d/*; do
+    [ -f "$rule" ] || continue
+    grep -qE "(^|[^A-Za-z0-9_])$_from([^A-Za-z0-9_]|$)" "$rule" 2>/dev/null || continue
+    if sed -i \
+      -e "s/\([^A-Za-z0-9_]\)$_from\([^A-Za-z0-9_]\)/\1$_to\2/g" \
+      -e "s/^$_from\([^A-Za-z0-9_]\)/$_to\1/g" \
+      "$rule"; then
+      log "account: updated $rule to reference '$_to'"
+    else
+      warn "$rule still references '$_from'; sudo will not work for '$_to' until it is fixed"
+    fi
+  done
+}
+
+resolve_account() {
+  _requested="$1"
+
+  if [ -n "$_requested" ]; then
+    if getent passwd "$_requested" >/dev/null 2>&1; then
+      printf '%s' "$_requested"
+      return 0
+    fi
+    warn "requested account '$_requested' does not exist"
+    return 1
+  fi
+
+  for candidate in shinobi "${SUDO_USER:-}" "$(id -un)"; do
+    [ -n "$candidate" ] || continue
+    getent passwd "$candidate" >/dev/null 2>&1 || continue
+    # The account we are running as inside a chroot is root, which is never the
+    # answer; skip it rather than applying dotfiles to /root twice.
+    [ "$candidate" = root ] && continue
+    printf '%s' "$candidate"
+    return 0
+  done
+
+  # Nothing named, nothing obvious, no SUDO_USER -- which is the state of a stock
+  # Kali box where this runs as root from a cron job or a provisioning script, and
+  # of a chroot during an image build. If the machine has exactly one account
+  # that is not root, there is no ambiguity about who meant.
+  sole=$(getent passwd | awk -F: '$3 > 0 && $3 < 65534 && $1 != "nobody" && $7 !~ /(nologin|false)$/ {print $1}')
+  sole_count=$(printf '%s\n' "$sole" | grep -c . || true)
+  if [ "$sole_count" = 1 ]; then
+    printf '%s' "$sole"
+    return 0
+  fi
+
+  warn "no non-root account found to apply dotfiles to"
+  return 1
+}
+
+# ---------------------------------------------------------------------------
+# font
+# ---------------------------------------------------------------------------
+
+install_font() {
+  if ! command -v install-nerd-font >/dev/null 2>&1; then
+    warn "install-nerd-font is missing from this install; icon glyphs will be missing"
+    return 1
+  fi
+  install-nerd-font
+}
+
+# ---------------------------------------------------------------------------
+# provenance
+# ---------------------------------------------------------------------------
+
+# Stating the layering as a checkable fact, not as documentation. On an
+# engagement host "is this Kali, or something wearing Kali's name?" is the
+# first question worth answering, and the answer has to be verifiable by
+# whoever is holding the machine. base_repo names the archive this was built
+# from, so a reviewer can diff the installed set against upstream Kali and see
+# that the tool suite is untouched -- which is the whole security premise: the
+# AI layer is the boundary, and it only holds while the base does.
+write_provenance() {
+  mkdir -p /usr/share/shinobi
+  {
+    printf 'layer=shinobi-os\n'
+    printf 'layer_version=%s\n' "$(cat /usr/share/shinobi/version 2>/dev/null || printf 'unknown')"
+    printf 'base=kali\n'
+    printf 'base_id=%s\n' "$(. /etc/os-release 2>/dev/null; printf '%s' "${VERSION_ID:-unknown}")"
+    printf 'base_repo=http.kali.org/kali kali-rolling main\n'
+    printf 'relationship=overlay\n'
+    printf 'relationship_note=Kali is the unmodified base: tool suite, kernel and archive.\n'
+    printf 'The Shinobi layer sits on top and owns nothing Kali ships.\n'
+  } >/usr/share/shinobi/provenance
+  chmod 0644 /usr/share/shinobi/provenance
+  log "provenance: /usr/share/shinobi/provenance written"
+}
+
+# ---------------------------------------------------------------------------
+# status
+# ---------------------------------------------------------------------------
+
+cmd_provenance() {
+  write_provenance
+}
+
+cmd_status() {
+  _json=false
+  [ "${1:-}" = "--json" ] && _json=true
+
+  dotfiles=false
+  fonts=false
+  provenance=false
+  [ -d "$DOTFILES_ROOT" ] && dotfiles=true
+  [ -d "$FONT_DEST" ] && [ -n "$(ls -A "$FONT_DEST" 2>/dev/null)" ] && fonts=true
+  [ -s /usr/share/shinobi/provenance ] && provenance=true
+
+  _account=none
+  _candidate=$(resolve_account "" 2>/dev/null) && _account=$_candidate
+
+  if $_json; then
+    printf '{"dotfiles":%s,"font":%s,"provenance":%s,"account":"%s"}\n' \
+      "$dotfiles" "$fonts" "$provenance" "$_account"
+  else
+    printf 'desktop layer:\n'
+    printf '  dotfiles:  %s (%s)\n' "$([ "$dotfiles" = true ] && echo installed || echo missing)" "$DOTFILES_ROOT"
+    printf '  font:      %s\n' "$([ "$fonts" = true ] && echo installed || echo missing)"
+    printf '  provenance:%s\n' "$([ "$provenance" = true ] && echo present || echo missing)"
+    printf '  account:   %s\n' "$_account"
+  fi
+}
+
+# ---------------------------------------------------------------------------
+# apply
+# ---------------------------------------------------------------------------
+
+cmd_apply() {
+  account=""
+  rename_from=""
+  force=false
+  skip_fonts=false
+
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --account)
+        account="${2:?--account needs a name}"
+        shift 2
+        ;;
+      --rename-from)
+        rename_from="${2:?--rename-from needs a name}"
+        shift 2
+        ;;
+      --force) force=true; shift ;;
+      --skip-fonts) skip_fonts=true; shift ;;
+      --quiet) quiet=true; shift ;;
+      -h | --help)
+        usage
+        exit 0
+        ;;
+      *) usage >&2; exit 64 ;;
+    esac
+  done
+
+  if [ -n "$rename_from" ]; then
+    rename_account "$rename_from"
+  fi
+
+  if ! resolved=$(resolve_account "$account"); then
+    exit 1
+  fi
+
+  if ! apply_dotfiles "$resolved" "$force"; then
+    exit 1
+  fi
+
+  if [ "$skip_fonts" = false ]; then
+    # Not fatal on its own: a missing icon glyph degrades the bar, and the
+    # desktop is still a desktop. It is reported, and status will show it.
+    install_font || true
+  fi
+
+  write_provenance
+  log "applied to account '$resolved'"
+}
+
+case "${1:-}" in
+  apply)
+    shift
+    cmd_apply "$@"
+    ;;
+  status)
+    shift
+    cmd_status "$@"
+    ;;
+  provenance)
+    shift
+    cmd_provenance
+    ;;
+  man | -h | --help | '')
+    usage
+    ;;
+  *)
+    usage >&2
+    exit 64
+    ;;
+esac

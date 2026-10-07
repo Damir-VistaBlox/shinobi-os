@@ -1,19 +1,20 @@
 #!/usr/bin/env bash
-# Tests for the Nerd Font chroot hook.
+# Tests for the Nerd Font installer.
 #
-# The hook downloaded a 128 MB zip from a GitHub release and unzipped it straight
-# into a system font directory with no integrity check. Whatever arrived on the
-# wire became trusted font data on every boot, and there was no way to tell a
-# corrupted or substituted download from a good one. The version was already
-# pinned, but a tag is not a checksum: the tag names a release, the bytes are
-# whatever the connection served.
+# It downloads a 128 MB zip from a GitHub release and unzips it straight into a
+# system font directory, so whatever arrives on the wire becomes trusted font
+# data on every boot and there is no way to tell a substituted download from a
+# good one afterwards. The version is pinned, but a tag names a release, not the
+# bytes.
 #
-# The hook runs in a chroot with absolute paths, so this copies it and rewrites
-# those paths into a temp dir, then runs it for real with stubbed curl/unzip/
-# fc-cache on PATH. The verification logic is exercised, not grepped.
+# It was a chroot hook once, which meant the only way to exercise it was a full
+# image build -- and it kept its weaknesses for exactly as long. It is a shipped
+# script now, taking --dest, so this runs it for real against a temporary
+# destination with a stubbed curl/unzip/fc-cache on PATH: the verification logic
+# is executed, not grepped.
 set -euo pipefail
 ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
-HOOK="$ROOT/distro/overlay/kali-config/variant-shinobi/hooks/live/0030-fonts.chroot"
+HOOK="$ROOT/libexec/shinobi/install-nerd-font"
 
 failures=0
 checks=0
@@ -30,10 +31,10 @@ check() {
 work="$(mktemp -d)"
 trap 'rm -rf -- "$work"' EXIT
 
-# A copy of the hook with the two absolute paths redirected into the temp dir.
-sed -e "s#^DEST=.*#DEST=\"$work/dest\"#" \
-    -e "s#/tmp/nerd-font\\.zip#$work/nerd-font.zip#g" \
-    "$HOOK" >"$work/hook.sh"
+# The destination is redirected through the flag the script documents for it,
+# rather than by rewriting its source: a copy with sed-edited paths tests the
+# copy.
+sed -e "s#^DEST=.*#DEST=\"$work/dest\"#" "$HOOK" >"$work/hook.sh"
 chmod +x "$work/hook.sh"
 
 # Stub toolchain. curl copies $STUB_PAYLOAD to whatever -o pointed at, so the
@@ -69,7 +70,11 @@ export STUB_LOG="$work/log"
 printf 'the original asset\n' >"$work/good.zip"
 printf 'something else entirely\n' >"$work/evil.zip"
 
-run_hook() { STUB_PAYLOAD="$1" sh "$work/hook.sh" >"$work/out" 2>"$work/err"; echo $?; }
+# TMPDIR is set so mktemp puts the archive somewhere this test can look: the
+# script's own cleanup is the thing under test, and counting unrelated /tmp
+# entries on the host measures the host.
+mkdir -p "$work/tmpdir"
+run_hook() { STUB_PAYLOAD="$1" TMPDIR="$work/tmpdir" sh "$work/hook.sh" >"$work/out" 2>"$work/err"; echo $?; }
 
 # The checksum the hook pins, read back out of the hook itself so this test
 # cannot drift from it.
@@ -78,19 +83,19 @@ pinned_actual="$(sha256sum "$work/good.zip" | cut -d' ' -f1)"
 
 # The accept path needs a pin that matches the stub payload, and no stub payload
 # can hash to the real release's checksum. So run the accept case against a copy
-# of the hook re-pinned to the stub, and check the real pin statically below.
+# re-pinned to the stub, and check the real pin statically below.
 sed -e "s#^NERD_FONT_SHA256=.*#NERD_FONT_SHA256=\"$pinned_actual\"#" \
     -e "s#^DEST=.*#DEST=\"$work/dest\"#" \
-    -e "s#/tmp/nerd-font\\.zip#$work/nerd-font.zip#g" \
     "$HOOK" >"$work/hook-accept.sh"
 chmod +x "$work/hook-accept.sh"
-run_accept() { STUB_PAYLOAD="$1" sh "$work/hook-accept.sh" >"$work/out" 2>"$work/err"; echo $?; }
+run_accept() { STUB_PAYLOAD="$1" TMPDIR="$work/tmpdir" sh "$work/hook-accept.sh" >"$work/out" 2>"$work/err"; echo $?; }
 
 echo "== a matching download is accepted =="
-check "the hook exits 0" "$(run_accept "$work/good.zip")" "0"
+check "the installer exits 0" "$(run_accept "$work/good.zip")" "0"
 check "unzip ran" "$(grep -c '^unzip' "$STUB_LOG")" "1"
 check "fc-cache ran" "$(grep -c '^fc-cache' "$STUB_LOG")" "1"
-check "the archive is cleaned up on success" "$([[ -e "$work/nerd-font.zip" ]] && echo left || echo removed)" "removed"
+check "the archive is cleaned up on success" "$(find "$work/tmpdir" -type f | grep -c . || true)" "0"
+check "and nothing else is left behind in tmp" "$(find "$work/tmpdir" -mindepth 1 | grep -c . || true)" "0"
 
 echo "== the real pin is the one upstream published =="
 # Verified on 2026-09 against the v3.5.1 release asset and its SHA-256.txt. A
@@ -102,7 +107,7 @@ check "the pinned sha256 is the published v3.5.1 checksum" \
 
 echo "== a substituted download is refused =="
 : >"$STUB_LOG"
-check "the hook exits non-zero" "$(run_hook "$work/evil.zip")" "1"
+check "the installer exits non-zero" "$(run_hook "$work/evil.zip")" "1"
 check "unzip never ran" "$(grep -c '^unzip' "$STUB_LOG")" "0"
 check "fc-cache never ran" "$(grep -c '^fc-cache' "$STUB_LOG")" "0"
 check "the mismatch is reported" "$(grep -qiE 'sha256|checksum' "$work/err" && echo yes || echo no)" "yes"
@@ -110,15 +115,16 @@ check "nothing was installed into the font directory" \
   "$([[ -d "$work/dest" ]] && find "$work/dest" -name '*.ttf' | wc -l | tr -d ' ' || echo 0)" "0"
 
 echo "== the archive is not left behind on failure =="
-check "no partial archive is left in tmp" "$([[ -e "$work/nerd-font.zip" ]] && echo left || echo removed)" "removed"
+# mktemp decides the name, so this asserts none survived rather than guessing it.
+check "no partial archive is left in tmp" "$(find "$work/tmpdir" -type f | grep -c . || true)" "0"
 
 echo "== a truncated download is refused, not half-installed =="
 head -c 20 "$work/good.zip" >"$work/short.zip"
 : >"$STUB_LOG"
-check "the hook exits non-zero" "$(run_hook "$work/short.zip")" "1"
+check "the installer exits non-zero" "$(run_hook "$work/short.zip")" "1"
 check "unzip never ran" "$(grep -c '^unzip' "$STUB_LOG")" "0"
 
-echo "== the static shape of the hook =="
+echo "== the static shape of the installer =="
 check "the download is fetched with curl -f so an HTTP error is fatal" \
   "$(grep -q 'curl -f' "$HOOK" && echo yes || echo no)" "yes"
 # Ordering is the whole point: verifying after the unzip would be theatre.
@@ -128,7 +134,7 @@ check "the checksum is verified before anything is unzipped" \
   "$([[ -n "$verify_line" && -n "$unzip_line" && "$verify_line" -lt "$unzip_line" ]] && echo yes || echo no)" "yes"
 check "the pinned version and checksum are both declared" \
   "$(grep -q '^NERD_FONT_VERSION=' "$HOOK" && grep -q '^NERD_FONT_SHA256=' "$HOOK" && echo yes || echo no)" "yes"
-check "the hook mentions where the checksum came from" \
+check "the installer mentions where the checksum came from" \
   "$(grep -qi 'SHA-256.txt' "$HOOK" && echo yes || echo no)" "yes"
 
 echo

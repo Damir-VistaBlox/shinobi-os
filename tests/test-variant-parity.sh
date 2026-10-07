@@ -36,8 +36,12 @@ check() {
   fi
 }
 
-full_hook="$FULL/hooks/live/0020-shinobi-tooling.chroot"
-min_hook="$MIN/hooks/live/0020-shinobi-tooling.chroot"
+# Found by what the hook does rather than by its number: the desktop hook was
+# renamed to 0010-install-layer when the desktop layer became its own package,
+# and this file kept pointing at 0020 -- a check on a file that no longer exists
+# reads as a check on the one that does.
+full_hook="$(grep -rl 'build-deb.sh' "$FULL/hooks/live/" | head -1)"
+min_hook="$(grep -rl 'build-deb.sh' "$MIN/hooks/live/" | head -1)"
 
 echo "== both variants exist and install the tooling layer =="
 check "the desktop variant has a tooling hook" "$([[ -f "$full_hook" ]] && echo yes || echo no)" "yes"
@@ -65,20 +69,30 @@ for variant_hook in "$full_hook" "$min_hook"; do
     "$(grep -q 'ln -sf "\$script"' "$variant_hook" && echo symlinks || echo no)" "no"
 done
 
-echo "== the two tooling hooks run the same commands =="
-# The console variant's header claimed it was the desktop hook "minus the
-# Quickshell-specific line", but that line no longer exists in the desktop hook,
-# so there was no console-specific difference left to preserve -- only drift.
-# Compare the executable lines rather than the bytes: the console copy carries a
-# header explaining the duplication, and a comment cannot break an image, but a
-# changed command can. This is what stops the hooks drifting apart a third time.
+echo "== each variant's hook does what that variant is =="
+# These two used to be near-copies and the test asserted they were, which is what
+# stopped them drifting. They are no longer the same shape -- the console image
+# installs one package and writes provenance, the desktop installs two and applies
+# the layer -- so comparing them byte for byte would now be asserting that the
+# desktop has no desktop. What has to stay true is that both install the core
+# package and both end up with provenance.
 hook_body() { sed -e 's/[[:space:]]*#.*$//' -e '/^[[:space:]]*$/d' "$1"; }
-if diff <(hook_body "$full_hook") <(hook_body "$min_hook") >/dev/null 2>&1; then
-  check "the tooling hooks run identical commands" "same" "same"
-else
-  check "the tooling hooks run identical commands" \
-    "$(diff <(hook_body "$full_hook") <(hook_body "$min_hook") | tr '\n' '|')" "same"
-fi
+check "the desktop hook installs the core package" \
+  "$(hook_body "$full_hook" | grep -qE 'build-deb\.sh +"\$pkg"' && \
+     grep -q 'for pkg in core desktop' "$full_hook" && echo yes || echo no)" "yes"
+check "the console hook installs the core package" \
+  "$(hook_body "$min_hook" | grep -qE 'build-deb\.sh +core' && echo yes || echo no)" "yes"
+for name in desktop console; do
+  [[ $name == desktop ]] && hook="$full_hook" || hook="$min_hook"
+  check "$name writes provenance through the engine, not by hand" \
+    "$(hook_body "$hook" | grep -q 'shinobi-setup' && echo yes || echo no)" "yes"
+  check "$name does not write the provenance file itself" \
+    "$(hook_body "$hook" | grep -qE '> */usr/share/shinobi/provenance' && echo by-hand || echo no)" "no"
+done
+check "only the desktop variant installs shinobi-desktop" \
+  "$(grep -q 'for pkg in core desktop' "$full_hook" && echo yes || echo no)" "yes"
+check "and the console variant does not" \
+  "$(hook_body "$min_hook" | grep -q 'build-deb.sh desktop' && echo yes || echo no)" "no"
 
 echo "== the package stages what the registry needs =="
 check "build-deb.sh stages the tool manifests" \
@@ -107,11 +121,17 @@ PY
 
 echo "== the console variant is still console-only =="
 # Guard the other direction: parity must not quietly pull the desktop in.
-for absent in 0005-single-desktop 0010-dotfiles 0030-fonts 0040-login-theme 0050-plymouth-theme; do
-  check "$absent.chroot is absent from the console variant" \
-    "$([[ -f "$MIN/hooks/live/$absent.chroot" ]] && echo present || echo absent)" "absent"
-  check "$absent.chroot is present in the desktop variant" \
-    "$([[ -f "$FULL/hooks/live/$absent.chroot" ]] && echo present || echo absent)" "present"
+# 0010-dotfiles and 0030-fonts are gone: both became shinobi-setup's work, so the
+# desktop layer is applied by the engine rather than by a hook per concern.
+desktop_only_hooks=()
+for hook_path in "$FULL"/hooks/live/*.chroot; do
+  desktop_only_hooks+=("$(basename "$hook_path")")
+done
+for absent in "${desktop_only_hooks[@]}"; do
+  check "$absent is absent from the console variant" \
+    "$([[ -f "$MIN/hooks/live/$absent" ]] && echo present || echo absent)" "absent"
+  check "$absent is present in the desktop variant" \
+    "$([[ -f "$FULL/hooks/live/$absent" ]] && echo present || echo absent)" "present"
 done
 
 echo
