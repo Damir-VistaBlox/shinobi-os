@@ -4,6 +4,8 @@
 
 | `test-setup.sh` | The layer's engine, `shinobi-setup`, exercised in a real Kali chroot: refusing a system with no account to apply to, filling skel and the account's home, fixing ownership (the bug that made SDDM refuse logins), idempotence across repeated runs, an operator's local config surviving a re-apply unless `--force`, an account never being renamed unless asked by name, the sudoers rule that names the account being rewritten with it, and a missing desktop package failing loudly. Runs itself in a container when not root |
 
+| `test-installer.sh` | The Shinobi Installation Wizard's configuration: the sequence is complete and correctly ordered, the two shellprocess jobs have separate configs, the install is offline, the live session's home and sudoers grant are excluded from the copy and its account is removed, no autologin can be inherited, the branding names Shinobi rather than Kali, and Calamares itself loads the configuration and reports no unusable module, no empty job and no broken QML (in a container, headless under Xvfb) |
+
 ## Running it
 
 The source checks need no ISO and no build:
