@@ -384,20 +384,34 @@ not reproduced here since it doesn't change often enough to duplicate.
   and `shinobi egress check` was one import away from failing.
 - **Response streaming is deferred.** Requests are non-streaming, so a provider
   that only streams is not supported yet. Nothing in the gate depends on it.
-- **The image has not been built since the agent and packaging work.** The
-  source suite is green, and the package was installed into a Kali container and
-  checked end to end — build, dependency resolution, postinst, one
-  `shinobi-recon` on `PATH`, all four tools served from the installed copy. That
-  is not the same as a booted image, and the checks that would be are exactly the
-  ones that were skipped: live-build's chroot, the image's own contents, and
-  BIOS/UEFI boot. Two things in particular are unproven on real hardware — that
-  `apt-get install` of the package resolves `python3-mcp` inside live-build's
-  chroot, and that the image ends up with the recon server from the package and
-  no second copy. The first is the same apt call the container test made; the
-  second is asserted statically in `tests/test-package-layout.sh`. Run
-  `gh workflow run build-preview.yml --ref audit-remediation` to close it.
-- The full `shinobi` image still needs a graphical live-boot test: confirm
-  SDDM, Hyprland, Quickshell, and keybindings work together in a real session.
+- **The image builds, and this branch's first build ever is the one that proved
+  it.** Run `36335285871` (2026-09-27, sha `03e85b2`) built the ISO and passed
+  every step: live-build's chroot, the image's own contents, and BIOS/UEFI boot.
+  That closed the two things only a chroot could answer — `apt-get install`
+  resolves `python3-mcp` there, and the image ends up with the package's recon
+  server and no second copy ahead of it on `PATH`.
+
+  Worth recording how the first attempt failed, because the test suite could not
+  have caught it: fifteen minutes of live-build, then
+  `cp: cannot stat '/opt/shinobi/providers/.'`. `distro/build.sh` stages a subset
+  of the repo into the chroot and the image hook builds the package from *that*,
+  so a top-level path in `build-deb.sh` but not in the staging list is simply
+  absent at build time — while the checkout has it, so every local check passes.
+  `providers` arrived that way with the provider-registry stage. Green source
+  checks had never meant this branch could build an image, and now they do;
+  `tests/test-build-config.sh` compares the two lists so the next one is caught in
+  seconds.
+
+  **The boot tests are survival checks, not login tests.** Both logs read
+  "remained alive for the timeout (serial console unavailable)" and "firmware-only
+  serial output": the kernel came up and did not panic, under BIOS and under UEFI.
+  Nobody has watched SDDM start, Hyprland come up, or `shinobi agent` run inside
+  the image. That gap is the next one below, and it is a real one.
+- **The full `shinobi` image still needs a graphical live-boot test:** confirm
+  SDDM, Hyprland, Quickshell, and keybindings work together in a real session,
+  and that `shinobi agent --accept-ungoverned-egress` wires the recon server
+  into an agent *on the image*. The ISO has been built and booted to a live
+  kernel; nothing past that has been observed.
 - Which additional recon tools get MCP wrappers, and in what order —
   proposed next: `gobuster`/`ffuf` (web content discovery), `nikto`,
   `whatweb`, Metasploit RPC. Each is a judgment call about what's safe to
