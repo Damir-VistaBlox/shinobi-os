@@ -375,33 +375,84 @@ installed system first, the first because a tool's web UI on an engagement host
 needs a trust model Omarchy's does not have. Read it for why a decision was
 originally declined, then read the sections above for what actually shipped.
 
-## Installable first, live ISO as one delivery mechanism
+## Three packages, one engine, three ways in
 
-Shinobi has two ways in, and they are not variants of one another — the code
-assumes the installed one:
+The layer ships as three Debian packages, and the whole system is that they have
+one way of being applied:
 
-- **Installed** (`./install.sh`): a `shinobi-core` `.deb` onto an existing Kali
-  box, with the contract in [`docs/architecture.md`](./docs/architecture.md) —
-  using Kali's apt, systemd, D-Bus, Wayland, PipeWire, NetworkManager and BlueZ
-  *without overwriting user configuration*.
-- **Live ISO** (`distro/build.sh`): a hybrid image that owns its filesystem and
-  evaporates at reboot.
+| Package | Carries | Dependable by |
+| --- | --- | --- |
+| `shinobi-core` | CLI, control plane (user units), recon MCP server, tools, provider manifests, overlay repo tooling, archive keyring | anything |
+| `shinobi-desktop` | Hyprland/Quickshell/wofi/kitty dotfiles, Plymouth theme, wallpaper, portal selection — **and the desktop stack's dependencies** | a desktop |
+| `shinobi-installer` | The Shinobi Installation Wizard: Calamares configuration, branding, and the shellprocess steps | an image |
 
-That ordering is visible in the commands rather than only in the docs:
-`shinobi-update` runs `apt-get dist-upgrade` through `pkexec`, and
-`shinobi-snapshot` refuses to run without `shinobi_require_installed` and writes
-dpkg baselines under `/var/lib/shinobi/snapshots`. Neither is meaningful on a
-tmpfs live session, so both are built for the installed case and guarded against
-the other. An ephemeral ISO has nothing to roll forward and nothing to roll back;
-the installed path does, and has to survive reboots, upgrades and an operator's
-existing setup.
+And one implementation of "put the layer on this machine", `shinobi-setup`,
+called by three: the ISO build hook, `install.sh`, and the wizard's
+`shellprocess@finish`. This is the part that is not obvious and was not always
+true. Those three paths each carried their own copy of the provisioning logic,
+they disagreed — the ISO's hook did things `install.sh`'s did not — and the
+installed system was missing the entire desktop layer because that logic and the
+files it applied lived in `includes.chroot`, which only exists while an image is
+being built. Three install paths that each carry their own copy are three
+layers, and only one of them was ever tested.
 
-The consequence worth stating: an install must *coexist* rather than own, which
-is a stricter discipline than the ISO gets for free. It is visible in the
-packaging — systemd user units rather than system units, credentials in the
-kernel keyring on a live system and in a `0600` file otherwise, `/etc/shinobi`
-data treated as the operator's, and a postinst that refuses to call the package
-installed if the recon server cannot import.
+### Why the desktop stack's dependencies are in `Depends`
+
+They used to be in the live image's package list, which is the only place they
+were declared. That list is applied when an image is built, so an installed
+system and the image it came from could not be compared — they were assembled
+from two different sources, and nothing checked that they agreed. One declaration
+now feeds both paths.
+
+### Installing to disk
+
+The Shinobi Installation Wizard is Calamares, branded, with an `unpackfs` flow.
+The decision that everything else follows from: **what gets installed is the
+system that is already running.** The package set `live-build` assembled, the
+desktop layer from `shinobi-desktop`, the fonts fetched and checksum-verified
+during the image build — the image is copied to the disk. A `packages` flow would
+re-resolve all of that from a repository at the moment somebody picks a disk: a
+second list to keep in sync with the image, a network dependency on an install
+that currently has none, and a font it cannot reproduce at all, because that font
+is in no archive.
+
+Three consequences of installing a *live session* rather than assembling a
+system, each handled explicitly in `shellprocess@prep` and `@finish`:
+
+- The live session's own account comes across with the image, and Calamares
+  cannot create an account that already exists. It is removed first — but only
+  if it has no home directory, which is the signature of a copied live account.
+- Its home and `/root` are excluded from the copy. The operator's home is built
+  from `/etc/skel` instead, where the layer's dotfiles live.
+- Its autologin configuration, if a future image ever grows one, would come
+  across with it. A pentest distribution whose installed system logs itself in
+  is a serious defect and is invisible until somebody boots the disk on a train,
+  so the step that removes it is checked twice: once in what is excluded, once in
+  what is deleted.
+
+### The live account is created, not renamed
+
+Kali's live image gets its account name from the kernel command line, and
+live-config prefers that over anything in `/etc/live/config.conf.d`. So the boot
+entries name it — `username=shinobi`, after Kali's parameters, because
+live-config keeps the last value it sees — and live-config writes the sudoers
+grant for that name itself. The earlier approach, `usermod -l` in a build hook
+plus a rewrite of the sudoers rules that name the account, is kept only as a
+fallback for an image that somehow still has a `kali` account.
+
+It was not a close call. `usermod -l` on somebody who administers a machine is
+not a decision a build script should make for them, which is why `shinobi-setup`
+never renames an account unless asked for by name.
+
+### What "installable" costs the other paths
+
+An install must *coexist* rather than own, which is a stricter discipline than
+the ISO gets for free: systemd user units rather than system units, credentials
+in the kernel keyring on a live system and in a `0600` file otherwise,
+`/etc/shinobi` data treated as the operator's, and postinsts that refuse to call
+a package installed when it is not usable. Applying the layer does not overwrite
+an operator's configuration either — homes are completed rather than synced, and
+`--force` is required to overwrite.
 
 ## Deliberately not built yet
 
@@ -422,8 +473,11 @@ installed if the recon server cannot import.
 - **`refresh config`.** Omarchy can restore any shipped config file into
   `~/.config` on demand, so a broken setting is one command to recover rather
   than an archaeology exercise. Shinobi has no equivalent escape hatch.
-- **Plymouth boot-splash theming** — unattempted: script-based, higher effort,
-  and it needs its own live-boot validation.
+- **Plymouth boot-splash theming** — shipped (it reaches installed systems now
+  that it is in `shinobi-desktop`), but it has been seen exactly once, on a live
+  boot. The image's journal was clean and the splash appeared; that is one
+  observation, and the theme is script-based, so the remaining work is boots on
+  hardware rather than code.
 - **External agent CLIs are outside the egress gate. Their tools are not.**
   There are two gates, and an external agent was outside both at once.
   `shinobi agent` now closes the first: it registers the recon server with the

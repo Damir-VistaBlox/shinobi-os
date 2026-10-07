@@ -8,6 +8,24 @@
 
 | `test-branding.sh` | What the operator sees: a token sweep over boot menus, branding, session configs and desktop entries for `kali` appearing anywhere an operator would read it, with every allowance carrying a reason; the boot menu leading with Shinobi's installer and naming the live account; the installer marker set on exactly the entries that should carry it; and Calamares present on the image that installs but not on a package every CLI install would drag it into |
 
+| `test-install-e2e.sh` | Boots the image, installs it with the Shinobi Installation Wizard, boots **what was installed** from a second disk, and asserts against it: one account and not the live session's, the layer present, the home owned by its account, no inherited autologin, the medium not in fstab, provenance readable. Needs an image (`SHINOBI_E2E_ISO`) and KVM, so it is **not** in `run-all.sh` and skips with an explanation rather than passing quietly |
+
+## The one suite not in `run-all.sh`
+
+`test-install-e2e.sh` needs a built image and KVM, and takes about 25 minutes. It
+is excluded because a suite that needs an artifact a CI run does not have would
+be skipped on every push, and a permanently skipped suite is indistinguishable
+from one that passes. It is run deliberately:
+
+```sh
+SHINOBI_E2E_ISO=~/shinobi-iso-dl/shinobi-os-amd64.iso ./tests/test-install-e2e.sh
+```
+
+Everything the source suite checks is about the tree being coherent. The three
+claims that only an image can confirm -- that the live account is created as
+`shinobi`, that the control plane starts (the `RuntimeDirectory` fix), and that
+the wizard installs anything at all -- are checked here or nowhere.
+
 ## Running it
 
 The source checks need no ISO and no build:
