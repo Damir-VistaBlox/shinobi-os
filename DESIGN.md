@@ -335,8 +335,31 @@ distro. Ported so far, all under `bin/shinobi-*`:
   graphical live boot: its `theme.conf.user` `background=` setting accepts an
   image path. The image hook now replaces that setting with the Shinobi
   wallpaper; the next full-image build will validate the rendered override.
-  Plymouth boot-splash theming remains unattempted: it is
-  script-based, higher effort, and still needs separate live-boot validation.
+
+### Not ports: rebuilt around the threat model
+
+Three subsystems have an Omarchy counterpart and are deliberately *not* ports of
+it. Each was rewritten around what a tool on an engagement host should assume
+about its own configuration, which is a question Omarchy — a personal desktop —
+never has to ask:
+
+- **`shinobi-webapp`** (`omarchy-webapp-*`) — HTTPS wrappers with isolated
+  browser profiles, so a wrapped tool cannot reach the operator's real session.
+  The stored record outlives the URL validation that created it, so `launch`
+  re-validates everything it uses and resolves the browser fresh on every launch
+  rather than reading it back from the record: anything able to edit that JSON — a
+  restored backup, a synced config directory, a bug in another tool — would
+  otherwise choose the program that runs.
+- **`shinobi-plugin`** (`omarchy-*` plugin system) — plugins are *explicitly
+  trusted*, and a manifest declares permissions (`filesystem`, `network`,
+  `shell`, `privileged`, `microphone`, `camera`, `engagement-data`,
+  `tool-execution`) that are validated rather than implied. A plugin here can
+  reach engagement data and invoke recon tools; that is not a category of thing
+  an operator should add by dropping a file in a directory.
+- **`shinobi-capture`** — screenshots land in the active engagement's
+  `evidence/` directory rather than `~/Pictures`, so material captured
+  mid-engagement joins the same audit trail `shinobi-recon` writes to. Omarchy's
+  equivalent has no reason to know what an engagement is.
 
 See the categorized table from the design discussion (agent framework, menu,
 webapp handler, voxtype = high value; theme, capture, notification/audio/
@@ -345,17 +368,62 @@ hardware-quirks layer, consumer app installers, plugin system, dev tooling,
 boot theming = low value / Arch-specific, skipped) for the full triage —
 not reproduced here since it doesn't change often enough to duplicate.
 
-## Deliberately not built yet (needs a decision, not more code)
+That triage predates the shell work and is kept for its reasoning, not its
+verdicts: the webapp handler, plugin system and update/snapshot system were all
+marked skip-or-later and have since been built — the last two because this is an
+installed system first, the first because a tool's web UI on an engagement host
+needs a trust model Omarchy's does not have. Read it for why a decision was
+originally declined, then read the sections above for what actually shipped.
 
-- **Webapp handler** (`omarchy-webapp-install`) — wraps a local web UI as a
-  native launcher app. Not ported yet; would matter if an MCP server grows a
-  control UI, or for wrapping a tool's web UI (BloodHound, etc.) the same way.
-- **Voxtype** (voice typing) — genuinely useful for dictating engagement
-  notes; low priority, not started.
-- **Update/versioning/snapshot system** — Omarchy's `omarchy-update-*` +
-  `omarchy-snapshot` solves "keep a rolling install in sync with upstream."
-  Only matters if Shinobi OS becomes an installed rolling distro rather than a
-  one-shot ISO — that's an open decision, not just unbuilt code.
+## Installable first, live ISO as one delivery mechanism
+
+Shinobi has two ways in, and they are not variants of one another — the code
+assumes the installed one:
+
+- **Installed** (`./install.sh`): a `shinobi-core` `.deb` onto an existing Kali
+  box, with the contract in [`docs/architecture.md`](./docs/architecture.md) —
+  using Kali's apt, systemd, D-Bus, Wayland, PipeWire, NetworkManager and BlueZ
+  *without overwriting user configuration*.
+- **Live ISO** (`distro/build.sh`): a hybrid image that owns its filesystem and
+  evaporates at reboot.
+
+That ordering is visible in the commands rather than only in the docs:
+`shinobi-update` runs `apt-get dist-upgrade` through `pkexec`, and
+`shinobi-snapshot` refuses to run without `shinobi_require_installed` and writes
+dpkg baselines under `/var/lib/shinobi/snapshots`. Neither is meaningful on a
+tmpfs live session, so both are built for the installed case and guarded against
+the other. An ephemeral ISO has nothing to roll forward and nothing to roll back;
+the installed path does, and has to survive reboots, upgrades and an operator's
+existing setup.
+
+The consequence worth stating: an install must *coexist* rather than own, which
+is a stricter discipline than the ISO gets for free. It is visible in the
+packaging — systemd user units rather than system units, credentials in the
+kernel keyring on a live system and in a `0600` file otherwise, `/etc/shinobi`
+data treated as the operator's, and a postinst that refuses to call the package
+installed if the recon server cannot import.
+
+## Deliberately not built yet
+
+- **Voxtype** (voice typing) — genuinely useful for dictating engagement notes;
+  low priority, not started. This is the only subsystem in Omarchy's inventory
+  that is simply absent.
+- **A single themed shell process.** Omarchy v4 "Quattro" merged the bar,
+  launcher, menus, OSD, lock screen and polkit agent into one long-running
+  Quickshell with a plugin architecture, replacing Waybar, Walker, Mako, hyprlock,
+  hypridle, swaybg and polkit-gnome. Shinobi has a Quickshell bar plus a
+  stateless wofi menu, because the menu port assumed no shell daemon to talk to.
+  That assumption is now weaker than it was — `shinobi-shellctl` exists — so this
+  is the largest remaining UX gap and worth a decision rather than a port.
+- **Menu depth.** The palette is seven routes (agent, engagement, scope,
+  clipboard, theme, keybindings, ...). Omarchy's is a nested, filterable JSONC
+  palette that searches apps and commands from one surface. Same wofi mechanism,
+  much less of it.
+- **`refresh config`.** Omarchy can restore any shipped config file into
+  `~/.config` on demand, so a broken setting is one command to recover rather
+  than an archaeology exercise. Shinobi has no equivalent escape hatch.
+- **Plymouth boot-splash theming** — unattempted: script-based, higher effort,
+  and it needs its own live-boot validation.
 - **External agent CLIs are outside the egress gate. Their tools are not.**
   There are two gates, and an external agent was outside both at once.
   `shinobi agent` now closes the first: it registers the recon server with the
