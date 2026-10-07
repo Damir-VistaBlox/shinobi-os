@@ -114,6 +114,26 @@ else
   printf 'Shinobi OS ready — no active engagement. Start with: shinobi engagement new <name>\n'
 fi
 
+# Provider readiness.
+#
+# "AI offline" in the status bar has three quite different causes -- no key
+# stored, no engagement clearing cloud egress, a trust profile below operator --
+# and the bar cannot tell them apart. This reports them per provider, because
+# they are separate fixes and "unavailable" is not something an operator can act
+# on. Advisory: it exits non-zero when nothing is ready, and that must not turn
+# a healthy desktop into a failing doctor, so the code is captured rather than
+# propagated.
+#
+# The engagement and service checks above are the ones that decide the exit
+# status. A machine with no LLM provider configured is a working Shinobi.
+provider_readiness=""
+if provider_ctl="$(dirname -- "$(readlink -f -- "${BASH_SOURCE[0]}")")/../libexec/shinobi/shinobi_control/providerctl.py"; then
+  provider_readiness="$(PYTHONPATH="$(dirname -- "$(dirname -- "$provider_ctl")")" python3 -m shinobi_control.providerctl readiness 2>&1 || true)"
+fi
+if [[ -n "$provider_readiness" ]]; then
+  printf '\n%s\n' "$provider_readiness"
+fi
+
 # The console-only image intentionally has no Quickshell. Check it only from
 # the graphical Hyprland session, where a missing panel otherwise looks like a
 # silent desktop failure.

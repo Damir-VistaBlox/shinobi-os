@@ -382,6 +382,21 @@ not reproduced here since it doesn't change often enough to duplicate.
   egress policy and the scope policy are both parsed with it, so the control
   plane already shipped code that could not be imported on a host without it,
   and `shinobi egress check` was one import away from failing.
+- **The status bar's `AI offline` is one word for four different states.** The
+  panel reads the daemon socket and knows whether the broker is up, which is not
+  the same question as whether a provider could be used. No key stored, an
+  engagement that has not cleared cloud egress, and a trust profile below
+  operator are three separate fixes, and an operator reading "offline" cannot
+  act on any of them. `shinobi provider readiness` answers the question the bar
+  was being asked, per provider and per blocker, and `shinobi doctor` prints the
+  same report. It reuses the gate's own clearance reader so it cannot drift from
+  what actually authorizes a request, and it deliberately does *not* call
+  `authorize()` — a status command must never consume a per-turn approval.
+
+  What it does not solve is selection: there is still no default provider, so
+  every `shinobi llm ask` names one explicitly, and the desktop has nothing
+  stable to bind to. That is defensible for the CLI and is the reason provider
+  readiness is not surfaced in the panel yet.
 - **Response streaming is deferred.** Requests are non-streaming, so a provider
   that only streams is not supported yet. Nothing in the gate depends on it.
 - **The image builds, and this branch's first build ever is the one that proved

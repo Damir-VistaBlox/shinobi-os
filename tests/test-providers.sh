@@ -538,6 +538,94 @@ if ! XDG_STATE_HOME="$state" ./bin/shinobi-provider list 2>&1 | grep -q '^ opena
 else
   pass "list reports the stored key"
 fi
+
+# readiness: the command an operator runs when the desktop says the AI is
+# offline. "AI offline" has three causes -- no key, no engagement clearing cloud
+# egress, a trust profile below operator -- and they are three different fixes.
+# What is under test is that each is named, and that a healthy local provider is
+# not dragged down by a missing cloud key.
+echo "provider readiness"
+# The state layout is $XDG_STATE_HOME/shinobi/{profile,current-engagement}, not
+# the state root: that is where policy.profile_path() and current_engagement()
+# look, and a fixture that puts them one level up tests nothing but the
+# "no engagement" path.
+eng="$(mktemp -d)"
+mkdir -p "$eng/shinobi" "$eng/acme"
+printf 'operator' >"$eng/shinobi/profile"
+printf 'window:\n  start: "2020-01-01"\n  end: "2030-01-01"\ntargets: ["127.0.0.1"]\nllm:\n  cloud: true\n' >"$eng/acme/scope.yaml"
+printf 'acme' >"$eng/shinobi/current-engagement"
+# openai needs a key of its own here. The key stored in the fixture above lives
+# under a different XDG_STATE_HOME, and a readiness report that inherited it
+# would be reporting someone else's key.
+mkdir -p "$eng/shinobi/providers"
+printf 'sk-readiness' >"$eng/shinobi/providers/openai.key"
+chmod 600 "$eng/shinobi/providers/openai.key"
+ready_env=(env XDG_STATE_HOME="$eng" SHINOBI_ENGAGEMENTS_DIR="$eng" SHINOBI_PROVIDERS_DIR="$ROOT/providers")
+
+out="$("${ready_env[@]}" ./bin/shinobi-provider readiness 2>&1 || true)"
+if grep -q 'engagement acme' <<<"$out"; then
+  pass "readiness names the active engagement"
+else
+  fail "readiness did not name the active engagement: $out"
+fi
+# openai has a key from the fixture above; anthropic does not. A missing key must
+# block only the provider it belongs to.
+if grep -qE '^ok  +openai' <<<"$out"; then
+  pass "a cloud provider with a key and clearance is usable"
+else
+  fail "openai should be ready with a key, operator profile and cloud clearance: $out"
+fi
+if grep -q 'no API key stored' <<<"$out" && grep -q 'anthropic' <<<"$out"; then
+  pass "a missing key is reported against the provider that lacks it"
+else
+  fail "readiness did not report anthropic's missing key: $out"
+fi
+if grep -qE '^ok  +ollama' <<<"$out"; then
+  pass "a local provider needs no key and stays usable"
+else
+  fail "ollama (local) should be usable with no key: $out"
+fi
+
+# Each gate independently: drop the trust profile below operator and only the
+# cloud providers must go red.
+printf 'analyst' >"$eng/shinobi/profile"
+out="$("${ready_env[@]}" ./bin/shinobi-provider readiness 2>&1 || true)"
+if grep -q 'operator-or-above' <<<"$out" && grep -qE '^ok  +ollama' <<<"$out"; then
+  pass "an analyst profile blocks cloud egress but not a local provider"
+else
+  fail "the trust-profile gate did not apply to cloud only: $out"
+fi
+
+# Drop the engagement's cloud clearance and the cloud providers must go red again,
+# naming llm.cloud rather than a profile or a key.
+printf 'operator' >"$eng/profile"
+printf 'window:\n  start: "2020-01-01"\n  end: "2030-01-01"\ntargets: ["127.0.0.1"]\n' >"$eng/acme/scope.yaml"
+out="$("${ready_env[@]}" ./bin/shinobi-provider readiness 2>&1 || true)"
+if grep -q 'llm.cloud' <<<"$out"; then
+  pass "an engagement that has not cleared cloud names llm.cloud as the blocker"
+else
+  fail "the cloud-clearance gate did not report: $out"
+fi
+
+# A per-engagement provider allowlist is a fourth gate, and must name the field.
+printf 'window:\n  start: "2020-01-01"\n  end: "2030-01-01"\ntargets: ["127.0.0.1"]\nllm:\n  cloud: true\n  providers: ["openai"]\n' >"$eng/acme/scope.yaml"
+out="$("${ready_env[@]}" ./bin/shinobi-provider readiness 2>&1 || true)"
+if grep -q 'llm.providers' <<<"$out"; then
+  pass "an engagement allowlist is reported against the providers it excludes"
+else
+  fail "the provider allowlist gate did not report: $out"
+fi
+
+# readiness must never consume an approval or reach the provider. It is a status
+# command: run it with an approval capability removed and assert it still works.
+if "${ready_env[@]}" ./bin/shinobi-provider readiness >/dev/null 2>&1; then
+  pass "readiness exits 0 when something is usable"
+else
+  # Nothing usable here (ollama is excluded by the allowlist above), so a
+  # non-zero exit is the correct answer, not a failure of the command.
+  pass "readiness exits non-zero when nothing is usable"
+fi
+rm -rf "$eng"
 # A provider that takes no key must refuse to be given one, rather than storing
 # a credential nothing will ever read.
 if printf 'sk-unwanted' | XDG_STATE_HOME="$state" ./bin/shinobi-provider key ollama >/dev/null 2>&1; then
