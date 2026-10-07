@@ -50,6 +50,34 @@ done
 grep -Fq 'Requires=shinobi-migrate.service' \
   "$ROOT/packaging/shinobi-core/usr/lib/systemd/user/shinobi-shell.service" \
   || fail "shell service does not require migrations"
+
+# A unit that hardens its filesystem and names a %t/... path in ReadWritePaths
+# must also declare RuntimeDirectory for that path, or it can never start.
+#
+# ProtectSystem=strict works by bind-mounting each ReadWritePaths entry, and a
+# bind mount of a path that does not exist fails the unit at step NAMESPACING --
+# before ExecStart, so the daemon never runs and never gets to create the
+# directory it needs. With RestartSec=2 that is a crash loop, and it is silent
+# from the outside: the status bar just says the service is offline.
+#
+# shinobi-agentd and shinobi-contextd both shipped this way and both crash-looped
+# on a live image, where the status bar read "CTX offline" and nothing else
+# explained why. RuntimeDirectory= makes systemd create the path first.
+for unit in shinobi-agentd.service shinobi-contextd.service; do
+  path="$ROOT/packaging/shinobi-core/usr/lib/systemd/user/$unit"
+  grep -Eq '^ProtectSystem=strict$' "$path" \
+    || continue  # without ProtectSystem the ReadWritePaths bind is not fatal
+  runtime_dirs="$(sed -n 's/^RuntimeDirectory=//p' "$path" | tr ' ' '\n' | grep -v '^$' || true)"
+  for rw in $(sed -n 's/^ReadWritePaths=//p' "$path" | tr ' ' '\n' | grep -v '^$'); do
+    case "$rw" in
+      %t/*)
+        leaf="${rw#%t/}"
+        grep -qxF "$leaf" <<<"$runtime_dirs" \
+          || fail "$unit names '$rw' in ReadWritePaths without RuntimeDirectory=$leaf; systemd bind-mounts that path before ExecStart and a missing one fails the unit at NAMESPACING"
+        ;;
+    esac
+  done
+done
 [[ -s "$ROOT/packaging/shinobi-core/usr/lib/systemd/user/shinobi-desktop.target" ]] \
   || fail "missing Shinobi desktop target"
 grep -Fq 'Wants=shinobi-migrate.service shinobi-shell.service shinobi-agentd.service shinobi-contextd.service' \
