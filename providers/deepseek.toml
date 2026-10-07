@@ -1,0 +1,20 @@
+# DeepSeek. OpenAI chat-completions shape, so `openai-compatible`.
+#
+# Cloud: every prompt leaves this machine, so an engagement needs explicit
+# clearance in its scope.yaml before this provider will be used.
+id = "deepseek"
+name = "DeepSeek"
+api = "openai-compatible"
+base_url = "https://api.deepseek.com/v1"
+egress = "cloud"
+requires_key = true
+default_model = "deepseek-chat"
+
+# A starting set, not the full catalogue. DeepSeek's reasoner emits reasoning
+# content before the answer; the client treats the reply as text either way, so
+# it works, but the model is worth naming because its output reads differently.
+# Edit or override in /etc/shinobi/providers.d.
+models = [
+  "deepseek-chat",
+  "deepseek-reasoner",
+]

@@ -1,0 +1,21 @@
+# Groq. OpenAI chat-completions shape, so `openai-compatible`.
+#
+# Cloud: every prompt leaves this machine, so an engagement needs explicit
+# clearance in its scope.yaml before this provider will be used.
+id = "groq"
+name = "Groq"
+api = "openai-compatible"
+base_url = "https://api.groq.com/openai/v1"
+egress = "cloud"
+requires_key = true
+default_model = "llama-3.3-70b-versatile"
+
+# A starting set, not the full catalogue. Groq's catalogue is a curated set of
+# open-weight models on its own hardware, so it changes with what they host
+# rather than with a vendor's own releases. Edit or override in
+# /etc/shinobi/providers.d.
+models = [
+  "llama-3.3-70b-versatile",
+  "llama-3.1-8b-instant",
+  "openai/gpt-oss-120b",
+]

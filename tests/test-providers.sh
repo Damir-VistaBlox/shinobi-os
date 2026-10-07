@@ -74,6 +74,10 @@ from shinobi_control import providerctl as pc
 
 problems = []
 providers = pc.load_all([pathlib.Path("providers")])
+# Both market-standard wire shapes must ship at least one provider, and a
+# provider using either must round-trip a tool call. The registry is where a
+# vendor is added; the wire layer is what has to actually speak to it, and a
+# manifest that parses proves only the first.
 for required in ("openai", "anthropic", "ollama"):
     if required not in providers:
         problems.append(f"missing shipped manifest: {required}")
@@ -643,6 +647,143 @@ else
   pass "forget removes the stored key"
 fi
 rm -rf "$state"
+
+# The vendors that speak one of the two standard shapes should ship a manifest,
+# so "can I use Grok?" is answered by a provider that exists rather than by
+# writing one first.
+echo "provider coverage of the two standard API shapes"
+# Exported here rather than required from the caller: a test that only works
+# when the person running it remembered an env var is a test that silently
+# stops testing. run-all.sh calls this suite with nothing set.
+export PROVIDER_TEST_ROOT="$ROOT"
+if python3 - <<'PYEOF'
+import os, pathlib, sys, tomllib
+root = pathlib.Path(os.environ["PROVIDER_TEST_ROOT"])
+apis = {}
+locals_by_id = {}
+for path in sorted((root / "providers").glob("*.toml")):
+    with path.open("rb") as fh:
+        data = tomllib.load(fh)
+    apis.setdefault(data["api"], []).append(data["id"])
+    locals_by_id[data["id"]] = data
+openai_shaped = apis.get("openai", []) + apis.get("openai-compatible", [])
+anthropic_shaped = apis.get("anthropic", [])
+problems = []
+if not openai_shaped:
+    problems.append("no provider speaks the OpenAI chat-completions shape")
+if not anthropic_shaped:
+    problems.append("no provider speaks the Anthropic messages shape")
+# The point of the user's request: the named vendors must be usable without the
+# operator writing a manifest first.
+for wanted in ("xai", "deepseek", "openai", "anthropic", "vllm", "ollama"):
+    if wanted not in openai_shaped + anthropic_shaped:
+        problems.append(f"{wanted} ships no manifest")
+# Two local examples, not one: a self-hosted vLLM is the case the reachable_on
+# field exists for, and shipping only ollama would leave it documented in a
+# comment instead of as something an operator can copy.
+locals_ = [pid for pid, data in locals_by_id.items() if data["egress"] == "local"]
+for wanted in ("ollama", "vllm"):
+    if wanted not in locals_:
+        problems.append(f"{wanted} ships no local manifest")
+if problems:
+    print("; ".join(problems))
+    sys.exit(1)
+print(f"openai-shaped: {', '.join(sorted(openai_shaped))}")
+print(f"anthropic-shaped: {', '.join(sorted(anthropic_shaped))}")
+PYEOF
+then
+  pass "both standard shapes are covered by shipped manifests"
+else
+  fail "provider manifests do not cover both standard API shapes"
+fi
+
+# A tool call must survive the round trip in both shapes, including where the
+# two disagree on where the schema lives: `function.parameters` nested under
+# `function` for OpenAI, `input_schema` at the top level for Anthropic. Getting
+# this wrong produces a request the vendor accepts and then silently ignores the
+# tools, which looks exactly like a model that cannot call tools.
+# Under `set -e`, a failing command substitution in an assignment aborts the
+# whole script before the check can report anything -- the suite would exit
+# non-zero with no message naming the failure. So the status is captured and the
+# substitution's non-zero exit is tolerated, the way the other checks in this
+# file do it.
+set +e
+wire_out="$(python3 - <<'PYEOF'
+import os, sys, pathlib
+sys.path.insert(0, str(pathlib.Path(os.environ["PROVIDER_TEST_ROOT"]) / "libexec" / "shinobi"))
+from shinobi_control.llm import wire
+
+msgs = [
+    wire.user("scan it"),
+    wire.assistant(tool_calls=(wire.ToolCall("nmap_scan", {"target": "127.0.0.1"}),)),
+]
+tools = [{"name": "nmap_scan", "description": "d", "parameters": {"type": "object"}}]
+
+openai_reply = {
+    "choices": [{
+        "message": {
+            "content": "ok",
+            "tool_calls": [{
+                "id": "c",
+                "type": "function",
+                "function": {"name": "nmap_scan", "arguments": '{"target":"127.0.0.1"}'},
+            }],
+        },
+    }],
+}
+anthropic_reply = {
+    "content": [{"type": "tool_use", "id": "t", "name": "nmap_scan",
+                 "input": {"target": "127.0.0.1"}}],
+}
+
+problems = []
+
+for api, path, reply in (("openai-compatible", "/chat/completions", openai_reply),
+                         ("anthropic", "/messages", anthropic_reply)):
+    got_path, body = wire.build(api, "m", "sys", msgs, tools)
+    if got_path != path:
+        problems.append(f"{api}: posts {got_path}, expected {path}")
+    # The two shapes disagree about where the system prompt lives: Anthropic
+    # takes it as a top-level field, OpenAI takes it as the first message. Both
+    # must carry it -- a dropped system prompt is the kind of omission that
+    # still returns HTTP 200 and quietly changes every answer.
+    if api == "anthropic":
+        if "system" not in body:
+            problems.append("anthropic: system prompt missing from the body")
+    else:
+        roles = [m.get("role") for m in body.get("messages", [])]
+        if "system" not in roles:
+            problems.append(f"openai-compatible: no system message, roles={roles}")
+    entry = body["tools"][0]
+    if api == "anthropic":
+        if "input_schema" not in entry:
+            problems.append("anthropic: tool schema not at input_schema")
+    else:
+        if "function" not in entry or "parameters" not in entry["function"]:
+            problems.append("openai-compatible: tool schema not nested under function")
+
+    parsed = wire.parse(api, 200, reply)
+    if not parsed.tool_calls or parsed.tool_calls[0].name != "nmap_scan":
+        problems.append(f"{api}: tool call did not parse back")
+    elif parsed.tool_calls[0].arguments != {"target": "127.0.0.1"}:
+        problems.append(f"{api}: tool arguments came back wrong: {parsed.tool_calls[0].arguments}")
+
+if problems:
+    print("; ".join(problems))
+    sys.exit(1)
+PYEOF
+)"
+# Captured by assignment rather than tested via `$?`: after a heredoc, `$?` is
+# the status of whatever ran last, and under `set -e` that is how a real
+# regression gets reported as a pass.
+set -e
+if [[ -z $wire_out ]]; then
+  pass "both shapes build and parse a tool call"
+else
+  printf '  FAIL %s\n' "a standard wire shape does not round-trip tools" >&2
+  printf '%s\n' "$wire_out" | sed 's/^/       /' >&2
+  fails=$((fails + 1))
+fi
 
 if (( fails > 0 )); then
   echo "provider tests: $fails FAILED" >&2

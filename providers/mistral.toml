@@ -1,0 +1,20 @@
+# Mistral. OpenAI chat-completions shape, so `openai-compatible`.
+#
+# Cloud: every prompt leaves this machine, so an engagement needs explicit
+# clearance in its scope.yaml before this provider will be used.
+id = "mistral"
+name = "Mistral"
+api = "openai-compatible"
+base_url = "https://api.mistral.ai/v1"
+egress = "cloud"
+requires_key = true
+default_model = "mistral-large-latest"
+
+# A starting set, not the full catalogue. Mistral's `-latest` aliases track the
+# current flagship, so a pinned id here is a starting point rather than a
+# promise. Edit or override in /etc/shinobi/providers.d.
+models = [
+  "mistral-large-latest",
+  "mistral-small-latest",
+  "codestral-latest",
+]

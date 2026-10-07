@@ -138,6 +138,27 @@ correlated, and never the prompt.
   and a hand-written `mcpServers` entry that has quietly stopped being right
   looks exactly like a server that is registered and never being called. An
   existing registration is left alone rather than re-added.
+- `providers/*.toml` — the LLM provider registry. Two wire shapes are
+  implemented and validated, because they are the two the market settled on:
+  OpenAI's `/chat/completions` and Anthropic's `/messages`. `api` says which,
+  and the difference is more than cosmetic — the tool schema nests under
+  `function.parameters` in one and sits at `input_schema` in the other, and the
+  system prompt is a top-level field in one and the first message in the other.
+  Getting either wrong yields a request the vendor accepts, with the tools
+  silently ignored, which presents as a model that cannot call tools.
+
+  `api` is deliberately not the same field as `egress`. `openai-compatible` is
+  a protocol, not a vendor, so xAI, DeepSeek, Mistral and Groq all use it while
+  remaining distinct cloud providers with their own keys, accounts and data
+  paths. Conflating the two would make "speaks a standard API" mean "is
+  somebody's cloud" and quietly waive the clearance that keeps client data off
+  a third party.
+
+  Shipped: `anthropic` (the Anthropic shape), `openai`, `xai`, `deepseek`,
+  `mistral`, `groq` (OpenAI shape), and `ollama` and `vllm` as the two local
+  examples. The self-hosted `vllm` manifest is the one to copy for a private
+  inference server, because `reachable_on` is what makes the cloud exemption
+  conditional on where the bytes actually go.
 - `mcp-servers/shinobi-recon` — Python MCP server. `nmap_scan` was the proof of
   concept for the scope-gate + audit-log pattern; `dns_lookup`,
   `whatweb_scan` and `http_headers` followed it, and each is a thin function
