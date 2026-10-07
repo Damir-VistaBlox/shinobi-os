@@ -31,3 +31,25 @@ fi
 # verified, resolving its `mcp` by unpinned pip at build time. That is the exact
 # failure the package now checks for, and it would have been reintroduced from
 # the other side. The package ships one server, verified at install.
+
+# Provenance: state the layering as a checkable fact rather than leaving it to be
+# inferred from the version string.
+#
+# The point is not documentation. On an engagement host, "is this Kali, or
+# something wearing Kali's name?" is the first question worth answering, and the
+# answer has to be verifiable by whoever is holding the machine -- not asserted
+# here. base_repo names the archive this image was built from, so a reviewer can
+# diff the installed package set against upstream Kali and see that the tool
+# suite is untouched, which is the whole security premise: the AI layer is the
+# boundary, and it only works while the base is.
+{
+  printf 'layer=shinobi-os\n'
+  printf 'layer_version=%s\n' "$(cat /usr/share/shinobi/version 2>/dev/null || printf 'unknown')"
+  printf 'base=kali\n'
+  printf 'base_id=%s\n' "$(. /etc/os-release 2>/dev/null; printf '%s' "${VERSION_ID:-unknown}")"
+  printf 'base_repo=http.kali.org/kali kali-rolling main\n'
+  printf 'relationship=overlay\n'
+  printf 'relationship_note=Kali is the unmodified base: tool suite, kernel and archive.\n'
+  printf 'The Shinobi layer sits on top and owns nothing Kali ships.\n'
+} >/usr/share/shinobi/provenance
+chmod 0644 /usr/share/shinobi/provenance

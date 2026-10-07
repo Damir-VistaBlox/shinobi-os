@@ -1,5 +1,7 @@
 # Shinobi OS local test suite
 
+| `test-repo.sh` | The apt overlay repository: index layout apt requires, per-arch indexes, checksums that match the files, a reproducible index, real GPG signing verified with `gpg --verify`, refusal to publish unsigned without the explicit opt-out, refusal of a natively-compiled or malformed package rather than mirroring it, and the operator-facing `shinobi repo` command's keyring and pinning contract |
+
 ## Running it
 
 The source checks need no ISO and no build:

@@ -46,8 +46,21 @@ check "the console variant has a tooling hook" "$([[ -f "$min_hook" ]] && echo y
 echo "== both variants install shinobi-core =="
 for variant_hook in "$full_hook" "$min_hook"; do
   name="$(basename "$(dirname "$(dirname "$(dirname "$variant_hook")")")")"
-  check "$name builds and installs the package" \
-    "$(grep -q 'build-deb.sh' "$variant_hook" && grep -q 'dpkg -i' "$variant_hook" && echo yes || echo no)" "yes"
+  # Asserted on executable lines only. This previously grepped the whole file for
+  # 'dpkg -i', and passed for the wrong reason: the desktop hook explained at
+  # length why it uses apt instead, so the string was present in a comment while
+  # no install line used it at all. The check was satisfied by prose about the
+  # change rather than by the change.
+  hook_cmds() { sed -e 's/[[:space:]]*#.*$//' -e '/^[[:space:]]*$/d' "$1"; }
+  check "$name builds the package" \
+    "$(hook_cmds "$variant_hook" | grep -q 'build-deb.sh' && echo yes || echo no)" "yes"
+  # apt, not dpkg -i: the package depends on python3-mcp and python3-yaml, and
+  # dpkg -i resolves nothing, so it would unpack the files and leave the package
+  # unconfigured with the dependency absent.
+  check "$name installs it with apt so Depends are resolved" \
+    "$(hook_cmds "$variant_hook" | grep -qE 'apt-get install' && echo yes || echo no)" "yes"
+  check "$name does not install it with a bare dpkg -i" \
+    "$(hook_cmds "$variant_hook" | grep -qE '^[[:space:]]*(sudo )?dpkg -i' && echo dpkg || echo no)" "no"
   check "$name does not bypass the package by symlinking the CLI" \
     "$(grep -q 'ln -sf "\$script"' "$variant_hook" && echo symlinks || echo no)" "no"
 done
