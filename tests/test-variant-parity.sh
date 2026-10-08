@@ -36,8 +36,12 @@ check() {
   fi
 }
 
-full_hook="$FULL/hooks/live/0020-shinobi-tooling.chroot"
-min_hook="$MIN/hooks/live/0020-shinobi-tooling.chroot"
+# Found by what the hook does rather than by its number: the desktop hook was
+# renamed to 0010-install-layer when the desktop layer became its own package,
+# and this file kept pointing at 0020 -- a check on a file that no longer exists
+# reads as a check on the one that does.
+full_hook="$(grep -rl 'build-deb.sh' "$FULL/hooks/live/" | head -1)"
+min_hook="$(grep -rl 'build-deb.sh' "$MIN/hooks/live/" | head -1)"
 
 echo "== both variants exist and install the tooling layer =="
 check "the desktop variant has a tooling hook" "$([[ -f "$full_hook" ]] && echo yes || echo no)" "yes"
@@ -46,26 +50,49 @@ check "the console variant has a tooling hook" "$([[ -f "$min_hook" ]] && echo y
 echo "== both variants install shinobi-core =="
 for variant_hook in "$full_hook" "$min_hook"; do
   name="$(basename "$(dirname "$(dirname "$(dirname "$variant_hook")")")")"
-  check "$name builds and installs the package" \
-    "$(grep -q 'build-deb.sh' "$variant_hook" && grep -q 'dpkg -i' "$variant_hook" && echo yes || echo no)" "yes"
+  # Asserted on executable lines only. This previously grepped the whole file for
+  # 'dpkg -i', and passed for the wrong reason: the desktop hook explained at
+  # length why it uses apt instead, so the string was present in a comment while
+  # no install line used it at all. The check was satisfied by prose about the
+  # change rather than by the change.
+  hook_cmds() { sed -e 's/[[:space:]]*#.*$//' -e '/^[[:space:]]*$/d' "$1"; }
+  check "$name builds the package" \
+    "$(hook_cmds "$variant_hook" | grep -q 'build-deb.sh' && echo yes || echo no)" "yes"
+  # apt, not dpkg -i: the package depends on python3-mcp and python3-yaml, and
+  # dpkg -i resolves nothing, so it would unpack the files and leave the package
+  # unconfigured with the dependency absent.
+  check "$name installs it with apt so Depends are resolved" \
+    "$(hook_cmds "$variant_hook" | grep -qE 'apt-get install' && echo yes || echo no)" "yes"
+  check "$name does not install it with a bare dpkg -i" \
+    "$(hook_cmds "$variant_hook" | grep -qE '^[[:space:]]*(sudo )?dpkg -i' && echo dpkg || echo no)" "no"
   check "$name does not bypass the package by symlinking the CLI" \
     "$(grep -q 'ln -sf "\$script"' "$variant_hook" && echo symlinks || echo no)" "no"
 done
 
-echo "== the two tooling hooks run the same commands =="
-# The console variant's header claimed it was the desktop hook "minus the
-# Quickshell-specific line", but that line no longer exists in the desktop hook,
-# so there was no console-specific difference left to preserve -- only drift.
-# Compare the executable lines rather than the bytes: the console copy carries a
-# header explaining the duplication, and a comment cannot break an image, but a
-# changed command can. This is what stops the hooks drifting apart a third time.
+echo "== each variant's hook does what that variant is =="
+# These two used to be near-copies and the test asserted they were, which is what
+# stopped them drifting. They are no longer the same shape -- the console image
+# installs one package and writes provenance, the desktop installs two and applies
+# the layer -- so comparing them byte for byte would now be asserting that the
+# desktop has no desktop. What has to stay true is that both install the core
+# package and both end up with provenance.
 hook_body() { sed -e 's/[[:space:]]*#.*$//' -e '/^[[:space:]]*$/d' "$1"; }
-if diff <(hook_body "$full_hook") <(hook_body "$min_hook") >/dev/null 2>&1; then
-  check "the tooling hooks run identical commands" "same" "same"
-else
-  check "the tooling hooks run identical commands" \
-    "$(diff <(hook_body "$full_hook") <(hook_body "$min_hook") | tr '\n' '|')" "same"
-fi
+check "the desktop hook installs the core package" \
+  "$(hook_body "$full_hook" | grep -qE 'build-deb\.sh +"\$pkg"' && \
+     grep -q 'for pkg in core desktop' "$full_hook" && echo yes || echo no)" "yes"
+check "the console hook installs the core package" \
+  "$(hook_body "$min_hook" | grep -qE 'build-deb\.sh +core' && echo yes || echo no)" "yes"
+for name in desktop console; do
+  [[ $name == desktop ]] && hook="$full_hook" || hook="$min_hook"
+  check "$name writes provenance through the engine, not by hand" \
+    "$(hook_body "$hook" | grep -q 'shinobi-setup' && echo yes || echo no)" "yes"
+  check "$name does not write the provenance file itself" \
+    "$(hook_body "$hook" | grep -qE '> */usr/share/shinobi/provenance' && echo by-hand || echo no)" "no"
+done
+check "only the desktop variant installs shinobi-desktop" \
+  "$(grep -q 'for pkg in core desktop' "$full_hook" && echo yes || echo no)" "yes"
+check "and the console variant does not" \
+  "$(hook_body "$min_hook" | grep -q 'build-deb.sh desktop' && echo yes || echo no)" "no"
 
 echo "== the package stages what the registry needs =="
 check "build-deb.sh stages the tool manifests" \
@@ -94,11 +121,17 @@ PY
 
 echo "== the console variant is still console-only =="
 # Guard the other direction: parity must not quietly pull the desktop in.
-for absent in 0005-single-desktop 0010-dotfiles 0030-fonts 0040-login-theme 0050-plymouth-theme; do
-  check "$absent.chroot is absent from the console variant" \
-    "$([[ -f "$MIN/hooks/live/$absent.chroot" ]] && echo present || echo absent)" "absent"
-  check "$absent.chroot is present in the desktop variant" \
-    "$([[ -f "$FULL/hooks/live/$absent.chroot" ]] && echo present || echo absent)" "present"
+# 0010-dotfiles and 0030-fonts are gone: both became shinobi-setup's work, so the
+# desktop layer is applied by the engine rather than by a hook per concern.
+desktop_only_hooks=()
+for hook_path in "$FULL"/hooks/live/*.chroot; do
+  desktop_only_hooks+=("$(basename "$hook_path")")
+done
+for absent in "${desktop_only_hooks[@]}"; do
+  check "$absent is absent from the console variant" \
+    "$([[ -f "$MIN/hooks/live/$absent" ]] && echo present || echo absent)" "absent"
+  check "$absent is present in the desktop variant" \
+    "$([[ -f "$FULL/hooks/live/$absent" ]] && echo present || echo absent)" "present"
 done
 
 echo

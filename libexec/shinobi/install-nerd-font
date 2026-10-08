@@ -1,0 +1,89 @@
+#!/bin/sh
+# install-nerd-font -- fetch and install the Nerd Font Shinobi's shell needs.
+#
+# A separate shipped script rather than a function in shinobi-setup, because
+# this is the one step that reaches the network and unpacks bytes into a system
+# directory, and it is the one step worth testing on its own: the logic can be
+# run against a stubbed curl and a temporary destination, with no chroot and no
+# network. What used to be a chroot hook could only be exercised by a full image
+# build, which is why it kept its weaknesses for as long as it did.
+#
+# The archive is 128 MB of patched glyphs. Whatever arrives on the wire becomes
+# trusted font data on every boot, and there is no way to tell a corrupted or
+# substituted download from a good one afterwards. The version is pinned, but a
+# tag names a release, not the bytes -- so the download is verified against a
+# pinned SHA-256, and verified before it is unpacked. Unzipping first and
+# checking afterwards would leave a window in which unverified bytes are already
+# in a directory every boot reads.
+#
+#   install-nerd-font [--dest DIR] [--force]
+#
+# Bumping the version means bumping the checksum. To get the new one:
+#   curl -fsSL https://github.com/ryanoasis/nerd-fonts/releases/download/<tag>/SHA-256.txt \
+#     | grep -i "JetBrainsMono.zip"
+set -eu
+
+NERD_FONT_VERSION="v3.5.1"
+NERD_FONT_NAME="JetBrainsMono"
+# JetBrainsMono.zip from nerd-fonts v3.5.1.
+NERD_FONT_SHA256="fab782a66f7d3019da64f6572db9fc5d3a4bcb19f9fa13e2d8a62e3693d6396e"
+
+DEST="/usr/share/fonts/shinobi-nerd-font"
+force=false
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --dest)
+      DEST="${2:?--dest needs a directory}"
+      shift 2
+      ;;
+    --force) force=true; shift ;;
+    -h | --help)
+      echo "usage: install-nerd-font [--dest DIR] [--force]"
+      exit 0
+      ;;
+    *)
+      echo "install-nerd-font: unknown option '$1'" >&2
+      exit 64
+      ;;
+  esac
+done
+
+if [ "$force" = false ] && [ -d "$DEST" ] && [ -n "$(ls -A "$DEST" 2>/dev/null)" ]; then
+  echo "install-nerd-font: $NERD_FONT_NAME is already installed in $DEST"
+  exit 0
+fi
+
+for tool in curl unzip sha256sum; do
+  if ! command -v "$tool" >/dev/null 2>&1; then
+    echo "install-nerd-font: $tool is not available, so the font was not installed" >&2
+    exit 1
+  fi
+done
+
+archive=$(mktemp)
+# Trap before the download, so an interrupted or rejected fetch cannot leave a
+# partial archive behind for something else to pick up.
+trap 'rm -f "$archive"' EXIT INT TERM
+
+if ! curl -fsSL -o "$archive" \
+  "https://github.com/ryanoasis/nerd-fonts/releases/download/${NERD_FONT_VERSION}/${NERD_FONT_NAME}.zip"; then
+  echo "install-nerd-font: could not download $NERD_FONT_NAME" >&2
+  exit 1
+fi
+
+actual=$(sha256sum "$archive" | cut -d' ' -f1)
+if [ "$actual" != "$NERD_FONT_SHA256" ]; then
+  echo "install-nerd-font: ${NERD_FONT_NAME}.zip sha256 mismatch; nothing was installed" >&2
+  echo "  expected: $NERD_FONT_SHA256" >&2
+  echo "  actual:   $actual" >&2
+  exit 1
+fi
+
+mkdir -p "$DEST"
+unzip -o -q "$archive" -d "$DEST" '*.ttf'
+rm -f "$archive"
+if command -v fc-cache >/dev/null 2>&1; then
+  fc-cache -f "$DEST" >/dev/null 2>&1 || true
+fi
+echo "install-nerd-font: $NERD_FONT_NAME installed in $DEST"

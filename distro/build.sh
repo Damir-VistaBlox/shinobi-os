@@ -52,7 +52,15 @@ echo "== Staging shinobi CLI + MCP server into the overlay (generated, not commi
 STAGE="$OVERLAY/includes.chroot/opt/shinobi"
 rm -rf "$STAGE"
 mkdir -p "$STAGE"
-rsync -a "$ROOT/bin" "$ROOT/libexec" "$ROOT/mcp-servers" "$ROOT/themes" "$ROOT/tools" "$ROOT/packaging" "$STAGE/"
+# Every top-level path packaging/build-deb.sh reads has to be in this list. The
+# hook runs build-deb.sh from /opt/shinobi, not from the checkout, so anything
+# left out here is simply absent when the image is built: `providers` was, and
+# the build died in the chroot at `cp: cannot stat '/opt/shinobi/providers/.'`
+# after fifteen minutes of live-build, on a branch whose source suite was green
+# throughout. tests/test-build-config.sh now compares the two lists so the next
+# one is caught before a build rather than during it.
+rsync -a "$ROOT/bin" "$ROOT/libexec" "$ROOT/mcp-servers" "$ROOT/providers" \
+  "$ROOT/themes" "$ROOT/tools" "$ROOT/packaging" "$STAGE/"
 
 echo "== Linking variant-$SHINOBI_VARIANT into the kali-live checkout =="
 ln -sfn "$OVERLAY/kali-config/variant-$SHINOBI_VARIANT" "$SUBMODULE/kali-config/variant-$SHINOBI_VARIANT"

@@ -1,0 +1,152 @@
+#!/bin/sh
+# Verify this package is usable before dpkg calls it installed.
+#
+# The desktop layer fails quietly. A dotfile that names a command nobody
+# installed, or a wallpaper that did not ship, does not raise an error: Hyprland
+# starts, the session comes up, and the surface that is missing is the one thing
+# the operator was going to judge. A status bar that never renders is
+# indistinguishable from a status bar reporting "AI offline".
+#
+# So the shipped tree is checked against itself:
+#
+#   1. every file the desktop reads at login is present and non-empty
+#   2. every command hyprland.conf starts on login is provided by a package
+#      shinobi-desktop depends on -- checked against this package's own
+#      Depends, so the check needs nothing installed and runs anywhere
+#   3. on a real install, every one of those commands also resolves on PATH
+#
+# (2) is the one that catches drift in CI. Adding `exec-once = waybar` without
+# adding waybar to Depends fails here rather than on somebody's laptop.
+#
+# Written against its own location so it can be run against a staged tree on a
+# host with none of these packages -- the interesting mistakes are in what goes
+# into the package, not in whether it builds.
+set -eu
+
+self=$(cd -- "$(dirname -- "$0")" && pwd)
+# <root>/usr/lib/shinobi/<this file>
+root=$(cd -- "$self/../../.." && pwd)
+
+skel="$root/usr/share/shinobi-dotfiles/etc/skel"
+errors=0
+
+fail() {
+  echo "  $1" >&2
+  errors=$((errors + 1))
+}
+
+# --- 1. files the desktop reads at login -------------------------------------
+for required in \
+  .config/hypr/hyprland.conf \
+  .config/hypr/hyprlock.conf \
+  .config/hypr/hypridle.conf \
+  .config/quickshell/shell.qml \
+  .config/quickshell/Theme.qml \
+  .config/wofi/config \
+  .config/wofi/style.css \
+  .config/kitty/kitty.conf
+do
+  if [ ! -s "$skel/$required" ]; then
+    fail "$skel/$required is missing or empty; the desktop cannot start without it"
+  fi
+done
+
+# The wallpaper is referenced by name from hyprland.conf, so an unreadable path
+# there is a black background and nothing else -- no error anywhere.
+if [ ! -s "$root/usr/share/backgrounds/shinobi-os/shinobi-night.png" ]; then
+  fail "the wallpaper hyprland.conf references is missing from the package"
+fi
+
+if [ ! -s "$root/usr/share/plymouth/themes/shinobi/shinobi.plymouth" ]; then
+  fail "the Plymouth theme is missing, so the boot splash falls back to Kali's"
+fi
+
+if [ ! -s "$root/etc/xdg/xdg-desktop-portal/hyprland-portals.conf" ]; then
+  fail "the Hyprland portal selection is missing; file pickers will not work"
+fi
+
+# --- 2. login-time commands are covered by Depends ---------------------------
+# Read off hyprland.conf rather than a hand-kept list, so a command added to
+# the session is covered the day it is added.
+#
+# Whole lines, not just the command word, because two things about a line decide
+# whether it is required:
+#
+#   * A command with an absolute path is that path. Reducing /usr/libexec/
+#     hyprpolkitagent to its basename and looking it up on PATH reports a command
+#     that is installed and sitting in /usr/libexec as missing.
+#   * A line ending in `|| true` is optional by its author's decision. The
+#     installer autostart is in that category: it belongs to shinobi-installer,
+#     so a shinobi-desktop install without it must not fail, and that is the
+#     whole point of the fallback.
+#
+# BRE groups are \( \? -- plain parentheses are literals here, and an unescaped
+# `exec(-once)?` silently matches nothing, which is a check that passes by
+# finding no commands at all.
+login_lines=$(sed -n 's/^[[:space:]]*exec\(-once\)\{0,1\}[[:space:]]*=[[:space:]]*\(.*\)$/\2/p' \
+  "$skel/.config/hypr/hyprland.conf" 2>/dev/null)
+login_commands=$(printf '%s\n' "$login_lines" | awk 'NF { print $1 }' | sed 's|.*/||' | sort -u)
+required_lines=$(printf '%s\n' "$login_lines" | grep -v '||[[:space:]]*true' || true)
+
+if [ -z "$login_commands" ]; then
+  fail "no exec-once commands found in hyprland.conf; the session would start nothing"
+fi
+
+if [ -f "$root/DEBIAN/control" ]; then
+  depends=$(sed -n 's/^Depends:[[:space:]]*//p' "$root/DEBIAN/control" \
+    | tr ',' '\n' | sed 's/([^)]*)//g' | tr -s ' ' '\n' | grep -v '^$')
+
+  # A binary is not always named after the package that ships it: mako-notifier
+  # installs mako, wl-clipboard installs wl-paste. Guessing that mapping by
+  # normalising dashes would be wrong in both directions, so the exceptions are
+  # listed. A command that is neither covered by a dependency nor listed here
+  # fails, which is the intended outcome: adding a command to the session without
+  # adding whatever provides it is the mistake being caught.
+  providing_package() {
+    case "$1" in
+      mako) printf 'mako-notifier' ;;
+      wl-paste | wl-copy) printf 'wl-clipboard' ;;
+      notify-send) printf 'libnotify-bin' ;;
+      *) printf '%s' "$1" ;;
+    esac
+  }
+
+  # A command satisfied by shinobi-core is covered by Depending on it, and an
+  # optional one is not required at all.
+  for cmd in $(printf '%s\n' "$required_lines" | awk 'NF { print $1 }' | sed 's|.*/||' | sort -u); do
+    case "$cmd" in
+      shinobi-*) continue ;;
+    esac
+    if printf '%s\n' $depends | grep -qx "$(providing_package "$cmd")"; then
+      continue
+    fi
+    fail "hyprland.conf starts '$cmd' at login but no dependency provides it; a desktop with a missing command gives no error, it just comes up incomplete"
+  done
+fi
+
+# --- 3. on a real install, the commands resolve ------------------------------
+# An absolute path is checked as itself. A bare command name is checked on PATH,
+# because that is how Hyprland will find it.
+if [ "$root" = "/" ]; then
+  while IFS= read -r line; do
+    [ -n "$line" ] || continue
+    case "$line" in
+      *"||"*) continue ;;
+    esac
+    cmd=${line%% *}
+    if [ "${cmd#/}" != "$cmd" ]; then
+      [ -x "$cmd" ] || fail "'$cmd' is started by hyprland.conf but is not installed or not executable"
+    elif ! command -v "$cmd" >/dev/null 2>&1; then
+      fail "'$cmd' is started by hyprland.conf but is not installed"
+    fi
+  done <<EOF
+$required_lines
+EOF
+fi
+
+if [ "$errors" -gt 0 ]; then
+  echo "shinobi-desktop: $errors problem(s) found; this package is installed wrong." >&2
+  exit 1
+fi
+
+exit 0

@@ -37,7 +37,7 @@ stage="$(mktemp -d)"
 # inside a directory it cannot write, so restore write permission on the way out.
 trap 'chmod -R u+rwX "$stage" "$package" 2>/dev/null; rm -rf "$stage" "$package"' EXIT
 
-"$ROOT/packaging/build-deb.sh" "$package" >/dev/null
+"$ROOT/packaging/build-deb.sh" core "$package" >/dev/null
 
 dpkg-deb --info "$package" | grep -Fq 'Package: shinobi-core' \
   || { echo 'package-test: package name is not shinobi-core' >&2; exit 1; }
@@ -171,11 +171,19 @@ for name in openai anthropic ollama; do
 done
 echo 'package-test: packaged provider manifests are byte-identical to the source'
 
+# The count comes from the source tree rather than a literal. It was a literal of
+# 3 until five more providers were added, and this assertion -- which only runs
+# on a Debian host, so never in the suite runs on a workstation -- failed on the
+# next CI run rather than at the change that caused it. Counting the source is
+# the property that was actually meant: everything in providers/ is packaged.
 PYTHONPATH="$ROOT/libexec/shinobi" python3 -c '
-import sys
+import pathlib, sys
 from shinobi_control import providerctl
 providers = providerctl.load_all([sys.argv[1]])
-assert len(providers) == 3, f"expected 3 packaged providers, got {len(providers)}"
+expected = sorted(p.stem for p in pathlib.Path(sys.argv[2]).glob("*.toml"))
+assert sorted(providers) == expected, (
+    f"packaged providers {sorted(providers)} do not match the source {expected}"
+)
 # The classification is the security property, so assert it directly rather than
 # trusting that a file which parsed also said the right thing.
 assert providers["openai"].egress == "cloud", "openai must be cloud"
@@ -184,7 +192,7 @@ assert providers["ollama"].egress == "local", "ollama must be local"
 assert providers["ollama"].reachable_on, "the local provider must pin its peers"
 assert providers["openai"].requires_key is True, "openai must need a key"
 assert providers["ollama"].requires_key is False, "the local provider must not need a key"
-' "$stage/usr/share/shinobi/providers" \
+' "$stage/usr/share/shinobi/providers" "$ROOT/providers" \
   || { echo 'package-test: the packaged provider manifests do not load' >&2; exit 1; }
 echo 'package-test: packaged providers load with their egress classification intact'
 

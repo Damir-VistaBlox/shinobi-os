@@ -1,0 +1,155 @@
+#!/bin/sh
+# shinobi-installer-check -- verify the wizard's own configuration.
+#
+# Written against its own location so it can be run against a staged tree, which
+# is what makes the checks about configuration rather than about installation:
+# every interesting mistake here is in a file, and every one of them is invisible
+# until somebody boots the medium.
+#
+# What is checked, and why each one matters:
+#
+#   * the sequence names modules that exist -- a module Calamares cannot find is
+#     skipped silently, so a typo removes the partitioning step or the bootloader
+#     install and the wizard still looks like it finished
+#   * the branding is ours -- Calamares falls back to its default branding for
+#     anything it cannot find, and the default says "Debian" and shows Debian's
+#     slides
+#   * the operator's home is excluded from the copy and the live account is
+#     removed -- otherwise the installed system starts with an account whose
+#     password is the live one
+#   * the live session's autologin configuration is removed
+#   * nothing in the sequence reaches the network -- an offline install that
+#     silently depends on a repository is an install that fails on the train
+set -eu
+
+self=$(cd -- "$(dirname -- "$0")" && pwd)
+# <root>/usr/lib/shinobi/<this file>
+root=$(cd -- "$self/../../.." && pwd)
+
+etc="$root/etc/calamares"
+settings="$etc/settings.conf"
+branding="$etc/branding/shinobi"
+
+errors=0
+fail() {
+  echo "  $1" >&2
+  errors=$((errors + 1))
+}
+
+[ -s "$settings" ] || {
+  fail "$settings is missing; Calamares would fall back to its own defaults"
+  exit 1
+}
+
+# --- the sequence names modules that exist -----------------------------------
+# Entries of the sequence, and nothing else in the YAML. An item that carries a
+# value after the name is structure, not a module: `- show:` opens a phase and
+# `- id: prep` declares an instance, and reading either as a module produces
+# "the sequence names 'show' and Calamares has no such module" for a sequence
+# that is entirely correct.
+module_names() {
+  # At least one space after the dash, and a name that starts with a letter:
+  # without either, the YAML document marker `---` parses as a module called "--".
+  sed -n 's/^[[:space:]]*-[[:space:]][[:space:]]*\([a-zA-Z][a-zA-Z0-9_@-]*\)[[:space:]]*$/\1/p' "$settings" |
+    sed 's/@.*//' | sort -u
+}
+
+if [ -d "$root/usr/lib/x86_64-linux-gnu/calamares/modules" ]; then
+  module_dir="$root/usr/lib/x86_64-linux-gnu/calamares/modules"
+elif [ -d /usr/lib/x86_64-linux-gnu/calamares/modules ]; then
+  module_dir=/usr/lib/x86_64-linux-gnu/calamares/modules
+else
+  module_dir=""
+fi
+
+if [ -n "$module_dir" ]; then
+  for module in $(module_names); do
+    [ -d "$module_dir/$module" ] || [ -f "$module_dir/$module.so" ] ||
+      fail "the sequence names '$module' and Calamares has no such module; it would be skipped silently"
+  done
+else
+  echo "  (Calamares is not installed here, so module existence is not checked)"
+fi
+
+# The search path has to include where the modules actually are. Kali installs
+# them under the multiarch triplet, and Calamares' own example lists a path that
+# does not exist there.
+if ! grep -q 'x86_64-linux-gnu/calamares/modules' "$settings" &&
+  ! grep -q '/usr/lib/calamares/modules' "$settings"; then
+  fail "modules-search does not mention a directory Calamares installs modules into"
+fi
+
+# --- the branding is ours ----------------------------------------------------
+if [ ! -s "$branding/branding.desc" ]; then
+  fail "$branding/branding.desc is missing; the wizard would present itself as the default distribution"
+else
+  # "Kali" in the product name or the wizard name is the base distribution
+  # advertising itself on the screen where the operator decides what to install.
+  if grep -Eqi '(productName|installationWizardName|versionedName|shortProductName):[[:space:]]*"[^"]*kali' \
+    "$branding/branding.desc"; then
+    fail "the branding names Kali as the product; the wizard must present as Shinobi"
+  fi
+  grep -q 'installationWizardName' "$branding/branding.desc" ||
+    fail "the branding does not set installationWizardName, so the window title falls back to Calamares"
+  grep -q '^branding:[[:space:]]*shinobi' "$settings" ||
+    fail "settings.conf does not select the shinobi branding"
+fi
+
+[ -s "$branding/show.qml" ] || fail "$branding/show.qml is missing; the welcome slideshow would be empty"
+for image in $(sed -n 's/^[[:space:]]*product[A-Za-z]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$branding/branding.desc" 2>/dev/null); do
+  [ -s "$branding/$image" ] || fail "the branding references $image, which is not shipped"
+done
+
+# --- the copy excludes the live session's state ------------------------------
+unpackfs="$etc/modules/unpackfs.conf"
+[ -s "$unpackfs" ] || fail "$unpackfs is missing; nothing would be copied to the target"
+grep -q '/home/\*' "$unpackfs" ||
+  fail "unpackfs does not exclude /home/*; the installed system would inherit the live session's home"
+grep -q '/root/\*' "$unpackfs" ||
+  fail "unpackfs does not exclude /root/*; the live session's root configuration would be installed"
+grep -q 'sudoers.d/live' "$unpackfs" ||
+  fail "unpackfs does not exclude the live sudoers grant; an installed system could carry passwordless sudo for a recreated account"
+
+prep="$root/usr/lib/shinobi/shinobi-install-prep"
+[ -s "$prep" ] || fail "$prep is missing; the live session's account would survive onto the disk"
+grep -q 'userdel' "$prep" ||
+  fail "the prep script does not remove the live session's account"
+grep -q '/home/' "$prep" ||
+  fail "the prep script does not distinguish a copied live account from a real one by its home directory"
+
+# --- nothing in the sequence reaches the network -----------------------------
+# The install is offline by design: the archive is on the medium and the layer
+# is already installed. A command here that reaches out would make that true
+# only on a machine with wifi.
+finish="$root/usr/lib/shinobi/shinobi-install-finalise"
+# Executable lines only. Scanning whole files matched the word "apt" in a comment
+# explaining why the stale apt lists are cleared -- a check satisfied by prose
+# about the change, which is the same mistake as the branding audit that only
+# matched quoted values.
+stripped() { sed -e 's/[[:space:]]*#.*$//' "$@"; }
+if stripped "$prep" "$finish" |
+  grep -Eq '(^|[[:space:]])(apt-get|apt|curl|wget|git|pacman)([[:space:]]|$)'; then
+  fail "a wizard step runs a network client; the install is meant to work with no network"
+fi
+
+# --- the finished system is checked, not assumed -----------------------------
+# The layer's own post-checks. A wizard that copies an image and reports success
+# without confirming the control plane arrived has installed a desktop with no
+# gates in it.
+[ -s "$finish" ] || fail "$finish is missing; the layer would be copied but never applied"
+grep -q 'shinobi-setup' "$finish" ||
+  fail "the finish step does not apply the layer with shinobi-setup"
+# Executable lines only: the script explains at length why this matters, and a
+# grep of the whole file is satisfied by the comment saying it does.
+finish_cmds() { sed -e 's/[[:space:]]*#.*$//' -e '/^[[:space:]]*$/d' "$finish"; }
+finish_cmds | grep -qi 'autologin' ||
+  fail "the finish script does not remove any autologin configuration; a live-session autologin would be inherited by the installed system"
+grep -q 'shinobi-recon' "$finish" ||
+  fail "the finish step does not verify the recon server arrived"
+
+if [ "$errors" -gt 0 ]; then
+  echo "shinobi-installer: $errors problem(s) found; this package is installed wrong." >&2
+  exit 1
+fi
+
+exit 0

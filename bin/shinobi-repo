@@ -1,0 +1,107 @@
+#!/usr/bin/env bash
+# shinobi:summary=Enable, disable or inspect the Shinobi OS apt overlay repository
+# shinobi:args=<enable|disable|status>
+# shinobi:examples=shinobi repo enable https://pkgs.shinobi-os.example | shinobi repo status
+set -euo pipefail
+
+# The overlay is listed *alongside* kali-rolling, never in place of it. Kali's
+# archive is where the security fixes for the tools this project exists to
+# expose actually arrive, so the layering is not negotiable: replacing Kali would
+# mean owning a year of kernel, glibc and toolchain CVEs, and a stale fork stays
+# perfectly installable, which for a pentest distro is the failure that matters.
+#
+# The pinning is not decoration. Without it, the day a package name in this
+# project collides with one in Kali, `apt upgrade` resolves the pair by priority
+# and version alone -- and an operator's working, audited layer silently becomes
+# whatever Kali happens to ship under the same name. A pinned origin makes the
+# choice explicit and reversible instead.
+DEFAULT_URL="${SHINOBI_REPO_URL:-}"
+
+list_file=/etc/apt/sources.list.d/shinobi.list
+pin_file=/etc/apt/preferences.d/shinobi
+keyring=/usr/share/keyrings/shinobi-archive-keyring.gpg
+
+usage() {
+  cat <<'USAGE'
+Usage: shinobi repo <enable|disable|status>
+
+  enable <url>   Add the overlay repository and its pinning, then apt-get update
+  disable        Remove both, leaving Kali's own sources untouched
+  status         Show whether it is enabled, and from where
+
+The signing key is expected at:
+  /usr/share/keyrings/shinobi-archive-keyring.gpg
+Ship it with the repository rather than fetching a key over the network: a key
+retrieved over the same channel that distributes the packages it authenticates
+proves nothing.
+USAGE
+}
+
+origin_of() {
+  # apt's pin priority is keyed on origin or release. Whichever this repository
+  # actually publishes, the pin must name the same one or it silently does
+  # nothing -- which is the failure mode a pinning feature has to avoid, because
+  # an inert pin looks exactly like an unnecessary one.
+  sed -n 's/^Origin:[[:space:]]*//p' /usr/share/shinobi/repo-origin 2>/dev/null | head -n1
+}
+
+case "${1:-}" in
+  enable)
+    url="${2:-$DEFAULT_URL}"
+    if [[ -z $url ]]; then
+      echo 'shinobi-repo: no repository URL given.' >&2
+      echo "  shinobi repo enable <url>   (or set SHINOBI_REPO_URL)" >&2
+      exit 2
+    fi
+    if [[ ! -r $keyring ]]; then
+      echo "shinobi-repo: $keyring is missing." >&2
+      echo '  The repository is signed, and the key must come from somewhere the' >&2
+      echo '  operator already trusts. Without it apt cannot verify the index and' >&2
+      echo '  should refuse it.' >&2
+      exit 1
+    fi
+    printf 'deb [signed-by=%s] %s kali-shinobi main\n' "$keyring" "$url" | sudo tee "$list_file" >/dev/null
+    origin="$(origin_of)"
+    if [[ -z $origin ]]; then
+      # Fall back to the host in the URL, which is what apt derives when Origin
+      # is absent from Release. Guessing here would produce a pin that never
+      # matches, so it is better to derive the same thing apt does.
+      origin="$(sed -E 's|^[a-z]+://||; s|/.*$||' <<<"$url")"
+    fi
+    printf 'Package: *\nPin: origin %s\nPin-Priority: 600\n' "$origin" | sudo tee "$pin_file" >/dev/null
+    echo "shinobi-repo: enabled from $url (pinned on origin '$origin')"
+    sudo apt-get update -o Dir::Etc::sourcelist="$list_file" -o Dir::Etc::sourceparts=/dev/null -o APT::Get::List-Cleanup=0 >/dev/null
+    echo 'shinobi-repo: apt-get update succeeded; run "apt-cache policy shinobi-core" to confirm.'
+    ;;
+  disable)
+    sudo rm -f "$list_file" "$pin_file"
+    echo 'shinobi-repo: disabled. Kali sources untouched.'
+    ;;
+  status)
+    if [[ -f $list_file ]]; then
+      echo "enabled:  $list_file"
+      sed 's/^/  /' "$list_file"
+    else
+      echo 'enabled:  no'
+    fi
+    if [[ -f $pin_file ]]; then
+      echo "pinned:   $pin_file"
+      sed 's/^/  /' "$pin_file"
+    else
+      echo 'pinned:   no'
+    fi
+    if [[ -r $keyring ]]; then
+      echo "keyring:  present ($keyring)"
+    else
+      echo "keyring:  MISSING ($keyring) -- the repository would be rejected"
+    fi
+    ;;
+  -h | --help | help)
+    usage
+    ;;
+  *)
+    echo "shinobi-repo: unknown action '${1:-}'" >&2
+    usage >&2
+    exit 2
+    ;;
+esac

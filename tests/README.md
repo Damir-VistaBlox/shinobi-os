@@ -1,5 +1,33 @@
 # Shinobi OS local test suite
 
+| `test-repo.sh` | The apt overlay repository: index layout apt requires, per-arch indexes, checksums that match the files, a reproducible index, real GPG signing verified with `gpg --verify`, refusal to publish unsigned without the explicit opt-out, refusal of a natively-compiled or malformed package rather than mirroring it, and the operator-facing `shinobi repo` command's keyring and pinning contract |
+
+| `test-setup.sh` | The layer's engine, `shinobi-setup`, exercised in a real Kali chroot: refusing a system with no account to apply to, filling skel and the account's home, fixing ownership (the bug that made SDDM refuse logins), idempotence across repeated runs, an operator's local config surviving a re-apply unless `--force`, an account never being renamed unless asked by name, the sudoers rule that names the account being rewritten with it, and a missing desktop package failing loudly. Runs itself in a container when not root |
+
+| `test-installer.sh` | The Shinobi Installation Wizard's configuration: the sequence is complete and correctly ordered, the two shellprocess jobs have separate configs, the install is offline, the live session's home and sudoers grant are excluded from the copy and its account is removed, no autologin can be inherited, the branding names Shinobi rather than Kali, and Calamares itself loads the configuration and reports no unusable module, no empty job and no broken QML (in a container, headless under Xvfb) |
+
+| `test-branding.sh` | What the operator sees: a token sweep over boot menus, branding, session configs and desktop entries for `kali` appearing anywhere an operator would read it, with every allowance carrying a reason; the boot menu leading with Shinobi's installer and naming the live account; the installer marker set on exactly the entries that should carry it; and Calamares present on the image that installs but not on a package every CLI install would drag it into |
+
+| `test-install-e2e.sh` | Boots the image, installs it with the Shinobi Installation Wizard, boots **what was installed** from a second disk, and asserts against it: one account and not the live session's, the layer present, the home owned by its account, no inherited autologin, the medium not in fstab, provenance readable. Needs an image (`SHINOBI_E2E_ISO`) and KVM, so it is **not** in `run-all.sh` and skips with an explanation rather than passing quietly |
+
+| `test-installer-target.sh` | The wizard's own work, executed: a target shaped like an installed system (the three staged packages, the live session's account with no home behind it, its autologin, its stale apt lists, the medium in fstab) and the exact command vectors parsed out of the wizard's configuration run against it in a chroot. Asserts what the target looks like afterwards -- one account, the live one gone, an account with a home left alone, no autologin, the layer applied, provenance written |
+
+## The one suite not in `run-all.sh`
+
+`test-install-e2e.sh` needs a built image and KVM, and takes about 25 minutes. It
+is excluded because a suite that needs an artifact a CI run does not have would
+be skipped on every push, and a permanently skipped suite is indistinguishable
+from one that passes. It is run deliberately:
+
+```sh
+SHINOBI_E2E_ISO=~/shinobi-iso-dl/shinobi-os-amd64.iso ./tests/test-install-e2e.sh
+```
+
+Everything the source suite checks is about the tree being coherent. The three
+claims that only an image can confirm -- that the live account is created as
+`shinobi`, that the control plane starts (the `RuntimeDirectory` fix), and that
+the wizard installs anything at all -- are checked here or nowhere.
+
 ## Running it
 
 The source checks need no ISO and no build:
@@ -36,7 +64,7 @@ on failure. `run-all.sh` runs them in this order and stops at the first failure.
 | `test-mcp-layout.sh` | No module in the server package shadows a stdlib name, and the stdlib still resolves correctly with the package directory on `sys.path` |
 | `test-mcp-e2e.sh` | The assembled `shinobi-recon` server driven over stdio by a real MCP client: all four tools served, in-scope allowed, out-of-scope refused, `nmap_scan` refused until a human approves that exact call, approval not replayable, and both outcomes audited. Skips when the `mcp` package is absent |
 | `test-tool-registry.sh` | `tools/*.toml` is the single source of truth: every MCP tool has a manifest, values come from the manifest, the old hardcoded timeout constants stay gone |
-| `test-providers.sh` | `providers/*.toml` is the LLM provider registry: every manifest classifies its `egress`, cloud endpoints are refused when they are not https or point at loopback, private, CGNAT or metadata addresses, a `local` provider must declare the peers that make it local, unknown fields and duplicate ids are refused, layers compose without silently shadowing, and the credential broker round-trips keys at 0600 while refusing bad ids, empty keys, loose modes and planted symlinks |
+| `test-providers.sh` | `providers/*.toml` is the LLM provider registry: every manifest classifies its `egress`, cloud endpoints are refused when they are not https or point at loopback, private, CGNAT or metadata addresses, a `local` provider must declare the peers that make it local, unknown fields and duplicate ids are refused, layers compose without silently shadowing, the credential broker round-trips keys at 0600 while refusing bad ids, empty keys, loose modes and planted symlinks, `shinobi provider readiness` names each of the four independent gates — stored key, engagement cloud clearance, operator-or-above trust profile, and per-engagement provider allowlist — and both market-standard wire shapes (`/chat/completions` and `/messages`) build and round-trip a tool call, so a shipped manifest is not merely one that parses |
 | `test-egress.sh` | The egress gate: an engagement with no `llm:` block cannot use a cloud provider, a misspelled or mistyped block denies rather than defaults, the scope file and engagement directory must be trustworthy, a `local` provider must still be reaching the peers it declared, cloud egress needs written clearance *and* an operator profile *and* a stored key *and* a single-use approval bound to this prompt's digest, provider and model, allowlists narrow but never widen and an empty list means none, and every refusal lands in both audit trails with the prompt itself nowhere in either |
 | `test-llm.sh` | The native client, end to end against a real local HTTP provider and a real MCP subprocess: a tool call runs through `shinobi-recon` and its result goes back to the model, every turn is approved separately and bound to a different digest, a spent approval cannot be claimed twice, the connected socket is checked rather than the hostname, redirects are refused without the target being contacted, an https request is pinned to the vetted address while the certificate is verified against the name in the manifest with a verifying context actually supplied to the socket, an over-sized response is refused rather than buffered, a tool result carrying an image is described rather than forwarded, the tool server is resolved by preference order -- an installed entry point over a `bin/` script over the Python project in `mcp-servers/`, with names that are not package names refused rather than turned into an argv -- and the real `shinobi_recon` server is asked for its tools and its refusals, not only a fake that already agrees with the client; non-JSON tool arguments and a server that dies or lies are refused, an api key travels in the `Authorization` header and appears in no body, conversation, or audit record, the prompt is never in argv, and a local provider needs no approval while a cloud one does |
 | `test-approvals.sh` | Approval lifecycle end to end: exact-argument binding, single use, atomic claim, expiry, and that scope is still checked first |

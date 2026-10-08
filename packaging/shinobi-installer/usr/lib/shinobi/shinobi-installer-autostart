@@ -1,0 +1,64 @@
+#!/bin/sh
+# Start the Shinobi Installation Wizard if this session was booted to install.
+#
+# The live desktop runs this at login, and it does one thing: read the kernel
+# command line, and start the wizard if the boot menu entry asked for it.
+#
+# The reason it is a script rather than a line in the session configuration is
+# that the session configuration is installed on every system. The live image
+# and an installed system have the same Hyprland config, so a command that
+# started the installer unconditionally would start it on a machine somebody
+# installed Shinobi onto -- where there is no second disk to install and the
+# wizard's first page would be a lie.
+#
+# The marker is a kernel parameter, shinobi.installer=1, set by the boot menu
+# entry and by nothing else. It is inert everywhere else: the kernel keeps it on
+# the command line and no other software looks at it.
+#
+# The same launcher is how the wizard is reached from an installed system: the
+# .desktop entry in shinobi-installer runs calamares directly, which is a
+# deliberate difference -- on an installed system, starting the wizard is
+# something an operator asks for.
+set -eu
+
+marker="shinobi.installer"
+
+# /proc/cmdline is the only channel that survives from the boot menu to a
+# logged-in desktop session. Anything written to disk would outlive the medium.
+if [ ! -r /proc/cmdline ]; then
+  exit 0
+fi
+
+case " $(cat /proc/cmdline) " in
+  *" $marker "*) ;;
+  *" $marker="*) ;;
+  *)
+    # Not an install session. Nothing to do, and this is the common case: every
+    # boot of an installed system.
+    exit 0
+    ;;
+esac
+
+if ! command -v calamares >/dev/null 2>&1; then
+  echo "shinobi-installer-autostart: calamares is not installed; the wizard is unavailable." >&2
+  exit 1
+fi
+
+# Wait for the desktop to be usable before putting a full-screen window on it.
+# Starting immediately would race the panel and the notification daemon, and the
+# result is a wizard window behind a desktop that has not finished appearing.
+attempt=0
+until [ -n "${WAYLAND_DISPLAY:-}${DISPLAY:-}" ] && \
+      command -v qdbus >/dev/null 2>&1 && \
+      qdbus org.kde.KWin /KWin supportInformation >/dev/null 2>&1; do
+  attempt=$((attempt + 1))
+  if [ "$attempt" -ge 60 ]; then
+    # Thirty seconds. Rather than never starting, start anyway and let the
+    # operator see whatever state the desktop is in.
+    echo "shinobi-installer-autostart: the desktop did not report ready; starting the wizard anyway" >&2
+    break
+  fi
+  sleep 0.5
+done
+
+exec calamares

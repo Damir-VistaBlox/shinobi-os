@@ -1,0 +1,61 @@
+# Branding for the Shinobi Installation Wizard.
+#
+# Everything the operator reads is here, so this file is the wizard's interface
+# text as much as its colours. The names matter more than they look: "Kali" in
+# the product name or the window title is the base distribution advertising
+# itself on a machine whose entire point is that the AI layer is the one being
+# installed.
+#
+# Syntax is the Calamares branding descriptor, not plain YAML.
+---
+componentName:   shinobi
+
+welcomeStyleCalamares: true
+welcomeExpandingLogo: true
+windowExpanding: normal
+windowSize: 800px,600px
+windowPlacement: center
+
+sidebar: widget
+navigation: widget
+
+strings:
+    productName:         Shinobi OS
+    shortProductName:    Shinobi
+    version:             0.1
+    shortVersion:        0.1
+    versionedName:       Shinobi OS 0.1
+    shortVersionedName:  Shinobi 0.1
+
+    # The name of the thing on screen. "Calamares" in a title bar is the
+    # installer telling the operator which upstream project it is, on the one
+    # screen where they are deciding what to trust.
+    installationWizardName: Shinobi Installation Wizard
+    bootloaderEntryName:    Shinobi OS
+
+    productUrl:          https://shinobi-os.local
+    # No support or issue URLs: this is a pre-release image and a link to an
+    # empty tracker is worse than no link.
+    supportUrl:          ""
+    knownIssuesUrl:      ""
+    releaseNotesUrl:     ""
+    donateUrl:           ""
+
+# The palette, from the desktop theme the layer already ships, so the wizard and
+# the system it installs are recognisably one product rather than two projects
+# that happen to be installed together.
+style:
+   SidebarBackground:    "#11131a"
+   SidebarText:          "#a6adc8"
+   SidebarTextCurrent:   "#e6e9f5"
+   SidebarBackgroundCurrent: "#232634"
+
+images:
+    productLogo:         "shinobi-logo.png"
+    productIcon:         "shinobi-logo.png"
+    productWelcome:      "shinobi-logo.png"
+
+slideshow:               "show.qml"
+slideshowAPI:            2
+
+qml:                     "show.qml"

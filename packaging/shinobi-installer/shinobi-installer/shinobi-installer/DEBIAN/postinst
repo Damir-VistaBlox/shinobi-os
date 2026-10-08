@@ -1,0 +1,30 @@
+#!/bin/sh
+# Verify this package is usable before dpkg calls it installed.
+#
+# A wizard that starts and then finds nothing to do is the worst outcome here:
+# the operator has already committed a disk by the time the failure appears, or
+# -- if the missing piece is the branding, which is what Calamares falls back to
+# for everything -- it runs to completion wearing Debian's slides.
+#
+# So the configuration is checked for the properties that make it a Shinobi
+# wizard rather than a stock one, and the module sequence is checked against the
+# modules that exist, because a module named in settings.conf that is not
+# installed produces an empty step rather than an error.
+set -e
+
+check=/usr/lib/shinobi/shinobi-installer-check
+
+if [ ! -x "$check" ]; then
+  echo "shinobi-installer: $check is missing or not executable; this package is installed wrong." >&2
+  exit 1
+fi
+
+if err=$("$check" 2>&1); then
+  exit 0
+fi
+
+echo "shinobi-installer: the wizard is not usable, and an installer that looks" >&2
+echo "like it works is worse than one that does not:" >&2
+printf '%s\n' "$err" | sed 's/^/  /' >&2
+echo "  To inspect it without dpkg in the way: $check" >&2
+exit 1

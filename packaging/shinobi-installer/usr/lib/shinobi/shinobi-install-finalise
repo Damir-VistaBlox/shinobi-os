@@ -1,0 +1,112 @@
+#!/bin/sh
+# shinobi-install-finalise -- turn a target with the layer's files into a system
+# that has the layer applied.
+#
+# Run inside the target's chroot, after Calamares' users module has created the
+# operator's account and before the bootloader is installed. One command in the
+# wizard's configuration rather than a list of shell one-liners, because the
+# conditional parts of this do not survive being quoted into YAML.
+#
+# The order matters and is the reason this is a script rather than a list:
+# the layer is applied to an account that exists, then the live session's
+# settings are removed, then the result is checked. Applying the layer first
+# means the account's home is written once.
+set -eu
+
+# --- the layer ---------------------------------------------------------------
+# shinobi-setup finds the account itself: the live session's has been removed by
+# shinobi-install-prep and the operator's now exists, so it is the only non-root
+# account left.
+#
+# --force because this is a first install and the image's dotfiles are
+# authoritative for it. The alternative is a fresh system quietly inheriting
+# whatever the live session's skel happened to contain.
+#
+# --skip-fonts because the font is already in the image this copied, and
+# reinstalling it would mean a 128 MB download on a disk install that has no
+# reason to reach the network.
+if [ -x /usr/lib/shinobi/shinobi-setup ]; then
+  /usr/lib/shinobi/shinobi-setup apply --force --skip-fonts
+else
+  echo "install-finalise: shinobi-setup is missing; the layer cannot be applied" >&2
+  exit 1
+fi
+
+# --- nothing about this session should survive onto the disk ----------------
+# The one that would matter most.
+#
+# live-config writes an SDDM autologin entry for the live session's account at
+# first boot. The image does not contain one today, so removing it removes
+# nothing -- and if a future image does contain one, this is what stops the
+# installed system from logging itself in. A pentest distribution that boots
+# with no password is a serious defect, and it is invisible until somebody boots
+# the disk somewhere public.
+if [ -d /etc/sddm.conf.d ]; then
+  rm -f /etc/sddm.conf.d/*autologin* /etc/sddm.conf.d/*live* 2>/dev/null || true
+  # The setting may also live inside a file that is not named for it, which is
+  # why this reads every file rather than globbing.
+  for conf in /etc/sddm.conf.d/*; do
+    [ -f "$conf" ] || continue
+    if grep -q 'Autologin' "$conf" 2>/dev/null; then
+      sed -i '/^Autologin=/d' "$conf"
+      echo "install-finalise: removed the autologin setting from $conf"
+    fi
+  done
+fi
+rm -f /etc/gdm3/custom.conf 2>/dev/null || true
+rm -f /etc/lightdm/lightdm.conf.d/*live* 2>/dev/null || true
+rm -rf /var/lib/systemd/random-seed 2>/dev/null || true
+
+# --- the layer's own state ---------------------------------------------------
+# Which base this is, from which archive, is the first thing worth answering on
+# an engagement host, and it has to be on the disk rather than in a build log.
+/usr/lib/shinobi/shinobi-setup provenance
+
+# The overlay archive, so the installed system can receive the layer's own
+# updates. The keyring ships inside shinobi-core, so nothing is fetched to
+# authenticate it -- a key retrieved over the channel it authenticates proves
+# nothing.
+#
+# Failure here is not an install failure. The release URL is per-release and an
+# image may have none, in which case `shinobi repo enable` exits non-zero with
+# exactly that reason on stderr. An installed system with no archive configured
+# is a working system that updates from Kali until it is told where the layer
+# lives.
+if command -v shinobi-repo >/dev/null 2>&1; then
+  shinobi-repo enable || \
+    echo "install-finalise: the overlay archive was not configured; the system updates from Kali only" >&2
+fi
+
+# --- the installed system has to be able to boot -----------------------------
+# The initramfs was built in a chroot that was not this target's. It usually
+# works; "usually" is not a property to install a bootloader behind.
+if command -v update-initramfs >/dev/null 2>&1; then
+  update-initramfs -u -k all >/dev/null 2>&1 ||
+    echo "install-finalise: the initramfs could not be rebuilt here; it must be rebuilt on first boot" >&2
+fi
+
+# --- and check, rather than assume -------------------------------------------
+# Silent failure is the failure this wizard exists to remove. A system with no
+# control plane on the disk boots to a desktop with no bar and no gates, which
+# looks exactly like a working installation.
+missing=
+for path in \
+  /usr/bin/shinobi \
+  /usr/bin/shinobi-agent \
+  /usr/bin/shinobi-recon \
+  /usr/lib/shinobi/mcp-servers/shinobi_recon \
+  /usr/lib/systemd/user/shinobi-agentd.service \
+  /usr/lib/systemd/user/shinobi-contextd.service
+do
+  [ -e "$path" ] || missing="$missing $path"
+done
+
+if [ -n "$missing" ]; then
+  echo "install-finalise: the layer did not arrive on the target. Missing:" >&2
+  echo "  $missing" >&2
+  echo "  The system will boot without a control plane. This is not a" >&2
+  echo "  working installation and the wizard should have failed." >&2
+  exit 1
+fi
+
+exit 0
