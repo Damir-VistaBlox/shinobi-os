@@ -42,9 +42,15 @@ fail() {
 }
 
 # --- the sequence names modules that exist -----------------------------------
-# Instance keys (shellprocess@prep) are read as the bare name for the lookup.
+# Entries of the sequence, and nothing else in the YAML. An item that carries a
+# value after the name is structure, not a module: `- show:` opens a phase and
+# `- id: prep` declares an instance, and reading either as a module produces
+# "the sequence names 'show' and Calamares has no such module" for a sequence
+# that is entirely correct.
 module_names() {
-  sed -n 's/^[[:space:]]*-[[:space:]]*\([a-zA-Z0-9_@-]*\).*/\1/p' "$settings" |
+  # At least one space after the dash, and a name that starts with a letter:
+  # without either, the YAML document marker `---` parses as a module called "--".
+  sed -n 's/^[[:space:]]*-[[:space:]][[:space:]]*\([a-zA-Z][a-zA-Z0-9_@-]*\)[[:space:]]*$/\1/p' "$settings" |
     sed 's/@.*//' | sort -u
 }
 
@@ -104,27 +110,40 @@ grep -q '/root/\*' "$unpackfs" ||
 grep -q 'sudoers.d/live' "$unpackfs" ||
   fail "unpackfs does not exclude the live sudoers grant; an installed system could carry passwordless sudo for a recreated account"
 
-prep="$etc/modules/shellprocess@prep.conf"
+prep="$root/usr/lib/shinobi/shinobi-install-prep"
 [ -s "$prep" ] || fail "$prep is missing; the live session's account would survive onto the disk"
+grep -q 'userdel' "$prep" ||
+  fail "the prep script does not remove the live session's account"
+grep -q '/home/' "$prep" ||
+  fail "the prep script does not distinguish a copied live account from a real one by its home directory"
 
 # --- nothing in the sequence reaches the network -----------------------------
 # The install is offline by design: the archive is on the medium and the layer
 # is already installed. A command here that reaches out would make that true
 # only on a machine with wifi.
-if grep -Eq '(^|[[:space:]])(apt-get|apt|curl|wget|git|pacman)([[:space:]]|$)' "$prep" "$etc/modules/shellprocess@finish.conf" 2>/dev/null; then
-  fail "a shellprocess step runs a network client; the install is meant to work with no network"
+finish="$root/usr/lib/shinobi/shinobi-install-finalise"
+# Executable lines only. Scanning whole files matched the word "apt" in a comment
+# explaining why the stale apt lists are cleared -- a check satisfied by prose
+# about the change, which is the same mistake as the branding audit that only
+# matched quoted values.
+stripped() { sed -e 's/[[:space:]]*#.*$//' "$@"; }
+if stripped "$prep" "$finish" |
+  grep -Eq '(^|[[:space:]])(apt-get|apt|curl|wget|git|pacman)([[:space:]]|$)'; then
+  fail "a wizard step runs a network client; the install is meant to work with no network"
 fi
 
 # --- the finished system is checked, not assumed -----------------------------
 # The layer's own post-checks. A wizard that copies an image and reports success
 # without confirming the control plane arrived has installed a desktop with no
 # gates in it.
-finish="$etc/modules/shellprocess@finish.conf"
 [ -s "$finish" ] || fail "$finish is missing; the layer would be copied but never applied"
 grep -q 'shinobi-setup' "$finish" ||
   fail "the finish step does not apply the layer with shinobi-setup"
-grep -qi 'autologin' "$finish" ||
-  fail "the finish step does not remove any autologin configuration; a live-session autologin would be inherited by the installed system"
+# Executable lines only: the script explains at length why this matters, and a
+# grep of the whole file is satisfied by the comment saying it does.
+finish_cmds() { sed -e 's/[[:space:]]*#.*$//' -e '/^[[:space:]]*$/d' "$finish"; }
+finish_cmds | grep -qi 'autologin' ||
+  fail "the finish script does not remove any autologin configuration; a live-session autologin would be inherited by the installed system"
 grep -q 'shinobi-recon' "$finish" ||
   fail "the finish step does not verify the recon server arrived"
 

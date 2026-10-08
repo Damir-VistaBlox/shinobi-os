@@ -44,8 +44,17 @@ sudo apt-get update -y
 sudo apt-get install -y dpkg-dev rsync
 
 echo "== Building and installing the Shinobi layer =="
+# Built into a temporary directory rather than into the checkout.
+#
+# Writing the .deb beside the sources leaves an artefact in somebody's working
+# tree every time they run this, and it fails outright on a read-only checkout --
+# an unpacked source tarball, a distro's copy, or any tree owned by root that the
+# operator is invoking through sudo, which is how this is normally run.
+build_dir="$(mktemp -d)"
+trap 'rm -rf "$build_dir"' EXIT
+
 for pkg in $packages; do
-  package="$SHINOBI_ROOT/shinobi-$pkg.deb"
+  package="$build_dir/shinobi-$pkg.deb"
   "$SHINOBI_ROOT/packaging/build-deb.sh" "$pkg" "$package"
   # apt, not dpkg -i. The packages depend on python3-mcp, python3-yaml and the
   # desktop stack; dpkg -i resolves nothing, so it unpacks, fails, and leaves
@@ -53,7 +62,6 @@ for pkg in $packages; do
   # pulls the Depends in first, which is also what lets each postinst's
   # self-check mean anything.
   sudo apt-get install -y "$package"
-  rm -f "$package"
 done
 
 # Apply the layer: dotfiles into /etc/skel and the account's home, the Nerd

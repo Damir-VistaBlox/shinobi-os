@@ -153,6 +153,26 @@ check "the wizard does not install packages from a repository at install time" \
   "$(grep -qE '^[[:space:]]*-[[:space:]]*(packages|netinstall|sources-final)[[:space:]]*$' "$SETTINGS" && echo yes || echo no)" "no"
 
 section "the live session's state does not follow onto the disk"
+# The wizard's work lives in two shipped scripts, called by the configuration.
+# These checks read the scripts: the configuration used to hold this logic and
+# moving it was the right call, but a check left pointing at the old file keeps
+# passing while asserting nothing.
+prep="$PKG/usr/lib/shinobi/shinobi-install-prep"
+finish="$PKG/usr/lib/shinobi/shinobi-install-finalise"
+check "both scripts ship" \
+  "$([[ -x $prep && -x $finish ]] && echo yes || echo no)" "yes"
+prep_args() { sed -e 's/[[:space:]]*#.*$//' -e '/^[[:space:]]*$/d' "$CONF/modules/shellprocess@prep.conf"; }
+# command: and args: are separate YAML keys, so this asserts the two halves
+# rather than a joined command line that never appears in the file.
+check "the wizard runs prep inside a chroot" \
+  "$(prep_args | grep -c 'command: chroot' || true)" "1"
+check "calling the shipped script" \
+  "$(prep_args | grep -c 'args:.*shinobi-install-prep' || true)" "1"
+check "and finish likewise" \
+  "$(sed -e 's/[[:space:]]*#.*$//' "$CONF/modules/shellprocess@finish.conf" | grep -c 'args:.*shinobi-install-finalise' || true)" "1"
+check "with no shell string left in the configuration to quote wrongly" \
+  "$(cat "$CONF/modules/shellprocess@prep.conf" "$CONF/modules/shellprocess@finish.conf" | grep -c 'args:.*-c' || true)" "0"
+
 unpack_sources=$(grep -cE '^[[:space:]]*-[[:space:]]+source:' "$CONF/modules/unpackfs.conf" || true)
 for excluded in '/home/*' '/root/*' 'sudoers.d/live'; do
   occurrences=$(grep -cF -- "$excluded" "$CONF/modules/unpackfs.conf" || true)
@@ -162,15 +182,18 @@ for excluded in '/home/*' '/root/*' 'sudoers.d/live'; do
   check "every unpack source excludes $excluded" \
     "$occurrences" "$unpack_sources"
 done
+prep_cmds() { sed -e 's/[[:space:]]*#.*$//' -e '/^[[:space:]]*$/d' "$prep"; }
+finish_cmds() { sed -e 's/[[:space:]]*#.*$//' -e '/^[[:space:]]*$/d' "$finish"; }
 check "prep removes the live account" \
-  "$(grep -q 'userdel' "$CONF/modules/shellprocess@prep.conf" && echo yes || echo no)" "yes"
+  "$(prep_cmds | grep -q 'userdel' && echo yes || echo no)" "yes"
 check "prep refuses to remove an account that has a home directory" \
-  "$(grep -q '\[ ! -d ' "$CONF/modules/shellprocess@prep.conf" && echo yes || echo no)" "yes"
+  "$(prep_cmds | grep -q '\[ ! -d ' && echo yes || echo no)" "yes"
+check "prep learns the live account's name rather than assuming it" \
+  "$(prep_cmds | grep -q 'LIVE_USERNAME' && echo yes || echo no)" "yes"
 # The executable lines only: the file explains at length why this matters, and
 # grepping the whole file meant a comment could satisfy the check on its own.
-finish_cmds() { sed -e 's/[[:space:]]*#.*$//' -e '/^[[:space:]]*$/d' "$CONF/modules/shellprocess@finish.conf"; }
 check "finish removes any autologin configuration" \
-  "$(finish_cmds | grep -qiE 'autologin|sddm.conf.d' && echo yes || echo no)" "yes"
+  "$(finish_cmds | grep -qiE 'autologin' && echo yes || echo no)" "yes"
 check "and does so for more than one display manager" \
   "$(finish_cmds | grep -qiE 'gdm3|lightdm' && echo yes || echo no)" "yes"
 check "the users module does not configure autologin" \
@@ -178,13 +201,15 @@ check "the users module does not configure autologin" \
 
 section "the wizard applies the layer rather than copying it and hoping"
 check "finish calls shinobi-setup" \
-  "$(grep -q 'shinobi-setup' "$CONF/modules/shellprocess@finish.conf" && echo yes || echo no)" "yes"
+  "$(finish_cmds | grep -q 'shinobi-setup apply' && echo yes || echo no)" "yes"
 check "and writes provenance" \
-  "$(grep -q 'shinobi-setup provenance\|provenance' "$CONF/modules/shellprocess@finish.conf" && echo yes || echo no)" "yes"
+  "$(finish_cmds | grep -q 'shinobi-setup provenance' && echo yes || echo no)" "yes"
 check "and checks the control plane arrived" \
-  "$(grep -q 'shinobi-agent' "$CONF/modules/shellprocess@finish.conf" && echo yes || echo no)" "yes"
+  "$(finish_cmds | grep -q 'shinobi-agent' && echo yes || echo no)" "yes"
 check "and the recon server with it" \
-  "$(grep -q 'shinobi-recon' "$CONF/modules/shellprocess@finish.conf" && echo yes || echo no)" "yes"
+  "$(finish_cmds | grep -q 'shinobi-recon' && echo yes || echo no)" "yes"
+check "and fails the install if it did not" \
+  "$(finish_cmds | grep -q 'exit 1' && echo yes || echo no)" "yes"
 
 section "nothing in the wizard presents itself as Kali"
 # The base distribution's name on the screen where somebody decides what to
@@ -232,14 +257,60 @@ if ! command -v docker >/dev/null 2>&1; then
   echo "  SKIP (no docker; the static checks above still run)"
 else
   smoke_root="$(mktemp -d)"
-  if "$ROOT/packaging/build-deb.sh" installer --stage "$smoke_root" 2>/dev/null; then
-    log="$(docker run --rm -v "$smoke_root:/inst:ro" kalilinux/kali-rolling:latest bash -c '
+  "$ROOT/packaging/build-deb.sh" installer --stage "$smoke_root" 2>/dev/null
+
+  # The image to boot Calamares in. Kali is the one this is written against, and
+  # Debian is the fallback: it carries the same framework and the same modules,
+  # which is all this checks. The fallback exists because http.kali.org has been
+  # intermittently unreachable from CI networks, and a suite that reports eight
+  # failures because a mirror is down is a suite people learn to ignore.
+  smoke_image=""
+  smoke_log=""
+  # Kali is what this is written against; Debian carries the same framework and
+  # the same modules, which is all this checks. The fallback exists because
+  # http.kali.org has been intermittently unreachable, and a suite that reports
+  # eight failures because a mirror is down is a suite people learn to ignore.
+  for candidate in kalilinux/kali-rolling:latest debian:trixie-slim; do
+    if docker run --rm "$candidate" bash -c \
+      'apt-get update -qq >/dev/null 2>&1 && apt-get install -y -qq calamares xvfb >/dev/null 2>&1' >/dev/null 2>&1; then
+      smoke_image="$candidate"
+      break
+    fi
+  done
+
+  log=""
+  if [[ -n $smoke_image ]]; then
+    if [[ $smoke_image != kalilinux/* ]]; then
+      echo "  (Kali's mirror was unreachable; using $smoke_image instead)"
+    fi
+    # The install happens again in the running container, and this checks it
+    # actually worked before asking for a result. A second container's apt can
+    # fail on its own -- which showed up as "timeout: failed to run command
+    # xvfb-run" and eight failures that all said the same thing and none of which
+    # was about the wizard.
+    log="$(docker run --rm -v "$smoke_root:/inst:ro" "$smoke_image" bash -c '
       apt-get update -qq >/dev/null 2>&1
       apt-get install -y -qq calamares xvfb >/dev/null 2>&1
+      command -v calamares >/dev/null 2>&1 && command -v xvfb-run >/dev/null 2>&1 || {
+        echo "SMOKE-UNAVAILABLE: calamares or xvfb-run did not install"; exit 0; }
       mkdir -p /etc/calamares && cp -r /inst/etc/calamares/. /etc/calamares/
-      timeout 60 xvfb-run -a calamares -d 2>&1' 2>&1)"
-    chmod -R u+rwX "$smoke_root" 2>/dev/null
-    rm -rf "$smoke_root"
+      timeout 120 xvfb-run -a calamares -d 2>&1' 2>&1)"
+  fi
+  chmod -R u+rwX "$smoke_root" 2>/dev/null
+  rm -rf "$smoke_root"
+
+  if [[ -z $smoke_image ]]; then
+    echo "  SKIP (no image could install Calamares; Kali's mirror is unreachable from here)"
+  elif grep -q '^SMOKE-UNAVAILABLE' <<<"$log"; then
+    # Infrastructure, not the configuration under test.
+    echo "  SKIP ($(grep '^SMOKE-UNAVAILABLE' <<<"$log"))"
+  else
+    # A failure that reports a bare count cannot be told apart from a timeout,
+    # and the difference is the whole diagnosis.
+    if ! grep -q 'Loaded branding component "shinobi"' <<<"$log"; then
+      echo "  (calamares did not report loading the branding; last lines:)"
+      tail -12 <<<"$log" | sed 's/^/    /'
+    fi
 
     check "it loads our branding" \
       "$(grep -c 'Loaded branding component "shinobi"' <<<"$log" || true)" "1"
@@ -248,8 +319,8 @@ else
         "$(grep -c "ViewModule \"$module@$module\" loading complete" <<<"$log" || true)" "1"
     done
 
-    # Each of these was a real defect in an earlier revision, and every one of
-    # them is something Calamares reports without failing.
+    # Each of these was a real defect in an earlier revision, and each of them is
+    # something Calamares reports without failing.
     check "no job is configured with no script" \
       "$(grep -c 'No script given' <<<"$log" || true)" "0"
     check "no module in the sequence lacks its configuration" \
@@ -265,13 +336,8 @@ else
     check "the welcome page has an internet check URL" \
       "$(grep -c "entry 'internetCheckUrl' is undefined" <<<"$log" || true)" "0"
 
-    # A crash would show up as none of the pages loading, which the checks above
-    # already catch; this is here so a future Calamares that logs differently
-    # does not pass by accident.
     check "the run produced no fatal error" \
       "$(grep -ciE 'ASSERT|FATAL' <<<"$log" || true)" "0"
-  else
-    check "the installer package could be staged for the smoke test" "failed" "staged"
   fi
 fi
 

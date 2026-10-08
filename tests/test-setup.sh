@@ -207,7 +207,9 @@ section "a system with no account of its own"
 out=$(chroot "$R" /engine apply --skip-fonts 2>&1)
 check "it refuses" "$?" "1"
 check "and says what it found" \
-  "$(grep -c 'no non-root account' <<<"$out" || true)" "1"
+  "$(grep -c 'no single login account' <<<"$out" || true)" "1"
+check "and tells the operator how to name one" \
+  "$(grep -c -- '--account' <<<"$out" || true)" "1"
 check "and does not touch root's home" \
   "$([[ -d $R/root/.config/hypr ]] && echo touched || echo untouched)" "untouched"
 

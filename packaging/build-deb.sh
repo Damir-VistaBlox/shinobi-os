@@ -61,15 +61,18 @@ fi
 
 cp -a "$root/packaging/shinobi-$package/." "$stage/"
 
-# Every package carries the engine. shinobi-setup lives in libexec so all three
-# packages call one implementation of "put the layer on this machine" rather
-# than each carrying its own; the desktop package needs it to apply dotfiles and
-# the installer package needs it for the target chroot.
-mkdir -p "$stage/usr/lib/shinobi"
-cp -a "$root/libexec/shinobi/shinobi-setup" "$stage/usr/lib/shinobi/"
-
 case "$package" in
   core)
+    # The engine ships in shinobi-core and nowhere else.
+    #
+    # It was in all three, so that each could call "put the layer on this
+    # machine" without a path. dpkg does not allow two packages to own one path:
+    # the second install fails with "trying to overwrite
+    # /usr/lib/shinobi/shinobi-setup, which is also in package shinobi-core", and
+    # it fails *after* the dependency resolution and the postinst, so the image
+    # build would have died at the desktop package having got all the way
+    # through live-build. One owner, and the other two call it by its absolute
+    # path -- which is what the wizard's shellprocess steps already do.
     mkdir -p "$stage/usr/bin" "$stage/usr/share/shinobi/themes" "$stage/usr/share/shinobi/tools" \
       "$stage/usr/share/shinobi/providers"
     cp -a "$root/bin/shinobi" "$root"/bin/shinobi-* "$stage/usr/bin/"
@@ -90,6 +93,12 @@ case "$package" in
     # registry prefers over any copy inside the package.
     mkdir -p "$stage/usr/lib/shinobi/mcp-servers"
     cp -a "$root/mcp-servers/shinobi-recon/shinobi_recon" "$stage/usr/lib/shinobi/mcp-servers/"
+
+    # The engine on PATH. It is a libexec script and one package owns it; this is
+    # a symlink, not a second copy, so there is still one file on the system and
+    # one package responsible for it. Without it, install.sh's `shinobi-setup
+    # apply` -- and the documentation -- refer to a command that is not there.
+    ln -sfn ../lib/shinobi/shinobi-setup "$stage/usr/bin/shinobi-setup"
 
     cp -a "$root/themes/." "$stage/usr/share/shinobi/themes/"
     cp -a "$root/tools/." "$stage/usr/share/shinobi/tools/"

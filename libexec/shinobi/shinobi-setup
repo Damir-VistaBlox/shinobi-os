@@ -192,16 +192,25 @@ resolve_account() {
 
   # Nothing named, nothing obvious, no SUDO_USER -- which is the state of a stock
   # Kali box where this runs as root from a cron job or a provisioning script, and
-  # of a chroot during an image build. If the machine has exactly one account
-  # that is not root, there is no ambiguity about who meant.
-  sole=$(getent passwd | awk -F: '$3 > 0 && $3 < 65534 && $1 != "nobody" && $7 !~ /(nologin|false)$/ {print $1}')
+  # of a chroot during an image build. If the machine has exactly one login
+  # account, there is no ambiguity about who meant.
+  #
+  # uid >= 1000, not "any non-root uid": Kali's base image has accounts like
+  # `sync` at uid 4 with a real shell, and counting those made a box with one
+  # human account look ambiguous -- so install.sh on a stock image reported that
+  # it could not find an account to apply the layer to. The same filter is in the
+  # wizard's prep step and the end-to-end self-test, which is where this
+  # inconsistency came from.
+  sole=$(getent passwd | awk -F: '$3 >= 1000 && $3 < 65534 && $1 != "nobody" && $7 !~ /(nologin|false)$/ {print $1}')
   sole_count=$(printf '%s\n' "$sole" | grep -c . || true)
   if [ "$sole_count" = 1 ]; then
     printf '%s' "$sole"
     return 0
   fi
 
-  warn "no non-root account found to apply dotfiles to"
+  warn "no single login account found to apply the layer to."
+  warn "  This machine has either no login account or several. Name the one you"
+  warn "  mean: shinobi-setup apply --account <name>"
   return 1
 }
 

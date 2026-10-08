@@ -10,6 +10,8 @@
 
 | `test-install-e2e.sh` | Boots the image, installs it with the Shinobi Installation Wizard, boots **what was installed** from a second disk, and asserts against it: one account and not the live session's, the layer present, the home owned by its account, no inherited autologin, the medium not in fstab, provenance readable. Needs an image (`SHINOBI_E2E_ISO`) and KVM, so it is **not** in `run-all.sh` and skips with an explanation rather than passing quietly |
 
+| `test-installer-target.sh` | The wizard's own work, executed: a target shaped like an installed system (the three staged packages, the live session's account with no home behind it, its autologin, its stale apt lists, the medium in fstab) and the exact command vectors parsed out of the wizard's configuration run against it in a chroot. Asserts what the target looks like afterwards -- one account, the live one gone, an account with a home left alone, no autologin, the layer applied, provenance written |
+
 ## The one suite not in `run-all.sh`
 
 `test-install-e2e.sh` needs a built image and KVM, and takes about 25 minutes. It

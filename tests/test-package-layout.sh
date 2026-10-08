@@ -270,6 +270,25 @@ check "the optional dbus_next import is not a hard dependency" \
 # going back to an overlay copy is a test failure rather than a silent
 # regression discovered by the next person who installs to a disk.
 echo
+echo "== every package's control file is buildable =="
+# shinobi-desktop's Description had no trailing newline, and dpkg-deb --build
+# refused it: "end of file during value of field 'Description'". Nothing caught it
+# because the layout tests stage a tree rather than building an archive, and the
+# one suite that builds archives only builds shinobi-core. So a package that
+# could not be installed at all passed every check until something tried to build
+# it -- which, in the ISO hook, is 60 minutes into an image build.
+for pkg_dir in "$ROOT"/packaging/shinobi-*; do
+  pkg="$(basename "$pkg_dir")"
+  control="$pkg_dir/DEBIAN/control"
+  [[ -f $control ]] || continue
+  check "$pkg's control file ends with a newline" \
+    "$([[ -s $control && $(tail -c1 "$control" | od -An -c | tr -d ' ') == "\\n" ]] && echo yes || echo no)" "yes"
+  check "$pkg's Description is not the last line without a terminator" \
+    "$(grep -qE '^Description:[[:space:]]*\S' "$control" && echo yes || echo no)" "yes"
+  check "$pkg's control has no stray md5sums line" \
+    "$(grep -c '^Description-md5:' "$control" || true)" "0"
+done
+
 echo "== the desktop layer ships in a package, not in the image =="
 desktop_stage="$(mktemp -d)"
 desktop_trap="chmod -R u+rwX \"$desktop_stage\" 2>/dev/null; rm -rf \"$desktop_stage\""

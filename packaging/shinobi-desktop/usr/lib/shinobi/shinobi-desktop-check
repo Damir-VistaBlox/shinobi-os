@@ -69,15 +69,24 @@ fi
 # Read off hyprland.conf rather than a hand-kept list, so a command added to
 # the session is covered the day it is added.
 #
-# BRE groups are \( \? -- plain parentheses are literals here, and an
-# unescaped `exec(-once)?` silently matches nothing, which is a check that
-# passes by finding no commands at all. The command word is taken as the first
-# token after `=`, and a path is reduced to its basename so
-# /usr/libexec/hyprpolkitagent is checked as the package that provides it.
-login_commands=$(sed -n 's/^[[:space:]]*exec\(-once\)\{0,1\}[[:space:]]*=[[:space:]]*[^[:space:]]\{1,\}.*/&/p' \
-  "$skel/.config/hypr/hyprland.conf" 2>/dev/null \
-  | sed 's/^[[:space:]]*exec\(-once\)\{0,1\}[[:space:]]*=[[:space:]]*//' \
-  | awk '{print $1}' | sed 's|.*/||' | sort -u)
+# Whole lines, not just the command word, because two things about a line decide
+# whether it is required:
+#
+#   * A command with an absolute path is that path. Reducing /usr/libexec/
+#     hyprpolkitagent to its basename and looking it up on PATH reports a command
+#     that is installed and sitting in /usr/libexec as missing.
+#   * A line ending in `|| true` is optional by its author's decision. The
+#     installer autostart is in that category: it belongs to shinobi-installer,
+#     so a shinobi-desktop install without it must not fail, and that is the
+#     whole point of the fallback.
+#
+# BRE groups are \( \? -- plain parentheses are literals here, and an unescaped
+# `exec(-once)?` silently matches nothing, which is a check that passes by
+# finding no commands at all.
+login_lines=$(sed -n 's/^[[:space:]]*exec\(-once\)\{0,1\}[[:space:]]*=[[:space:]]*\(.*\)$/\2/p' \
+  "$skel/.config/hypr/hyprland.conf" 2>/dev/null)
+login_commands=$(printf '%s\n' "$login_lines" | awk 'NF { print $1 }' | sed 's|.*/||' | sort -u)
+required_lines=$(printf '%s\n' "$login_lines" | grep -v '||[[:space:]]*true' || true)
 
 if [ -z "$login_commands" ]; then
   fail "no exec-once commands found in hyprland.conf; the session would start nothing"
@@ -102,8 +111,9 @@ if [ -f "$root/DEBIAN/control" ]; then
     esac
   }
 
-  # A command satisfied by shinobi-core is covered by Depending on it.
-  for cmd in $login_commands; do
+  # A command satisfied by shinobi-core is covered by Depending on it, and an
+  # optional one is not required at all.
+  for cmd in $(printf '%s\n' "$required_lines" | awk 'NF { print $1 }' | sed 's|.*/||' | sort -u); do
     case "$cmd" in
       shinobi-*) continue ;;
     esac
@@ -115,12 +125,23 @@ if [ -f "$root/DEBIAN/control" ]; then
 fi
 
 # --- 3. on a real install, the commands resolve ------------------------------
+# An absolute path is checked as itself. A bare command name is checked on PATH,
+# because that is how Hyprland will find it.
 if [ "$root" = "/" ]; then
-  for cmd in $login_commands; do
-    if ! command -v "$cmd" >/dev/null 2>&1; then
+  while IFS= read -r line; do
+    [ -n "$line" ] || continue
+    case "$line" in
+      *"||"*) continue ;;
+    esac
+    cmd=${line%% *}
+    if [ "${cmd#/}" != "$cmd" ]; then
+      [ -x "$cmd" ] || fail "'$cmd' is started by hyprland.conf but is not installed or not executable"
+    elif ! command -v "$cmd" >/dev/null 2>&1; then
       fail "'$cmd' is started by hyprland.conf but is not installed"
     fi
-  done
+  done <<EOF
+$required_lines
+EOF
 fi
 
 if [ "$errors" -gt 0 ]; then

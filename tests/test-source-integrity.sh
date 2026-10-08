@@ -102,21 +102,38 @@ if [[ -d "$overlay_units" ]] && [[ -n "$(find "$overlay_units" -maxdepth 1 -type
   fail "the image overlay carries systemd user units, which the shinobi-core package also ships; one copy, or the two drift again"
 fi
 
-# And the packages must not collide with each other on the same path.
+# And no two packages may claim the same installed path.
+#
+# dpkg refuses to unpack a second package over a file the first owns -- "trying
+# to overwrite ..., which is also in package shinobi-core" -- and it refuses
+# *after* dependency resolution and the postinst, so the cost is an image build
+# that gets all the way through live-build first. shinobi-setup was in all three
+# packages for exactly this reason and every test passed, because the check
+# compared the package skeletons under packaging/ and the engine is added by
+# build-deb.sh at build time. So this compares what the packages actually ship,
+# by staging them.
 declare -A seen_paths=()
 collision=0
-for pkg_dir in "$ROOT"/packaging/shinobi-*; do
-  [[ -d "$pkg_dir" ]] || continue
-  pkg="$(basename "$pkg_dir")"
-  while IFS= read -r -d '' shipped; do
-    rel="${shipped#"$pkg_dir/"}"
-    case "$rel" in DEBIAN/*) continue ;; esac
-    if [[ -n "${seen_paths[$rel]:-}" ]]; then
-      fail "$pkg ships $rel, which ${seen_paths[$rel]} already ships; dpkg cannot own one path twice"
-      collision=1
-    fi
-    seen_paths["$rel"]="$pkg"
-  done < <(find "$pkg_dir" -type f -print0)
+for pkg in core desktop installer; do
+  [[ -f "$ROOT/packaging/shinobi-$pkg/DEBIAN/control" ]] || continue
+  pkg_stage="$(mktemp -d)"
+  if "$ROOT/packaging/build-deb.sh" "$pkg" --stage "$pkg_stage" >/dev/null 2>&1; then
+    while IFS= read -r -d '' shipped; do
+      rel="${shipped#"$pkg_stage/"}"
+      case "$rel" in DEBIAN/*) continue ;; esac
+      # Symlinks are names, not ownership: one package may point at another's file.
+      [[ -L $shipped ]] && continue
+      if [[ -n "${seen_paths[$rel]:-}" ]]; then
+        fail "shinobi-$pkg ships $rel, which ${seen_paths[$rel]} already ships; dpkg cannot own one path twice"
+        collision=1
+      fi
+      seen_paths["$rel"]="shinobi-$pkg"
+    done < <(find "$pkg_stage" \( -type f -o -type l \) -print0)
+  else
+    fail "shinobi-$pkg could not be staged, so its paths were not checked"
+  fi
+  chmod -R u+rwX "$pkg_stage" 2>/dev/null
+  rm -rf "$pkg_stage"
 done
 (( collision == 0 )) || true
 
