@@ -31,10 +31,17 @@ where release signing belongs:
 Current key, for identifying it rather than for using it:
 
 ```
-fingerprint  DA58F26CA5AA545CCD149FFE7CB3AD229C20E203
+fingerprint  FA21448F02FF8A2501CADFD069EB0D646C7C6EC0
 uid          Shinobi OS Archive Signing Key <archive@shinobi-os.local>
 algorithm    ed25519 [sign only]
 ```
+
+This is a **development key**, generated for the package pre-release so that a
+signature could be verified end to end. It is not a production release key, and
+nothing should depend on it beyond the pre-releases: it has no revocation
+certificate, its passphrase is empty, and it has been used from a workstation
+rather than from a signing host. Generate the real key per the rotation notes
+below before the first ISO release.
 
 ### Verifying the committed keyring matches this fingerprint
 
