@@ -20,6 +20,8 @@
 #   * the declared dependencies cover what the shipped code actually imports
 #   * the postinst check passes when the dependency is present and fails with a
 #     message that names it when it is not
+#   * the command wrappers (shinobi-approval, shinobi-provider, ...) find the
+#     control plane where this package put it, not where a checkout keeps it
 #   * no bytecode residue
 set -euo pipefail
 
@@ -175,6 +177,65 @@ else
   check "and does not fall back to an installed copy" \
     "$(grep -c "site-packages\|dist-packages" "$errf" || true)" "0"
 fi
+
+echo "== the command wrappers find the control plane where this package put it =="
+# bin/ ships to /usr/bin and libexec/shinobi/ to /usr/lib/shinobi. A wrapper that
+# looks for a ../libexec sibling is therefore looking in /usr/libexec, which
+# nothing creates, and cannot import shinobi_control. Every other suite copies
+# bin/ and libexec/ side by side -- the checkout's shape -- so none of them ever
+# ran a wrapper from the package's, and `shinobi approval`, `shinobi provider`,
+# `shinobi evidence` and the rest were broken on an installed system with every
+# check green. The approval one decides whether the one active tool is usable at
+# all: nmap_scan asks `shinobi-approval request` for the approval an operator then
+# grants, so a wrapper that cannot run means nmap_scan can never be approved.
+sandbox="$stage/wrapper-sandbox"
+mkdir -p "$sandbox/home"
+
+# env -i, so a PYTHONPATH or SHINOBI_* variable on the machine running this
+# cannot supply the control plane that the wrapper failed to find. stdin is
+# closed because some of these read a prompt from it, and the exit status is
+# dropped because only what the wrapper managed to import is being asked.
+run_wrapper() {
+  local name=$1
+  shift
+  env -i PATH="$PATH" HOME="$sandbox/home" XDG_STATE_HOME="$sandbox/state" \
+    XDG_RUNTIME_DIR="$sandbox/run" PYTHONDONTWRITEBYTECODE=1 \
+    timeout 30 "$stage/usr/bin/$name" "$@" </dev/null 2>&1 || true
+}
+
+check "shinobi-approval lists approvals from the package's layout" \
+  "$(run_wrapper shinobi-approval list)" "[]"
+check "shinobi-event reads events from the package's layout" \
+  "$(run_wrapper shinobi-event recent)" "[]"
+
+# These need a provider directory, a daemon or an engagement to do anything
+# useful, so what is asked is only whether the control plane could be imported.
+for name in shinobi-egress shinobi-evidence shinobi-mcp shinobi-plugin shinobi-provider shinobi-webapp; do
+  check "$name imports the control plane from the package's layout" \
+    "$(run_wrapper "$name" help | grep -cE "No module named '?shinobi_control" || true)" "0"
+done
+
+# shinobi-context runs a script rather than importing a module, and with no
+# daemon it fails by design -- the question is whether it reached its client.
+context_out="$(run_wrapper shinobi-context)"
+check "shinobi-context finds its client script" \
+  "$(grep -c "can't open file" <<<"$context_out" || true)" "0"
+check "and reaches the client, which reports the missing daemon" \
+  "$(grep -c '^shinobi context:' <<<"$context_out" || true)" "1"
+rm -rf "$sandbox"
+
+# The behaviour above covers what could be run offline. This covers the rest: a
+# wrapper added later that locates the control plane by its ../libexec sibling
+# alone passes every checkout-shaped suite and fails only once installed.
+examined=0
+for wrapper in "$ROOT"/bin/shinobi-*; do
+  grep -qF '../libexec/shinobi' "$wrapper" || continue
+  examined=$((examined + 1))
+  check "${wrapper#"$ROOT/"} has a packaged location to fall back to" \
+    "$(grep -qE '\.\./lib/shinobi|/usr/lib/shinobi' "$wrapper" && echo yes || echo no)" "yes"
+done
+check "the scripts that locate the control plane are discovered, not listed" \
+  "$([[ $examined -ge 12 ]] && echo yes || echo no)" "yes"
 
 echo "== the postinst check is runnable and honest =="
 check "usr/lib/shinobi/shinobi-recon-check is executable" \
