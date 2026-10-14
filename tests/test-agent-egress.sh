@@ -242,8 +242,11 @@ for bad in --nope --accept-ungoverned-egress=1 --wire-mcp; do
   check "'$bad' is refused" "$(status claude "$bad")" "1"
 done
 "$work/bin/shinobi-agent" --help >"$work/help.txt" 2>&1
+# Not a count of how often the flag is named: the help also documents the set-up
+# verbs, which take the same flag. What matters is that the launcher's own usage
+# line carries it and that the acknowledgement is explained.
 check "the help documents the acknowledgement" \
-  "$(grep -c 'accept-ungoverned-egress' "$work/help.txt" || true)" "2"
+  "$(grep -c '^Usage: .*--accept-ungoverned-egress' "$work/help.txt" || true)|$(grep -c "Acknowledge that the agent's model traffic is NOT governed" "$work/help.txt" || true)" "1|1"
 check "the help documents the wiring opt-out" "$(grep -c 'no-wire-mcp' "$work/help.txt" || true)" "2"
 
 echo

@@ -48,6 +48,9 @@ class VendorAgent:
     # shell pipeline (`curl ... | bash`), run as the text it is shown as and never
     # assembled from anything else.
     install_text: str
+    # The host the install script itself is fetched from. What that script goes on
+    # to download is its own business and is not listed: a list that looked
+    # complete and was not would be worse than saying so.
     install_hosts: tuple[str, ...]
     # Programs the install text needs on PATH, including the shell it pipes into.
     install_needs: tuple[str, ...]
@@ -94,7 +97,7 @@ AGENTS: tuple[VendorAgent, ...] = (
         name="OpenAI Codex CLI",
         binary="codex",
         install_text="curl -fsSL https://chatgpt.com/codex/install.sh | sh",
-        install_hosts=("chatgpt.com", "releases.openai.com"),
+        install_hosts=("chatgpt.com",),
         install_needs=("curl", "sh"),
         login_args=("login",),
         login_note=(

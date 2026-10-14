@@ -313,37 +313,50 @@ distro. Ported so far, all under `bin/shinobi-*`:
   egress is ungoverned, in a constant and not a field.
 
   What it does is show exactly what will run, wait for a yes, run it where the
-  operator is watching, and write down that it did. The answer is read from the
+  operator is watching, and write down that it did. Both the install and the login
+  are confirmed, after what will run has been shown. The answer is read from the
   controlling terminal, never from stdin, so `yes | shinobi agent install claude`
-  confirms nothing; with no terminal it refuses; there is no `--yes`, and the
-  session-wide `SHINOBI_ACCEPT_UNGOVERNED_EGRESS` satisfies the acknowledgement
-  that the agent's model traffic is outside the gate (recorded, as for a launch)
-  but never the confirmation. Intent is recorded *before* the vendor's code runs
-  and, if it cannot be recorded, nothing runs: `provider` commands report an
-  unrecorded change afterwards because the change has already happened, but here
-  it has not. The installer runs under `bash -o pipefail` (a failed download would
-  otherwise hand the shell an empty script, which it runs successfully), and
-  success means the binary is actually found, on PATH or where the vendor's
-  installer is documented to put it; a binary found only off PATH is reported
-  with what to do about it, and Shinobi does not edit a shell profile. The
-  vendor's output goes to the terminal and nowhere else, because a login can
-  print a device code or a URL.
+  confirms nothing; with no terminal it refuses; there is no `--yes`; and anything
+  typed or pasted before a question was asked is thrown away, so a block of text
+  copied from a web page cannot answer it in advance. The session-wide
+  `SHINOBI_ACCEPT_UNGOVERNED_EGRESS` satisfies the acknowledgement that the agent's
+  model traffic is outside the gate (recorded, as for a launch) but never a
+  confirmation. Intent is recorded *before* the vendor's code runs and, if it
+  cannot be recorded, nothing runs; if the outcome cannot be recorded afterwards the
+  command says so and exits non-zero. The installer runs under `bash -o pipefail`
+  (a failed download would otherwise hand the shell an empty script, which it runs
+  successfully), and success means the installer exited 0 *and* the binary is
+  actually found, on PATH or where the vendor's installer is documented to put it;
+  a binary found only off PATH is reported with what to do about it, and Shinobi
+  does not edit a shell profile. The prompt names only the host the install script
+  is fetched from and says the script may download more: a list that looked
+  complete and was not would be worse. The vendor's output goes to the terminal and
+  nowhere else, because a login can print a device code or a URL.
 
   Claude Code has no separate login command: running it is the login, and what
   starts is a full agent session with its own shell tool, outside Shinobi's
-  engagement, scope gate and run record. So it is started in an empty temporary
-  directory, where it cannot pick up a project's own agent settings or server
-  list, and the operator is told to type `/exit` at "Login successful" and to
-  work through `shinobi agent`. Whether a login worked is a question for the
-  vendor's CLI where it has a command for it (`codex login status`), and
+  engagement, scope gate and run record. So it is started in an empty directory
+  under the operator's runtime directory (which only they can write to, so
+  neither a project's agent settings nor another user's, planted in `/tmp`, can be
+  found by an agent that looks in its parent directories), and the operator is told
+  to type `/exit` at "Login successful" and to work through `shinobi agent`.
+  Whether a login worked is a question for the vendor's CLI where it has a command
+  for it (`codex login status`, and a login it says failed is a failed exit), and
   otherwise the answer is "not known": Shinobi never reads a vendor's credential
-  store. Known gap: nothing in this repository puts `~/.local/bin`, where
+  store. The vendor's code runs with the operator's own environment, since an
+  installer running as the operator can already read everything that environment
+  was built from; scrubbing it would break proxies and browsers without containing
+  anything. The wrapper starts Python with `-P`, because `python3 -m` otherwise puts
+  the current directory first on `sys.path`, and an operator working in a directory
+  they did not write would import its `json.py` in the process that holds the
+  confirmation (the other wrappers that run `python3 -m shinobi_control.*` share
+  that exposure). Known gap: nothing in this repository puts `~/.local/bin`, where
   Claude's native installer puts its launcher, on PATH. The base image's own shell
   profile may (Debian's default one does, for a login that starts after the
   directory exists) but this has not been checked on a built image, and the
   Hyprland session's environment is a separate question. Until it is, a fresh
-  install can be invisible to `shinobi agent`, which launches by name; the
-  command says so when it finds the binary only there.
+  install can be invisible to `shinobi agent`, which launches by name; the command
+  says so when it finds the binary only there.
 - **Menu system** (`shinobi-menu`) — ported from `omarchy-menu`, scoped down:
   Omarchy's menu is a route in a persistent shell-IPC daemon
   (toggle/summon/close against `omarchy-shell`); we don't have that daemon,

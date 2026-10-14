@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # shinobi:summary=Launch the AI agent with the active engagement's MCP config
-# shinobi:args=[--pick] [--accept-ungoverned-egress] [--no-wire-mcp] [prompt <text...>] | <install|login|setup|registry> [id]
+# shinobi:args=[--pick] [--accept-ungoverned-egress] [--no-wire-mcp] [prompt <text...>] | <install|login|setup> <id> [--accept-ungoverned-egress] | registry [--json]
 # shinobi:examples=shinobi agent --accept-ungoverned-egress | shinobi agent --pick | shinobi agent prompt "review this scope" | shinobi agent setup claude
 set -euo pipefail
 source "$(dirname -- "$(readlink -f -- "${BASH_SOURCE[0]}")")/_shinobi-common.sh"
@@ -36,16 +36,20 @@ Usage: shinobi-agent [--pick] [--accept-ungoverned-egress] [--no-wire-mcp] [prom
   runs            List recorded agent launches
 
   registry [--json]     The vendor agents Shinobi can set up (Claude Code, Codex),
-                        and which are installed
-  install <id>          Show the vendor's install command and run it, at your
+                        and which are installed. Needs no engagement.
+  install <id> [--accept-ungoverned-egress]
+                        Show the vendor's install command and run it, at your
                         terminal, if you confirm
-  login <id>            Hand off to the vendor's own login
-  setup <id>            Install if missing, log in, then offer to make it the
+  login <id> [--accept-ungoverned-egress]
+                        Show what will start, and hand off to the vendor's own
+                        login if you confirm
+  setup <id> [--accept-ungoverned-egress]
+                        Install if missing, log in, then offer to make it the
                         default agent
                         These never run anything without your confirmation at a
                         terminal, and they ask for the same acknowledgement as a
                         launch (the agent's model traffic is outside the egress
-                        gate).
+                        gate). None of them needs an engagement.
 
   To acknowledge for a whole session instead of per launch:
       export SHINOBI_ACCEPT_UNGOVERNED_EGRESS=1
@@ -113,7 +117,12 @@ case "${1:-}" in
     # So `setup` can find the sibling `shinobi-default-agent` whether or not the
     # directory is on PATH.
     export SHINOBI_BIN_DIR="$self_dir"
-    exec python3 -m shinobi_control.agentsetup "$@"
+    # -P: `python3 -m` otherwise puts the current directory first on sys.path, and
+    # an operator working in a directory they did not write (a cloned repository,
+    # something extracted from a target) would import its json.py, or its whole
+    # shinobi_control, in the process that holds the confirmation. PYTHONPATH, set
+    # above, is still honoured.
+    exec python3 -P -m shinobi_control.agentsetup "$@"
     ;;
 esac
 

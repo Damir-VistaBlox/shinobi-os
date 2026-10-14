@@ -37,6 +37,8 @@ if [[ -z "$SETSID" ]]; then
   exit 0
 fi
 
+command -v jq >/dev/null || { echo "agent-setup-test: SKIP (jq is not installed)"; exit 0; }
+
 failures=0
 checks=0
 check() {
@@ -77,6 +79,7 @@ cat >"$fake/curl" <<'EOF'
 # The only curl the commands under test can reach. It serves the two documented
 # installers, as harmless scripts, and refuses every other request.
 printf '%s\n' "$*" >>"$FAKE_LOG/curl.args"
+if [[ -t 0 ]]; then echo stdin=tty >"$FAKE_LOG/curl.fds"; else echo stdin=notty >"$FAKE_LOG/curl.fds"; fi
 [[ "${FAKE_CURL_FAIL:-}" == 1 ]] && exit 22
 case "$*" in
   *"https://claude.ai/install.sh"*) name=claude ;;
@@ -85,8 +88,15 @@ case "$*" in
 esac
 cat <<SCRIPT
 echo "fake $name installer ran"
+echo "fake $name installer stderr" >&2
 pwd >"$FAKE_LOG/installer.cwd"
+if [ -t 2 ]; then er=tty; else er=notty; fi
+echo "stderr=\$er" >"$FAKE_LOG/installer.fds"
 SCRIPT
+if [[ "${FAKE_BREAK_AUDIT:-}" == 1 ]]; then
+  echo "rm -f \"$XDG_STATE_HOME/shinobi/audit.jsonl\"; mkdir \"$XDG_STATE_HOME/shinobi/audit.jsonl\""
+fi
+if [[ "${FAKE_SLEEP:-}" == 1 ]]; then echo "sleep 30"; fi
 if [[ "${FAKE_NO_BINARY:-}" != 1 ]]; then
   dest="${FAKE_INSTALL_DIR:-$HOME/.local/bin}"
   cat <<SCRIPT
@@ -104,14 +114,21 @@ cat >"$FAKE_LOG/vendor-claude" <<'EOF'
 # Measured before any redirection, or `-t 1` would be asking about the log file.
 if [[ -t 0 ]]; then in=tty; else in=notty; fi
 if [[ -t 1 ]]; then outk=tty; else outk=notty; fi
+if [[ -t 2 ]]; then errk=tty; else errk=notty; fi
 {
   echo "args=$*"
   echo "cwd=$(pwd)"
   echo "stdin=$in"
   echo "stdout=$outk"
+  echo "stderr=$errk"
   echo "entries=$(ls -A | tr '\n' ' ')"
 } >>"$FAKE_LOG/claude.runs"
+if [[ "${FAKE_BREAK_AUDIT:-}" == 1 ]]; then
+  rm -f "$XDG_STATE_HOME/shinobi/audit.jsonl"
+  mkdir "$XDG_STATE_HOME/shinobi/audit.jsonl"
+fi
 echo "fake claude: Login successful"
+echo "fake claude stderr" >&2
 exit "${FAKE_CLAUDE_RC:-0}"
 EOF
 cat >"$FAKE_LOG/vendor-codex" <<'EOF'
@@ -132,11 +149,13 @@ default_file="$HOME/.config/shinobi/default-agent"
 
 # reset: a clean world for the next case.
 reset() {
-  rm -f "$fake/claude" "$fake/codex"
+  rm -f "$fake/claude" "$fake/codex" "$work/marker"
   rm -rf "$HOME" "$XDG_CONFIG_HOME" "$XDG_STATE_HOME" "$XDG_RUNTIME_DIR" "$TMPDIR" "$FAKE_LOG"/*.args \
     "$FAKE_LOG"/*.runs "$FAKE_LOG"/*.cwd
   mkdir -p "$HOME" "$XDG_CONFIG_HOME" "$XDG_STATE_HOME/shinobi" "$XDG_RUNTIME_DIR" "$TMPDIR"
-  unset FAKE_CURL_FAIL FAKE_NO_BINARY FAKE_INSTALLER_EXIT FAKE_INSTALL_DIR FAKE_CLAUDE_RC FAKE_CODEX_STATUS_RC FAKE_CODEX_LOGIN_RC \
+  # Like a real login session's runtime directory: only the user can write to it.
+  chmod 700 "$XDG_RUNTIME_DIR"
+  unset FAKE_CURL_FAIL FAKE_NO_BINARY FAKE_INSTALLER_EXIT FAKE_BREAK_AUDIT FAKE_SLEEP FAKE_INSTALL_DIR FAKE_CLAUDE_RC FAKE_CODEX_STATUS_RC FAKE_CODEX_LOGIN_RC \
     SHINOBI_ACCEPT_UNGOVERNED_EGRESS
 }
 # place <name> [dir]: put a fake vendor binary where the installer would.
@@ -151,7 +170,10 @@ place() {
 steps() { "$PY" -c 'import json,sys; a=sys.argv[1:]; print(json.dumps([[a[i], a[i+1]] for i in range(0, len(a), 2)]))' "$@"; }
 ACK='continue\? \[y/N\]'
 CONFIRM='Run it now\? \[y/N\]'
+LCONF='Start (claude|codex) now\? \[y/N\]'
 DEFAULT_Q="your default agent for 'shinobi agent'\? \[Y/n\]"
+# before <a> <b>: whether the first appears in the last transcript before the second.
+before() { "$PY" -c 'import sys; t = open(sys.argv[1]).read(); print(0 <= t.find(sys.argv[2]) < t.find(sys.argv[3]))' "$work/transcript" "$1" "$2"; }
 
 # pty <script-json> <cmd...>: run on a terminal, answering from the script.
 rc=0
@@ -174,6 +196,8 @@ notty() {
 }
 
 calls() { if [[ -e "$FAKE_LOG/$1" ]]; then wc -l <"$FAKE_LOG/$1"; else echo 0; fi; }
+# claude_runs: how many times the fake claude was started.
+claude_runs() { if [[ -e "$FAKE_LOG/claude.runs" ]]; then grep -c '^args=' "$FAKE_LOG/claude.runs" || true; else echo 0; fi; }
 # audit_seq <capability>: the statuses recorded, in order.
 audit_seq() {
   "$PY" - "$1" <<'EOF'
@@ -269,6 +293,7 @@ check "an agent found off PATH is reported as such" \
   "$(jq -r '.agents[0] | "\(.installed) \(.on_path) \(.path)"' <<<"$out")" "true false $HOME/.local/bin/claude"
 check "an agent found on PATH is reported as such" "$(jq -r '.agents[1] | "\(.installed) \(.on_path)"' <<<"$out")" "true true"
 check "the default agent is marked" "$(jq -r '[.agents[].default] | join(",")' <<<"$out")" "false,true"
+check "codex's commands and names" "$(jq -r '.agents[1] | "\(.name)|\(.login_command)|\(.install_command)"' <<<"$out")" "OpenAI Codex CLI|codex login|curl -fsSL https://chatgpt.com/codex/install.sh | sh"
 notty "$AGENT" registry
 check "the text form lists them too" "$(contains "$out" 'Claude Code')|$(contains "$out" 'OpenAI Codex CLI')" "yes|yes"
 check "and says what each would run" "$(contains "$out" 'curl -fsSL https://chatgpt.com/codex/install.sh | sh')" "yes"
@@ -336,14 +361,16 @@ check "the flag does not skip the confirmation either" "$rc|$(contains "$transcr
 
 echo "== what the operator is shown before saying yes =="
 check "the exact command, on a line of its own" "$(contains "$transcript" '      curl -fsSL https://claude.ai/install.sh | bash')" "yes"
-check "where it downloads from" "$(contains "$transcript" 'downloads from claude.ai')" "yes"
+check "where the script itself comes from" "$(contains "$transcript" 'fetches a script from claude.ai')" "yes"
+check "that it may download more, from places not listed" "$(contains "$transcript" 'may go on to download')" "yes"
 check "that Shinobi has not read it" "$(contains "$transcript" 'cannot vouch for it')" "yes"
 check "that it runs as them and not as root" "$(contains "$transcript" 'not as root')" "yes"
 check "where the vendor documents it, and when that was read" "$(contains "$transcript" 'https://code.claude.com/docs/en/setup (read on 2026-10-14)')" "yes"
 check "that the agent's own traffic is outside the egress gate" "$(contains "$transcript" 'NOT governed')" "yes"
 pty "$(steps "$CONFIRM" $'n\n')" "$AGENT" install codex --accept-ungoverned-egress
 check "codex shows its own command" "$(contains "$transcript" '      curl -fsSL https://chatgpt.com/codex/install.sh | sh')" "yes"
-check "and both of its hosts" "$(contains "$transcript" 'chatgpt.com, releases.openai.com')" "yes"
+check "and where its script comes from" "$(contains "$transcript" 'fetches a script from chatgpt.com')" "yes"
+check "the command is shown before the question" "$(before '      curl -fsSL https://chatgpt.com/codex/install.sh | sh' 'Run it now?')" "True"
 
 echo "== installing: what happens after a yes =="
 reset
@@ -370,7 +397,13 @@ reset
 pty "$(steps "$CONFIRM" $'y\n')" bash -c '"$0" install claude --accept-ungoverned-egress >"$1" 2>&1' "$AGENT" "$work/captured"
 check "the install still works with output redirected" "$rc" "0"
 check "the vendor's output is on the terminal" "$(contains "$transcript" 'fake claude installer ran')" "yes"
-check "and is not in what was redirected" "$(contains "$(<"$work/captured")" 'fake claude installer ran')" "no"
+check "and so is what it wrote to stderr" "$(contains "$transcript" 'fake claude installer stderr')" "yes"
+check "neither is in what was redirected" \
+  "$(contains "$(<"$work/captured")" 'fake claude installer ran')|$(contains "$(<"$work/captured")" 'installer stderr')" "no|no"
+check "the installer's stderr was the terminal, and the download's stdin was too" "$(<"$FAKE_LOG/installer.fds")|$(<"$FAKE_LOG/curl.fds")" "stderr=tty|stdin=tty"
+reset
+pty "$(steps "$CONFIRM" $'y\n')" bash -c 'yes | "$0" install claude --accept-ungoverned-egress' "$AGENT"
+check "even when stdin is a pipe, what the installer inherits is the terminal and not the pipe" "$(<"$FAKE_LOG/installer.fds")|$(<"$FAKE_LOG/curl.fds")" "stderr=tty|stdin=tty"
 check "nor is it in the audit journal or the event bus" \
   "$(contains "$(cat "$audit" "$events" 2>/dev/null)" 'installer ran')" "no"
 
@@ -430,98 +463,313 @@ rmdir "$audit"
 reset
 place claude
 mkdir -p "$audit"
-pty "[]" "$AGENT" login claude --accept-ungoverned-egress
+pty "$(steps "$LCONF" $'y\n')" "$AGENT" login claude --accept-ungoverned-egress
 check "and the same for a login: it is not handed off" "$rc|$(calls claude.runs)|$(contains "$transcript" 'nothing was run')" "1|0|yes"
 rmdir "$audit"
 
 echo "== logging in to Claude Code =="
 reset
 place claude
-pty "$(steps "$ACK" $'y\n')" bash -c 'cd "$1" && exec "$0" login claude' "$AGENT" "$work/proj"
+pty "$(steps "$ACK" $'y\n' "$LCONF" $'y\n')" bash -c 'cd "$1" && exec "$0" login claude' "$AGENT" "$work/proj"
 check "it succeeds" "$rc" "0"
-check "the vendor CLI was started once, with no arguments" "$(calls claude.runs)|$(grep -c '^args=$' "$FAKE_LOG/claude.runs")" "5|1"
+check "what would start was shown before it was asked" "$(before "Shinobi will run $HOME/.local/bin/claude" 'Start claude now?')" "True"
+check "the vendor CLI was started once, with no arguments" "$(grep -c '^args=$' "$FAKE_LOG/claude.runs")|$(grep -c '^cwd=' "$FAKE_LOG/claude.runs")" "1|1"
 check "not in the directory the command was run from" "$(grep '^cwd=' "$FAKE_LOG/claude.runs" | grep -c "$work/proj" || true)" "0"
 check "nor in the home directory" "$(grep '^cwd=' "$FAKE_LOG/claude.runs" | grep -cx "cwd=$HOME" || true)" "0"
-check "but in an empty temporary directory of its own, so no project settings or server list are in reach" \
-  "$(grep '^cwd=' "$FAKE_LOG/claude.runs" | grep -c "cwd=$TMPDIR/shinobi-agent-login-")|$(grep '^entries=' "$FAKE_LOG/claude.runs")" "1|entries="
-check "which is gone afterwards" "$(find "$TMPDIR" -mindepth 1 | wc -l)" "0"
-check "it had the terminal for input and output" "$(grep -c '^stdin=tty$' "$FAKE_LOG/claude.runs")|$(grep -c '^stdout=tty$' "$FAKE_LOG/claude.runs")" "1|1"
+check "but in an empty directory of its own, under the runtime directory only the user can write to" \
+  "$(grep '^cwd=' "$FAKE_LOG/claude.runs" | grep -c "cwd=$XDG_RUNTIME_DIR/shinobi-agent-login-")|$(grep '^entries=' "$FAKE_LOG/claude.runs")" "1|entries="
+check "which is gone afterwards" "$(find "$TMPDIR" "$XDG_RUNTIME_DIR" -name 'shinobi-agent-*' | wc -l)" "0"
+check "it had the terminal for input, output and errors" \
+  "$(grep -c '^stdin=tty$' "$FAKE_LOG/claude.runs")|$(grep -c '^stdout=tty$' "$FAKE_LOG/claude.runs")|$(grep -c '^stderr=tty$' "$FAKE_LOG/claude.runs")" "1|1|1"
+check "and what it printed to stderr reached the terminal" "$(contains "$transcript" 'fake claude stderr')" "yes"
 check "the operator was told what this session is, and what to do" \
   "$(contains "$transcript" 'full Claude Code session')|$(contains "$transcript" 'type /exit')|$(contains "$transcript" "Do real work through 'shinobi agent'")" "yes|yes|yes"
-check "and that the login is the vendor's" "$(contains "$transcript" 'Shinobi does not see it, store it, or read the files it leaves')" "yes"
+check "and that the login is the vendor's" "$(contains "$transcript" 'Shinobi does not see it, store it, or read')" "yes"
 check "it does not claim to know the login worked" "$(contains "$transcript" 'no command Shinobi can ask')" "yes"
 check "intent first, then the outcome" "$(audit_seq agent.login)" "started,completed"
 check "with the acknowledgement source" "$(audit_ack_ok agent.login claude prompt)" "yes"
+check "and, for an agent with no way to ask, that the state is not known" "$(contains "$(audit_details agent.login)" 'login state: not known')" "yes"
 check "one event" "$(event_count agent.login.finished)" "1"
 
 reset
+chmod 755 "$XDG_RUNTIME_DIR"
+place claude
+pty "$(steps "$LCONF" $'y\n')" "$AGENT" login claude --accept-ungoverned-egress
+check "a runtime directory others can enter is not used: it falls back to the temporary directory" \
+  "$(grep '^cwd=' "$FAKE_LOG/claude.runs" | grep -c "cwd=$TMPDIR/shinobi-agent-login-")" "1"
+
+echo "== logging in: the confirmation is its own, and defaults to no =="
+reset
+place claude
+pty "$(steps "$ACK" $'y\n' "$LCONF" $'n\n')" "$AGENT" login claude
+check "declining the confirmation: not handed off, said so" "$rc|$(calls claude.runs)|$(contains "$transcript" 'Nothing was run.')" "1|0|yes"
+check "and nothing was recorded" "$(audit_seq agent.login)" "-"
+pty "$(steps "$LCONF" $'n\n')" "$AGENT" login claude --accept-ungoverned-egress
+check "the flag does not stand in for it" "$rc|$(calls claude.runs)" "1|0"
+pty "$(steps "$LCONF" $'n\n')" env SHINOBI_ACCEPT_UNGOVERNED_EGRESS=1 "$AGENT" login claude
+check "nor does the session-wide acknowledgement" "$rc|$(calls claude.runs)|$(contains "$transcript" 'Do you accept that')" "1|0|no"
+pty "$(steps "$LCONF" $'\n')" "$AGENT" login claude --accept-ungoverned-egress
+check "an empty answer is a no" "$rc|$(calls claude.runs)" "1|0"
+pty "$(steps "$LCONF" $'yeah\n')" "$AGENT" login claude --accept-ungoverned-egress
+check "so is anything that is not a clear yes" "$rc|$(calls claude.runs)" "1|0"
+pty "$(steps "$LCONF" $'\x04')" "$AGENT" login claude --accept-ungoverned-egress
+check "so is end of input" "$rc|$(calls claude.runs)" "1|0"
+pty "$(steps "$LCONF" $'YES\n')" "$AGENT" login claude --accept-ungoverned-egress
+check "a yes in capitals is a yes" "$rc|$(claude_runs)" "0|1"
+rm -f "$audit" "$FAKE_LOG/claude.runs"
+pty "$(steps "$ACK" $'n\n')" env SHINOBI_ACCEPT_UNGOVERNED_EGRESS=true "$AGENT" login claude
+check "the session-wide acknowledgement means exactly 1: 'true' still gets asked" "$rc|$(contains "$transcript" 'not continuing without')" "1|yes"
+pty "$(steps "$ACK" $'n\n')" "$AGENT" login claude
+check "declining the acknowledgement: not handed off" "$rc|$(calls claude.runs)|$(audit_seq agent.login)" "1|0|-"
+pty "$(steps "$LCONF" $'y\n')" env SHINOBI_ACCEPT_UNGOVERNED_EGRESS=1 "$AGENT" login claude
+check "the session-wide acknowledgement is accepted, and recorded as such" "$rc|$(audit_ack_ok agent.login claude env)" "0|yes"
+rm -f "$audit"
+pty "$(steps "$LCONF" $'y\n')" "$AGENT" login claude --accept-ungoverned-egress
+check "and the flag, recorded as the flag" "$rc|$(audit_ack_ok agent.login claude flag)" "0|yes"
+
+echo "== logging in: outcomes that are not success =="
+reset
 place claude
 export FAKE_CLAUDE_RC=3
-pty "[]" "$AGENT" login claude --accept-ungoverned-egress
+pty "$(steps "$LCONF" $'y\n')" "$AGENT" login claude --accept-ungoverned-egress
 check "a vendor CLI that exits non-zero is a failed login" "$rc|$(audit_seq agent.login)" "1|started,failed"
 unset FAKE_CLAUDE_RC
 
 reset
 place claude
-pty "$(steps "$ACK" $'n\n')" "$AGENT" login claude
-check "declining the acknowledgement: not handed off" "$rc|$(calls claude.runs)|$(audit_seq agent.login)" "1|0|-"
-pty "[]" env SHINOBI_ACCEPT_UNGOVERNED_EGRESS=1 "$AGENT" login claude
-check "the session-wide acknowledgement is accepted, and recorded as such" "$rc|$(audit_ack_ok agent.login claude env)" "0|yes"
-rm -f "$audit"
-pty "[]" "$AGENT" login claude --accept-ungoverned-egress
-check "and the flag, recorded as the flag" "$rc|$(audit_ack_ok agent.login claude flag)" "0|yes"
+mkdir -p "$audit"
+pty "$(steps "$LCONF" $'y\n')" "$AGENT" login claude --accept-ungoverned-egress
+check "a journal that cannot be written: the login is not handed off" "$rc|$(calls claude.runs)|$(contains "$transcript" 'nothing was run')" "1|0|yes"
+rmdir "$audit"
+
+reset
+place claude
+export FAKE_BREAK_AUDIT=1
+pty "$(steps "$LCONF" $'y\n')" "$AGENT" login claude --accept-ungoverned-egress
+check "a journal that fails after the login started: the login ran" "$(claude_runs)" "1"
+check "and the operator is told it is unrecorded" "$(contains "$transcript" 'could NOT be recorded')" "yes"
+check "and the exit status says so, though the login itself worked" "$rc" "1"
+unset FAKE_BREAK_AUDIT
 
 echo "== logging in to Codex =="
 reset
 place codex
-pty "[]" "$AGENT" login codex --accept-ungoverned-egress
+pty "$(steps "$LCONF" $'y\n')" "$AGENT" login codex --accept-ungoverned-egress
 check "it succeeds" "$rc" "0"
 check "codex is asked to log in, and then asked whether that worked" \
   "$(sed 's/ cwd=.*//' "$FAKE_LOG/codex.runs" | paste -sd'|')" "args=login|args=login status"
 check "the verdict is the vendor's" "$(contains "$transcript" 'OpenAI Codex CLI: logged in.')" "yes"
 check "the outcome records the login state" "$(contains "$(audit_details agent.login)" 'login state: logged in')" "yes"
-check "neither command ran where the operator was" "$(grep -c "cwd=$TMPDIR/shinobi-agent-login-" "$FAKE_LOG/codex.runs")" "2"
+check "neither command ran where the operator was" "$(grep -c "cwd=$XDG_RUNTIME_DIR/shinobi-agent-login-" "$FAKE_LOG/codex.runs")" "2"
 reset
 place codex
 export FAKE_CODEX_STATUS_RC=1
-pty "[]" "$AGENT" login codex --accept-ungoverned-egress
-check "when the vendor says it did not work, so does Shinobi" "$(contains "$transcript" 'not logged in (status exit 1)')" "yes"
-check "and that is in the record too" "$(contains "$(audit_details agent.login)" 'not logged in (status exit 1)')" "yes"
+pty "$(steps "$LCONF" $'y\n')" "$AGENT" login codex --accept-ungoverned-egress
+check "when the vendor says you are not logged in, so does Shinobi, and the exit status is a failure" \
+  "$rc|$(contains "$transcript" 'not logged in (status exit 1)')" "1|yes"
+check "and that is in the record, as a failed login" "$(audit_seq agent.login)|$(contains "$(audit_details agent.login)" 'not logged in (status exit 1)')" "started,failed|yes"
 unset FAKE_CODEX_STATUS_RC
 reset
 place codex
 export FAKE_CODEX_LOGIN_RC=1
-pty "[]" "$AGENT" login codex --accept-ungoverned-egress
+pty "$(steps "$LCONF" $'y\n')" "$AGENT" login codex --accept-ungoverned-egress
 check "a login command that fails is a failed login" "$rc|$(audit_seq agent.login)" "1|started,failed"
+check "and the status command is not asked about it" "$(grep -c 'status' "$FAKE_LOG/codex.runs" || true)" "0"
 unset FAKE_CODEX_LOGIN_RC
 
 echo "== setup: install if missing, log in, offer the default =="
 reset
 export FAKE_INSTALL_DIR="$fake"
-pty "$(steps "$ACK" $'y\n' "$CONFIRM" $'y\n' "$DEFAULT_Q" $'\n')" "$AGENT" setup claude
+pty "$(steps "$ACK" $'y\n' "$CONFIRM" $'y\n' "$LCONF" $'y\n' "$DEFAULT_Q" $'\n')" "$AGENT" setup claude
 check "it goes through" "$rc" "0"
 check "the acknowledgement was asked for once, not once per step" "$(grep -c 'Do you accept that' <<<"$transcript")" "1"
 check "it installed, then logged in" "$(audit_seq agent.install)|$(audit_seq agent.login)" "started,completed|started,completed"
 check "both steps recorded the one acknowledgement" "$(audit_ack_ok agent.install claude prompt)|$(audit_ack_ok agent.login claude prompt)" "yes|yes"
 check "an empty answer to the default question is yes" "$(cat "$default_file" 2>/dev/null || echo none)" "claude"
-check "and the operator is told how to start it" "$(contains "$transcript" 'shinobi agent --accept-ungoverned-egress')" "yes"
+check "and the operator is told how to start it" "$(contains "$transcript" 'Start it, with its tools governed, with: shinobi agent --accept-ungoverned-egress')" "yes"
 
 reset
 export FAKE_INSTALL_DIR="$fake"
 place claude "$fake"
-pty "$(steps "$ACK" $'y\n' "$DEFAULT_Q" $'n\n')" "$AGENT" setup claude
+pty "$(steps "$ACK" $'y\n' "$LCONF" $'y\n' "$DEFAULT_Q" $'n\n')" "$AGENT" setup claude
 check "already installed: no install step, and declining the default is fine" \
   "$rc|$(audit_seq agent.install)|$(audit_seq agent.login)|$(cat "$default_file" 2>/dev/null || echo none)" "0|-|started,completed|none"
+check "declining the default says how to set it and how to start the agent once, and does not say it is the default" \
+  "$(contains "$transcript" 'shinobi default agent claude')|$(contains "$transcript" 'SHINOBI_AGENT_CMD=claude shinobi agent --accept-ungoverned-egress')|$(contains "$transcript" 'Start it, with its tools governed')" "yes|yes|no"
 rm -f "$fake/claude"
 
 reset
-pty "$(steps "$ACK" $'y\n' "$CONFIRM" $'y\n' "$DEFAULT_Q" $'y\n')" "$AGENT" setup claude
+pty "$(steps "$ACK" $'y\n' "$CONFIRM" $'y\n' "$LCONF" $'y\n' "$DEFAULT_Q" $'y\n')" "$AGENT" setup claude
 check "installed off PATH: the default cannot be set, and it says so" \
   "$rc|$(contains "$transcript" 'was not made the default')|$([[ -e $default_file ]] && echo set || echo unset)" "1|yes|unset"
 
 reset
 pty "$(steps "$ACK" $'y\n' "$CONFIRM" $'n\n')" "$AGENT" setup claude
 check "a declined install ends setup before any login" "$rc|$(calls claude.runs)|$(audit_seq agent.login)" "1|0|-"
+
+reset
+export FAKE_CURL_FAIL=1
+pty "$(steps "$ACK" $'y\n' "$CONFIRM" $'y\n')" "$AGENT" setup claude
+check "a failed install ends setup: no login is offered" "$rc|$(contains "$transcript" 'Log in to')|$(audit_seq agent.login)" "1|no|-"
+unset FAKE_CURL_FAIL
+
+# The case that tells "setup stopped" from "login had nothing to log in to": the
+# installer fails but leaves a binary behind.
+reset
+export FAKE_INSTALLER_EXIT=7
+pty "$(steps "$ACK" $'y\n' "$CONFIRM" $'y\n')" "$AGENT" setup claude
+check "an install that failed but left a binary: setup stops, and no login is offered" \
+  "$rc|$(contains "$transcript" 'Log in to')|$(claude_runs)|$(audit_seq agent.login)" "1|no|0|-"
+unset FAKE_INSTALLER_EXIT
+
+reset
+place claude "$fake"
+export FAKE_CLAUDE_RC=3
+pty "$(steps "$ACK" $'y\n' "$LCONF" $'y\n')" "$AGENT" setup claude
+check "a failed login ends setup: the default is not offered" "$rc|$(contains "$transcript" 'your default agent')|$([[ -e $default_file ]] && echo set || echo unset)" "1|no|unset"
+unset FAKE_CLAUDE_RC
+rm -f "$fake/claude"
+
+reset
+place codex "$fake"
+export FAKE_CODEX_STATUS_RC=1
+pty "$(steps "$ACK" $'y\n' "$LCONF" $'y\n')" "$AGENT" setup codex
+check "a login the vendor says did not work ends setup too" "$rc|$(contains "$transcript" 'your default agent')" "1|no"
+unset FAKE_CODEX_STATUS_RC
+rm -f "$fake/codex"
+
+echo "== installing codex =="
+reset
+pty "$(steps "$CONFIRM" $'y\n')" "$AGENT" install codex --accept-ungoverned-egress
+check "the codex installer is the documented one, fetched by the fake curl" "$rc|$(<"$FAKE_LOG/curl.args")" "0|-fsSL https://chatgpt.com/codex/install.sh"
+check "the binary is where it should be" "$([[ -x $HOME/.local/bin/codex ]] && echo yes || echo no)" "yes"
+check "it is recorded for codex, with the flag as its acknowledgement" "$(audit_seq agent.install)|$(audit_ack_ok agent.install codex flag)" "started,completed|yes"
+reset
+pty "$(steps "$CONFIRM" $'y\n')" env SHINOBI_ACCEPT_UNGOVERNED_EGRESS=1 "$AGENT" install claude
+check "an install recorded under the session-wide acknowledgement says env" "$rc|$(audit_ack_ok agent.install claude env)" "0|yes"
+reset
+pty "$(steps "$CONFIRM" $'y\n')" "$AGENT" install claude --accept-ungoverned-egress
+check "and under the flag, flag" "$rc|$(audit_ack_ok agent.install claude flag)" "0|yes"
+
+echo "== installing: answers and type-ahead =="
+reset
+pty "$(steps "$CONFIRM" $'\x04')" "$AGENT" install claude --accept-ungoverned-egress
+check "end of input at the confirmation is a no" "$rc|$(calls curl.args)" "1|0"
+# Something typed or pasted before the question exists is not an answer to it.
+pty "$(steps '^' $'y\ny\n' "$CONFIRM" $'n\n')" "$AGENT" install claude --accept-ungoverned-egress
+check "text typed ahead of the confirmation does not answer it" "$rc|$(calls curl.args)|$([[ -e $HOME/.local/bin/claude ]] && echo installed || echo absent)" "1|0|absent"
+place claude
+pty "$(steps '^' $'y\ny\n' "$LCONF" $'n\n')" env SHINOBI_ACCEPT_UNGOVERNED_EGRESS=1 "$AGENT" login claude
+check "nor does it answer a login's" "$rc|$(claude_runs)" "1|0"
+
+echo "== installing: an interrupt =="
+reset
+export FAKE_SLEEP=1
+pty "$(steps "$CONFIRM" $'y\n' 'installer stderr' $'\x03')" "$AGENT" install claude --accept-ungoverned-egress
+check "Ctrl-C while the installer runs: the install is not counted" "$rc|$(contains "$transcript" 'Traceback')" "1|no"
+check "it is recorded as failed, with the interrupt's status" \
+  "$(audit_seq agent.install)|$("$PY" -c 'import re,sys; print(bool(re.search(r"installer exit status (130|-2);", sys.argv[1])))' "$(audit_details agent.install)")" "started,failed|True"
+check "and its temporary directory is gone" "$(find "$TMPDIR" -mindepth 1 | wc -l)" "0"
+unset FAKE_SLEEP
+
+reset
+pty "$(steps "$CONFIRM" $'\x03')" "$AGENT" install claude --accept-ungoverned-egress
+check "Ctrl-C at a question ends the command cleanly, with the status a shell gives it" \
+  "$rc|$(contains "$transcript" 'Traceback')|$(calls curl.args)|$(audit_seq agent.install)" "130|no|0|-"
+
+echo "== a journal that fails after the install started =="
+reset
+export FAKE_BREAK_AUDIT=1
+pty "$(steps "$CONFIRM" $'y\n')" "$AGENT" install claude --accept-ungoverned-egress
+check "the installer ran and installed" "$([[ -x $HOME/.local/bin/claude ]] && echo yes || echo no)" "yes"
+check "the operator is told it could not be recorded" "$(contains "$transcript" 'could NOT be recorded')" "yes"
+check "and the exit status says so" "$rc" "1"
+unset FAKE_BREAK_AUDIT
+
+echo "== the command stays in its lane =="
+reset
+mkdir -p "$work/evil" "$work/rogue/shinobi_control"
+printf 'import os\nopen(os.environ["MARK"], "w").write("planted json.py ran")\nraise ImportError("planted")\n' >"$work/evil/json.py"
+printf 'import os\nopen(os.environ["MARK"], "w").write("planted package ran")\n' >"$work/rogue/shinobi_control/__init__.py"
+rm -f "$work/marker"
+notty env MARK="$work/marker" bash -c 'cd "$1" && exec "$0" registry --json' "$AGENT" "$work/evil"
+check "a file in the current directory named like a standard module is not imported" \
+  "$rc|$([[ -e $work/marker ]] && echo RAN || echo clean)|$(jq -r '[.agents[].id] | join(",")' <<<"$out")" "0|clean|claude,codex"
+notty env MARK="$work/marker" PYTHONPATH="$work/rogue" "$AGENT" registry --json
+check "a PYTHONPATH from the caller does not displace the code beside the command" \
+  "$rc|$([[ -e $work/marker ]] && echo RAN || echo clean)|$(jq -r '[.agents[].id] | join(",")' <<<"$out")" "0|clean|claude,codex"
+
+mkdir -p "$HOME/.local/bin"
+printf '#!/bin/sh\nexit 0\n' >"$HOME/.local/bin/claude"
+chmod 644 "$HOME/.local/bin/claude"
+notty "$AGENT" registry --json
+check "a file that is not executable is not an installed agent" "$(jq -r '.agents[0].installed' <<<"$out")" "false"
+chmod 755 "$HOME/.local/bin/claude"
+notty "$AGENT" install claude
+check "already installed, but off PATH: said so, and what to do about it" \
+  "$rc|$(contains "$out" 'already installed')|$(contains "$out" 'is not on your PATH')" "0|yes|yes"
+printf 'claude\xff\xfe\n' >/dev/null
+mkdir -p "$HOME/.config/shinobi"
+printf '\xff\xfe broken\n' >"$default_file"
+notty "$AGENT" registry --json
+check "a default-agent file that is not valid text does not break the registry" "$rc|$(jq -r '[.agents[].default] | join(",")' <<<"$out")" "0|false,false"
+
+check "an id is matched exactly, never by prefix, case or trailing text" \
+  "$(PYTHONPATH=libexec/shinobi "$PY" -c '
+from shinobi_control import agentreg
+bad = ["clau", "claude ", "CLAUDE", "claude\n", "codex2", "", "claude/../codex", None]
+out = []
+for b in bad:
+    try:
+        agentreg.get(b); out.append(False)
+    except agentreg.AgentError:
+        out.append(True)
+print(all(out))')" "True"
+check "the prompt says who the code runs as, and is honest as root" \
+  "$(PYTHONPATH=libexec/shinobi "$PY" -c '
+from unittest import mock
+from shinobi_control import agentsetup
+with mock.patch("os.geteuid", return_value=0):
+    root = agentsetup._runs_as()
+with mock.patch("os.geteuid", return_value=1000):
+    user = agentsetup._runs_as()
+print("not as root" not in root and "as root" in root, "not as root" in user)')" "True True"
+check "the code reads no file but the default-agent setting, and checks no path but the documented ones" \
+  "$("$PY" - libexec/shinobi/shinobi_control/agentsetup.py libexec/shinobi/shinobi_control/agentreg.py <<'PYEOF'
+import ast, sys
+allowed_paths = {".local/bin", ".config/shinobi/default-agent", "~/"}
+allowed_reads = {("_open_tty", "open"), ("_read_default_agent", "open")}
+problems = []
+for path in sys.argv[1:]:
+    tree = ast.parse(open(path).read())
+    docstrings = set()
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.Module, ast.FunctionDef, ast.ClassDef)) and node.body:
+            first = node.body[0]
+            if isinstance(first, ast.Expr) and isinstance(first.value, ast.Constant):
+                docstrings.add(id(first.value))
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Constant) and isinstance(node.value, str) and id(node) not in docstrings:
+            v = node.value
+            if (v.startswith(("~", ".")) or "/." in v) and v not in allowed_paths and v not in (".",):
+                problems.append(f"{path}: path-like string {v!r}")
+
+    class V(ast.NodeVisitor):
+        stack = []
+        def visit_FunctionDef(self, node):
+            self.stack.append(node.name); self.generic_visit(node); self.stack.pop()
+        def visit_Call(self, node):
+            f = node.func
+            name = f.id if isinstance(f, ast.Name) else f.attr if isinstance(f, ast.Attribute) else ""
+            if name in ("open", "read_text", "read_bytes", "fdopen", "scandir", "listdir", "iterdir", "glob", "rglob"):
+                where = (self.stack[-1] if self.stack else "<module>", name)
+                if where not in allowed_reads:
+                    problems.append(f"{path}: {where[1]} called in {where[0]}")
+            self.generic_visit(node)
+    V().visit(tree)
+print("clean" if not problems else "; ".join(problems))
+PYEOF
+)" "clean"
 
 echo "== a package layout finds its own code =="
 pkg="$work/pkg"
