@@ -90,7 +90,10 @@ shinobi_lock() {
 
 shinobi_emit_event() {
   local event="${1:?event name required}"
-  local payload="${2:-{}}"
+  # Not "${2:-{}}": bash ends that expansion at its first }, so the default is
+  # "{" followed by a literal "}", which appends a stray } to any payload given.
+  local payload="${2:-}"
+  [[ -n "$payload" ]] || payload='{}'
   command -v shinobi-event >/dev/null 2>&1 || return 0
   shinobi-event publish "$event" "$payload" >/dev/null 2>&1 || true
 }

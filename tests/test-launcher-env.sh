@@ -28,6 +28,8 @@ cp -r "$ROOT/libexec/shinobi" "$work/libexec/shinobi"
 export XDG_DATA_HOME="$work/data"
 export XDG_STATE_HOME="$work/state"
 export XDG_CONFIG_HOME="$work/config"
+# Events the commands below publish land here, not in the operator's runtime dir.
+export XDG_RUNTIME_DIR="$work/run"
 unset SHINOBI_ENGAGEMENTS_DIR SHINOBI_ENGAGEMENT SHINOBI_ENGAGEMENT_DIR
 
 failures=0
