@@ -16,7 +16,178 @@ picker() {
 }
 
 notify() {
-  command -v notify-send >/dev/null 2>&1 && notify-send "shinobi" "$1" || echo "$1" >&2
+  # `--` so a message that begins with a dash (an error quoted from a command) is
+  # text, not an option.
+  command -v notify-send >/dev/null 2>&1 && notify-send -- "shinobi" "$1" || echo "$1" >&2
+}
+
+# Run `shinobi-provider <args>` and show what it said, whatever the outcome. A
+# menu has no terminal, so output that is not shown is output that does not
+# exist: `default` prints what choosing a cloud provider does and does not
+# change, and when the audit write fails it says the change WAS made but could
+# NOT be recorded. Both would vanish. A non-zero exit is therefore shown under a
+# neutral heading, not "failed", because that second case is a change that
+# happened.
+provider_run() {
+  local out rc=0
+  out="$(shinobi-provider "$@" 2>&1)" || rc=$?
+  if [[ $rc -eq 0 ]]; then
+    notify "${out:-done}"
+  else
+    notify "shinobi-provider exited with status $rc:"$'\n'"$out"
+  fi
+}
+
+# provider_pick <prompt> <row>...: the picker over rows given as arguments.
+# Prints the chosen row, and nothing on Esc (wofi exits non-zero then, which
+# `set -e` would otherwise turn into a failed menu).
+provider_pick() {
+  local prompt="$1"
+  shift
+  local choice
+  choice="$(printf '%s\n' "$@" | picker "$prompt")" || choice=""
+  printf '%s' "$choice"
+}
+
+# The LLM provider menu: choose which provider `shinobi llm ask` uses, and store
+# or forget its API key. It is a front for `shinobi provider` and decides nothing
+# itself. In particular it does not touch the egress gate: a default is a
+# selection, and every request still needs an active engagement, and for a cloud
+# provider the engagement's clearance, a stored key and a per-turn approval.
+#
+# What the picker returns is what the operator typed or clicked, and wofi hands
+# back typed text that matches nothing. So a choice is only ever acted on by
+# comparing it, whole, to the rows this script offered; the provider id that ends
+# up in argv comes from the readiness report, never from the choice, and an
+# action is only run if it was in the list shown for that provider. Otherwise
+# typing `--clear` in the provider list, or "Clear my default" on a provider that
+# is not the default, would run a command nobody chose.
+provider_menu() {
+  command -v jq >/dev/null 2>&1 || { notify "The provider menu needs jq."; exit 1; }
+  # stderr goes to a file of its own so a warning can never end up inside the
+  # JSON, and the file is gone before anything below can `exec` past a trap.
+  local tmp state rc=0 err
+  tmp="$(mktemp)"
+  state="$(shinobi-provider readiness --json 2>"$tmp")" || rc=$?
+  err="$(<"$tmp")"
+  rm -f -- "$tmp"
+  if [[ $rc -ne 0 ]] || ! jq -e '.providers | type == "array"' >/dev/null 2>&1 <<<"$state"; then
+    notify "Cannot read the providers:"$'\n'"${err:-readiness gave no usable answer}"
+    exit 1
+  fi
+
+  # One TSV row per provider. Every field that came from a manifest or an error
+  # string has its control characters replaced, so a stray newline cannot split a
+  # row in two or smuggle a second row into the list.
+  local ids=() rows=() id egress status is_default line
+  while IFS=$'\t' read -r id egress status is_default; do
+    # The id becomes an argument to `shinobi-provider`; one that does not have
+    # the shape of a provider id is never offered.
+    [[ "$id" =~ ^[a-z0-9][a-z0-9._-]{0,63}$ ]] || continue
+    line="$(printf '%-24s %-6s %s' "$id" "$egress" "$status")"
+    if [[ "$is_default" == true ]]; then line+="  (default)"; fi
+    ids+=("$id")
+    rows+=("$line")
+  done < <(jq -r '
+    def clean: tostring | gsub("[[:cntrl:]]"; " ");
+    .providers[]
+    | [ (.id | clean),
+        (.egress | clean),
+        (if .usable then "ready" else "blocked: " + ((.blockers[0] // "unknown") | clean) end),
+        (.default | tostring) ]
+    | @tsv' <<<"$state")
+  if [[ ${#ids[@]} -eq 0 ]]; then
+    notify "No providers are configured."
+    exit 0
+  fi
+
+  local header
+  header="$(jq -r '
+    def clean: tostring | gsub("[[:cntrl:]]"; " ");
+    "LLM provider | default: "
+    + (if .default.problem != null then "unusable" else (.default.id // "none") end)
+    + " | " + ((.engagement // "") | clean | .[0:48])' <<<"$state")"
+
+  local choice i chosen
+  while true; do
+    choice="$(provider_pick "$header" "${rows[@]}")"
+    [[ -z "$choice" ]] && exit 0
+    chosen=""
+    for i in "${!rows[@]}"; do
+      if [[ "${rows[i]}" == "$choice" ]]; then
+        chosen="${ids[i]}"
+        break
+      fi
+    done
+    if [[ -z "$chosen" ]]; then
+      notify "That is not a provider on the list; nothing was changed."
+      exit 0
+    fi
+    provider_actions "$state" "$chosen" && return 0
+  done
+}
+
+# provider_actions <readiness json> <id>: what can be done with one provider.
+# Returns non-zero for "Back" so the caller shows the list again.
+provider_actions() {
+  local state="$1" id="$2" requires_key="" usable="" is_default="" default_source
+  IFS=$'\t' read -r requires_key usable is_default < <(
+    jq -r --arg id "$id" '.providers[] | select(.id == $id) | [.requires_key, .usable, .default] | @tsv' <<<"$state") || true
+  default_source="$(jq -r '.default.source // ""' <<<"$state")"
+
+  local actions=()
+  [[ "$is_default" == true ]] || actions+=("Make this the default")
+  # `--clear` removes your own setting only. When the default comes from the
+  # system or the package, clearing would change nothing and say so, so it is not
+  # offered.
+  if [[ "$is_default" == true && "$default_source" == user ]]; then actions+=("Clear my default"); fi
+  if [[ "$requires_key" == true ]]; then
+    actions+=("Store API key" "Forget stored API key")
+  fi
+  if [[ "$usable" != true ]]; then actions+=("Show what blocks it"); fi
+  actions+=("Back")
+
+  local act offered=""
+  act="$(provider_pick "$id" "${actions[@]}")"
+  [[ -z "$act" ]] && exit 0
+  local a
+  for a in "${actions[@]}"; do
+    if [[ "$a" == "$act" ]]; then offered=yes; fi
+  done
+  if [[ -z "$offered" ]]; then
+    notify "That is not one of the actions offered; nothing was changed."
+    exit 0
+  fi
+
+  case "$act" in
+    "Make this the default") provider_run default "$id" ;;
+    "Clear my default") provider_run default --clear ;;
+    "Store API key")
+      if ! command -v kitty >/dev/null 2>&1; then
+        notify "kitty is not installed; run 'shinobi provider key $id' in a terminal."
+        exit 0
+      fi
+      # The key is typed in the terminal, never here: wofi cannot hide input. The
+      # id is an argument, not part of a string a shell would parse, and --hold
+      # keeps the window open so the result can be read.
+      exec kitty --hold --title shinobi-provider-key -e shinobi-provider key "$id"
+      ;;
+    "Forget stored API key")
+      local sure
+      sure="$(provider_pick "forget the key for $id?" "Forget the key for $id" "Keep it")"
+      if [[ "$sure" == "Forget the key for $id" ]]; then
+        provider_run forget "$id"
+      else
+        notify "Kept the key for $id."
+      fi
+      ;;
+    "Show what blocks it")
+      jq -r --arg id "$id" '.providers[] | select(.id == $id) | .blockers[]' <<<"$state" \
+        | picker "blocked: $id" >/dev/null || true
+      ;;
+    "Back") return 1 ;;
+  esac
+  return 0
 }
 
 route="${1:-root}"
@@ -29,6 +200,7 @@ Launch agent
 Switch engagement
 New engagement
 Show active scope
+LLM provider
 Set default agent
 Clipboard history
 Wi-Fi
@@ -42,6 +214,7 @@ EOF
       "Switch engagement") exec shinobi-menu engagement-switch ;;
       "New engagement") exec shinobi-menu engagement-new ;;
       "Show active scope") exec shinobi-menu scope-show ;;
+      "LLM provider") exec shinobi-menu provider ;;
       "Set default agent") exec shinobi-agent --pick ;;
       "Clipboard history") exec shinobi-menu clipboard ;;
       "Wi-Fi") exec shinobi-network menu ;;
@@ -51,6 +224,10 @@ EOF
       "") exit 0 ;;
       *) notify "Unknown choice: $choice" ;;
     esac
+    ;;
+
+  provider)
+    provider_menu
     ;;
 
   agent-launch)

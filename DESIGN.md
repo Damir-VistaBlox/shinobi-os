@@ -565,8 +565,21 @@ an operator's configuration either — homes are completed rather than synced, a
   the system knows is refused without being repeated, so a prompt pasted into
   argv is not echoed. Changing the default, or storing or forgetting a key, leaves
   an audit record and an event, neither of which carries a key, and a change that
-  cannot be audited exits non-zero rather than looking clean. The desktop does
-  not surface any of this yet.
+  cannot be audited exits non-zero rather than looking clean.
+
+  The wofi menu is the first surface for it: `shinobi-menu provider` (the root
+  menu's "LLM provider" entry) lists the providers from `readiness --json` with
+  the first thing blocking each, and from there sets or clears the default,
+  stores a key, or forgets one. It decides nothing itself. wofi hands back typed
+  text when nothing matches, and `shinobi provider default --clear` is one word
+  away, so a choice is acted on only if it equals a row or an action the menu
+  offered for that provider, and the id that reaches argv comes from the
+  readiness report, never from what was picked. A key is typed in a terminal
+  (`kitty --hold -e shinobi-provider key <id>`, started from an argument vector),
+  because wofi cannot hide input; forgetting one asks first; and the commands'
+  own output, including the cloud notice and a change that happened but could not
+  be audited, is shown as a notification, since a menu has no terminal to print
+  it to. The bar and a panel do not surface any of this yet.
 - **Response streaming is deferred.** Requests are non-streaming, so a provider
   that only streams is not supported yet. Nothing in the gate depends on it.
 - **The image builds, and this branch's first build ever is the one that proved
