@@ -1,0 +1,22 @@
+Package: shinobi-installer
+Version: 0.1.0
+Section: x11
+Priority: optional
+Architecture: all
+Maintainer: Shinobi OS Maintainers <maintainers@shinobi-os.local>
+Depends: shinobi-core (= 0.1.0), calamares (>= 3.4.0)
+Recommends: shinobi-desktop (= 0.1.0)
+Description: The Shinobi Installation Wizard
+ The graphical installer for Shinobi OS, built on Calamares and branded as the
+ Shinobi Installation Wizard.
+ .
+ It installs the system booted from the live image onto a disk: the same
+ packages, the same configuration and the same fonts that the live session has
+ been running, rather than a second list assembled at install time. An installer
+ that resolves dependencies from a repository at the moment somebody chooses a
+ disk is a different system from the one that was tested, and it fails on the
+ wifi.
+ .
+ The wizard is offline by design. Nothing it does reaches the network, because
+ the archive it came from is on the medium and the layer it applies is already
+ installed.

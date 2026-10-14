@@ -49,7 +49,7 @@ python3 -m py_compile "$ROOT"/libexec/shinobi/shinobi_control/*.py \
   "$ROOT"/mcp-servers/shinobi-recon/shinobi_recon/*.py
 
 echo "== Checking Hyprland theme bootstrap =="
-colors_file="$ROOT/distro/overlay/includes.chroot/usr/share/shinobi-dotfiles/etc/skel/.config/hypr/colors.conf"
+colors_file="$ROOT/packaging/shinobi-desktop/usr/share/shinobi-dotfiles/etc/skel/.config/hypr/colors.conf"
 [[ -f "$colors_file" && ! -L "$colors_file" ]] \
   || fail "default Hyprland colors.conf must be a regular fallback file"
 grep -Fq '$active_border = rgba(' "$colors_file" \
@@ -57,9 +57,9 @@ grep -Fq '$active_border = rgba(' "$colors_file" \
 grep -Fq '$inactive_border = rgba(' "$colors_file" \
   || fail "default inactive border color is missing"
 for fallback in \
-  "$ROOT/distro/overlay/includes.chroot/usr/share/shinobi-dotfiles/etc/skel/.config/kitty/colors.conf" \
-  "$ROOT/distro/overlay/includes.chroot/usr/share/shinobi-dotfiles/etc/skel/.config/wofi/colors.css" \
-  "$ROOT/distro/overlay/includes.chroot/usr/share/shinobi-dotfiles/etc/skel/.config/quickshell/Theme.qml"
+  "$ROOT/packaging/shinobi-desktop/usr/share/shinobi-dotfiles/etc/skel/.config/kitty/colors.conf" \
+  "$ROOT/packaging/shinobi-desktop/usr/share/shinobi-dotfiles/etc/skel/.config/wofi/colors.css" \
+  "$ROOT/packaging/shinobi-desktop/usr/share/shinobi-dotfiles/etc/skel/.config/quickshell/Theme.qml"
 do
   [[ -f "$fallback" && ! -L "$fallback" ]] \
     || fail "desktop fallback must be a regular file: ${fallback#$ROOT/}"

@@ -1,0 +1,25 @@
+# xAI Grok. Speaks the OpenAI chat-completions shape, so it is
+# `openai-compatible` rather than `openai`: the difference is not the wire
+# format but the deployment -- this is a different vendor's endpoint with its
+# own account, its own key and its own data path off this machine. The api
+# field says what to send; egress says whose server receives it.
+#
+# Cloud: every prompt leaves this machine, so an engagement needs explicit
+# clearance in its scope.yaml before this provider will be used.
+id = "xai"
+name = "xAI Grok"
+api = "openai-compatible"
+base_url = "https://api.x.ai/v1"
+egress = "cloud"
+requires_key = true
+default_model = "grok-4"
+
+# A starting set, not the full catalogue. The model list exists so the CLI can
+# offer choices and validate a default; the API is the authority on what this
+# account can actually reach. Edit or override in /etc/shinobi/providers.d.
+models = [
+  "grok-4",
+  "grok-4-fast",
+  "grok-3",
+  "grok-3-mini",
+]

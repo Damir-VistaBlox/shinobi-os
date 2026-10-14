@@ -1,0 +1,98 @@
+#!/bin/sh
+# shinobi-selftest -- report whether the installed system is what was installed.
+#
+# Prints a report and exits non-zero if anything is wrong. Intended to be run
+# from a test profile on a machine nobody is watching, where the only channel is
+# a serial console -- which is why it writes plain lines and no colours.
+#
+# This exists because "the install finished" is not an answer. The failure mode
+# it is written for is an installed system that boots to a desktop with no
+# control plane in it: the wizard reported success, the bar is missing, and
+# nothing anywhere says why. Every check below is a claim the wizard makes on the
+# operator's behalf, restated as something a machine can check.
+#
+# Not shipped in an ordinary install. The harness copies it in.
+set -u
+
+failures=0
+checks=0
+
+check() {
+  checks=$((checks + 1))
+  if [ "$2" = "$3" ]; then
+    printf 'SELFTEST ok   %s\n' "$1"
+  else
+    printf 'SELFTEST FAIL %s (expected %s, got %s)\n' "$1" "$3" "$2"
+    failures=$((failures + 1))
+  fi
+}
+
+exists() { [ -e "$1" ] && echo yes || echo no; }
+
+# --- the account --------------------------------------------------------------
+# One account, named for the product, and no inherited one. An installed system
+# with both is the state where the wizard's first claim was wrong.
+user_count=$(awk -F: '$3>=1000 && $3<65534 && $7 !~ /(nologin|false)$/ {print $1}' /etc/passwd | wc -l)
+check "exactly one login account" "$user_count" "1"
+account=$(awk -F: '$3>=1000 && $3<65534 && $7 !~ /(nologin|false)$/ {print $1}' /etc/passwd | head -1)
+check "it is not the live session's" \
+  "$([ "$account" != kali ] && echo yes || echo no)" "yes"
+check "sudo works for it" \
+  "$([ -r "/etc/sudoers.d/$account" ] && echo yes || echo no)" "yes"
+
+# --- the layer arrived --------------------------------------------------------
+check "the CLI is installed" "$(command -v shinobi >/dev/null 2>&1 && echo yes || echo no)" "yes"
+check "the agent entry point is installed" "$(exists /usr/bin/shinobi-agent)" "yes"
+check "the control plane units are present" \
+  "$([ -f /usr/lib/systemd/user/shinobi-agentd.service ] && echo yes || echo no)" "yes"
+check "the recon server is installed" "$(exists /usr/bin/shinobi-recon)" "yes"
+check "its private copy is present" \
+  "$([ -d /usr/lib/shinobi/mcp-servers/shinobi_recon ] && echo yes || echo no)" "yes"
+
+# --- the desktop layer arrived ------------------------------------------------
+check "the dotfiles were applied to the account's home" \
+  "$([ -f "/home/$account/.config/hypr/hyprland.conf" ] && echo yes || echo no)" "yes"
+check "the skel carries them for accounts created later" \
+  "$([ -f /etc/skel/.config/quickshell/shell.qml ] && echo yes || echo no)" "yes"
+check "the boot splash is installed" \
+  "$([ -f /usr/share/plymouth/themes/shinobi/shinobi.plymouth ] && echo yes || echo no)" "yes"
+check "the Nerd Font came across with the image" \
+  "$([ -d /usr/share/fonts/shinobi-nerd-font ] && echo yes || echo no)" "yes"
+
+# --- ownership ----------------------------------------------------------------
+# The bug this catches was reported by SDDM as "the home directory does not
+# belong to the user you are currently creating", and it was invisible because
+# chown covered only .config.
+check "the home belongs to the account" \
+  "$(stat -c %U "/home/$account" 2>/dev/null || echo unknown)" "$account"
+check "and its desktop config with it" \
+  "$(stat -c %U "/home/$account/.config" 2>/dev/null || echo unknown)" "$account"
+
+# --- nothing from the live session survived ----------------------------------
+check "no autologin is configured" \
+  "$(grep -rl '^Autologin=' /etc/sddm.conf.d/ 2>/dev/null | wc -l)" "0"
+check "the live sudoers grant did not survive" \
+  "$(exists /etc/sudoers.d/live)" "no"
+
+# --- the installed system is itself ------------------------------------------
+# A copied image has the image's machine-id, so two machines -- the stick and
+# the disk -- present the same identity to systemd and D-Bus.
+check "the machine has its own machine-id" \
+  "$([ -s /etc/machine-id ] && [ "$(cat /etc/machine-id)" != "uninitialized\n" ] && echo yes || echo no)" "yes"
+check "root's fstab points at the installed disk, not the medium" \
+  "$(grep -qE '^[^#]+[[:space:]]/[[:space:]]' /etc/fstab && echo yes || echo no)" "yes"
+check "the medium is not in fstab" \
+  "$(grep -qi 'live/medium\|filesystem.squashfs' /etc/fstab && echo yes || echo no)" "no"
+
+# --- and the layer can describe itself ---------------------------------------
+check "provenance is present" "$(exists /usr/share/shinobi/provenance)" "yes"
+check "it names the base" \
+  "$(grep -q '^base=kali$' /usr/share/shinobi/provenance 2>/dev/null && echo yes || echo no)" "yes"
+check "and states that the relationship is an overlay" \
+  "$(grep -q '^relationship=overlay$' /usr/share/shinobi/provenance 2>/dev/null && echo yes || echo no)" "yes"
+
+printf 'SELFTEST %d checks, %d failures\n' "$checks" "$failures"
+if [ "$failures" -gt 0 ]; then
+  exit 1
+fi
+exit 0

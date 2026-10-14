@@ -1,0 +1,43 @@
+#!/bin/sh
+# Install the Shinobi layer as Debian packages, then apply it.
+#
+# This hook is now only the wiring: it installs shinobi-core and
+# shinobi-desktop from the sources distro/build.sh staged into /opt/shinobi,
+# and hands off to /usr/lib/shinobi/shinobi-setup. The application logic lives
+# in the engine because install.sh and the installation wizard run the same
+# thing -- when the ISO built the desktop and nothing did when you installed to
+# a disk, that was this file's logic existing only here.
+set -eu
+
+if [ ! -x /opt/shinobi/packaging/build-deb.sh ]; then
+  echo "0010-install: /opt/shinobi/packaging/build-deb.sh is missing." >&2
+  echo "  distro/build.sh stages the repo's packaging/ into /opt/shinobi; without it there is nothing to build." >&2
+  exit 1
+fi
+
+# apt, not dpkg -i, and that is load-bearing. The packages depend on python3-mcp,
+# python3-yaml and the whole desktop stack; dpkg -i resolves nothing, so it
+# would unpack the files, fail, and leave the packages unconfigured with their
+# dependencies missing -- and each postinst's self-check, the thing that keeps a
+# broken install from looking complete, would never get to run.
+for pkg in core desktop; do
+  deb="/tmp/shinobi-$pkg.deb"
+  /opt/shinobi/packaging/build-deb.sh "$pkg" "$deb" >/dev/null
+  apt-get install -y --no-install-recommends "$deb" >/dev/null
+  rm -f "$deb"
+done
+
+# Apply the layer: dotfiles, the account, the font, provenance.
+#
+# --rename-from kali because this image inherits Kali's live user account, and
+# the engine never renames an account on its own initiative. On a system
+# somebody already administers that is not a decision a build should make; in
+# the image it is the last step of the rebrand, so it is named explicitly here.
+#
+# The font is installed here rather than by its own hook: it is part of applying
+# the layer, and a second hook for it meant a second place to forget it.
+/usr/lib/shinobi/shinobi-setup apply --rename-from kali
+
+# Nothing runs the desktop's services from here. They are started by
+# shinobi-session at login, and enabling them in a chroot would require a
+# systemd that is not running.

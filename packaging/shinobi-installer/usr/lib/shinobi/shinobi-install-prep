@@ -1,0 +1,85 @@
+#!/bin/sh
+# shinobi-install-prep -- make a copied live session into a target fit to install.
+#
+# Run inside the target's chroot, before Calamares' users module creates the
+# operator's account. The wizard's configuration calls this as one command
+# rather than as a list of shell one-liners, because the logic here is
+# conditional and quoting it into a YAML flow sequence produced a file that did
+# not parse.
+#
+# What an unpackfs install inherits, and why each part of this exists:
+#
+#   * The live session's own account. It was created by live-config at boot and
+#     is in /etc/passwd, but its home directory is excluded from the copy, so it
+#     arrives as a name with nothing behind it. Calamares' users module cannot
+#     create an account that already exists, so an operator who picks that same
+#     name gets an error page -- after they have chosen a disk. Its name is read
+#     from the target's own live-config rather than assumed, so an image that
+#     calls its live account something else does not put it on every installed
+#     system.
+#
+#   * Whatever is left of the live medium's state: stale apt lists from the image
+#     build, the live mount table, per-session runtime state.
+#
+# Nothing here is fatal. An install that carries a stray account is recoverable;
+# an install that stops half-way through the disk is not.
+set -eu
+
+# --- the live session's account ----------------------------------------------
+live_user=$(
+  sed -n 's/^[[:space:]]*LIVE_USERNAME=["'"'"']\{0,1\}\([^"'"'"' ]*\)["'"'"']\{0,1\}$/\1/p' \
+    /etc/live/config.conf.d/*.conf 2>/dev/null | tail -1
+)
+[ -n "$live_user" ] || live_user=shinobi
+
+if getent passwd "$live_user" >/dev/null 2>&1; then
+  # A home directory is the signature of a real account. The copied live account
+  # has none, because /home/* is excluded from the copy.
+  if [ ! -d "/home/$live_user" ]; then
+    if userdel -r "$live_user" 2>/dev/null; then
+      echo "install-prep: removed the live session's account '$live_user'"
+    else
+      echo "install-prep: could not remove '$live_user'; the operator may not be able to use that name" >&2
+    fi
+  else
+    echo "install-prep: '$live_user' has a home directory, so it is a real account and was left alone"
+  fi
+fi
+
+# Anything else that arrived without a home directory is an artefact of the copy
+# rather than somebody's account. Accounts with homes -- including any the image
+# created for real use -- are untouched.
+for account in $(awk -F: '$3 >= 1000 && $3 < 65534 { print $1 }' /etc/passwd); do
+  if [ ! -d "/home/$account" ]; then
+    userdel -r "$account" 2>/dev/null &&
+      echo "install-prep: removed '$account', which came across without a home"
+  fi
+done
+
+# --- the live medium's leftovers ---------------------------------------------
+# Stale apt lists would make an `apt upgrade` on the installed system a no-op
+# against a cache that claims everything is current.
+rm -rf /var/lib/apt/lists/* 2>/dev/null || true
+rm -f /etc/mtab 2>/dev/null || true
+rm -rf /run/live 2>/dev/null || true
+rm -rf /var/lib/dhcp 2>/dev/null || true
+
+# --- and check that what follows can run --------------------------------------
+# If the target is not a usable system, every later step fails in a way that
+# says nothing about why. Failing here, with the reason, is the difference
+# between "the install failed" and "there is no /bin/sh, so nothing that
+# follows could have run".
+if [ ! -x /bin/sh ]; then
+  echo "install-prep: the target has no /bin/sh; it is not an installable system" >&2
+  exit 1
+fi
+if [ ! -d /usr/share/shinobi-dotfiles ]; then
+  echo "install-prep: the target has no shinobi dotfiles; shinobi-desktop did not survive the copy" >&2
+  exit 1
+fi
+if [ ! -x /usr/lib/shinobi/shinobi-setup ]; then
+  echo "install-prep: the target has no shinobi-setup; shinobi-core did not survive the copy" >&2
+  exit 1
+fi
+
+exit 0

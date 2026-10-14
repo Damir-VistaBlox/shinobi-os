@@ -31,6 +31,9 @@ SOURCE_TESTS=(
   tests/test-migrate.sh
   tests/test-build-config.sh
   tests/test-package-layout.sh
+  tests/test-setup.sh
+  tests/test-installer.sh
+  tests/test-branding.sh
   tests/test-docs.sh
   tests/test-fonts-hook.sh
   tests/test-variant-parity.sh
@@ -42,6 +45,7 @@ SOURCE_TESTS=(
   tests/test-mcp-e2e.sh
   tests/test-tool-registry.sh
   tests/test-providers.sh
+  tests/test-repo.sh
   tests/test-egress.sh
   tests/test-llm.sh
   tests/test-source-integrity.sh

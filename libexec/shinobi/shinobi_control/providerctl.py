@@ -93,6 +93,126 @@ class ProviderError(RuntimeError):
     """Raised when the provider registry is missing, malformed or inconsistent."""
 
 
+def _readiness(as_json: bool) -> int:
+    """Report, per provider, whether it could be used right now and what blocks it.
+
+    `provider list` answers "what is configured". This answers "what would
+    happen if I asked it a question", which is the question an operator has when
+    the desktop says the AI is offline and refuses to say more.
+
+    The blockers are reported per provider and separately from the verdict,
+    because they need different fixes and lumping them into "unavailable" is
+    what made the desktop unreadable: no key, a missing engagement, a trust
+    profile below operator, and an uncleared scope are four different
+    instructions, and an operator cannot act on "unavailable".
+
+    This deliberately reuses the gate's own view of clearance where it can, so
+    the readiness report cannot drift from what actually authorizes a request.
+    It does NOT call authorize(): that would demand a per-turn approval and
+    consume one, which a status command must never do.
+    """
+    from . import credentials
+    from . import egress as gate
+    from .policy import current_profile
+
+    try:
+        providers = load_all()
+    except ProviderError as exc:
+        print(f"shinobi-provider: {exc}", file=sys.stderr)
+        return 1
+
+    # Engagement clearance, read the same way the gate reads it. A missing or
+    # malformed scope is reported as its own blocker rather than raising out of
+    # a status command.
+    cloud_cleared = False
+    engagement_note = "no active engagement"
+    try:
+        engagement_dir = gate._engagement_dir()
+        allowed = gate.clearance(gate.load_scope(engagement_dir))
+        cloud_cleared = allowed.cloud
+        engagement_note = f"engagement {engagement_dir.name}"
+        provider_allow = allowed.providers
+    except gate.EgressRefused as exc:
+        engagement_note = f"unavailable: {exc}"
+        provider_allow = None
+    except Exception:  # noqa: BLE001 - status must not die on a surprise
+        provider_allow = None
+
+    try:
+        profile = current_profile()
+    except Exception:  # noqa: BLE001 - status must not die on a surprise
+        profile = "observer"
+    profile_ok = profile in gate._CLOUD_PROFILES
+
+    rows = []
+    for provider in sorted(providers.values(), key=lambda p: p.id):
+        blockers = []
+        if provider_allow is not None and provider.id not in provider_allow:
+            blockers.append(f"not permitted by this engagement (llm.providers)")
+        if provider.egress == "cloud":
+            if not cloud_cleared:
+                blockers.append("engagement has not cleared cloud egress (llm.cloud)")
+            if not profile_ok:
+                blockers.append(f"cloud egress needs operator-or-above (session: {profile})")
+            if provider.requires_key:
+                try:
+                    present = credentials.has_key(provider.id)
+                except Exception:  # noqa: BLE001 - a keyring problem is "no key"
+                    present = False
+                if not present:
+                    blockers.append(f"no API key stored (shinobi provider key {provider.id})")
+        rows.append(
+            {
+                "id": provider.id,
+                "name": provider.name,
+                "egress": provider.egress,
+                "default_model": provider.default_model,
+                "requires_key": provider.requires_key,
+                "usable": not blockers,
+                "blockers": blockers,
+            }
+        )
+
+    if as_json:
+        import json
+
+        print(
+            json.dumps(
+                {
+                    "engagement": engagement_note,
+                    "profile": profile,
+                    "cloud_cleared": cloud_cleared,
+                    "providers": rows,
+                    "any_usable": any(r["usable"] for r in rows),
+                },
+                indent=2,
+                sort_keys=True,
+            )
+        )
+        return 0
+
+    print(f"engagement: {engagement_note}")
+    print(f"profile:    {profile}" + ("" if profile_ok else "  (below operator: no cloud egress)"))
+    cloud = "yes" if cloud_cleared else "no"
+    print(f"cloud:      {cloud}")
+    print()
+    usable = [r for r in rows if r["usable"]]
+    if not rows:
+        print("no providers configured.")
+        return 0
+    for row in rows:
+        mark = "ok  " if row["usable"] else "--  "
+        print(f"{mark}{row['id']:28} {row['egress']:6} {row['default_model']}")
+        for blocker in row["blockers"]:
+            print(f"        - {blocker}")
+    print()
+    if usable:
+        print(f"{len(usable)} provider(s) ready to use.")
+        return 0
+    print("No provider is ready. Each blocker above is a separate fix.")
+    return 1
+
+
 @dataclass(frozen=True)
 class Provider:
     id: str
@@ -410,13 +530,18 @@ def main() -> int:
 
     if action in {"help", "-h", "--help"}:
         print(
-            "Usage: shinobi provider <list|inspect|check|key|forget> [id] [--json]\n"
+            "Usage: shinobi provider <list|inspect|check|readiness|key|forget> [id] [--json]\n"
             "\n"
             "  list            every provider, with whether a key is stored\n"
             "  inspect <id>    one manifest, verbatim\n"
             "  check           validate every manifest and report\n"
+            "  readiness       which providers could be used right now, and what\n"
+            "                  blocks each one; exit 1 if none are ready\n"
             "  key <id>        store an API key, read from a prompt or stdin\n"
             "  forget <id>     remove the stored key\n"
+            "\n"
+            "'readiness' is the one to run when something says the AI is offline: it\n"
+            "names the fix for each provider instead of reporting 'unavailable'.\n"
             "\n"
             "Keys are never accepted as arguments, never printed, and never written\n"
             "to a manifest. On the live image they live in the kernel keyring and do\n"
@@ -485,6 +610,9 @@ def main() -> int:
         for provider in providers.values():
             print(f"  {provider.id:28} {provider.egress:6} {provider.base_url}")
         return 0
+
+    if action == "readiness":
+        return _readiness(as_json)
 
     if action == "key":
         provider_id = sys.argv[2] if len(sys.argv) > 2 else ""

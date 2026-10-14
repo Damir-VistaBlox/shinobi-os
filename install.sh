@@ -1,31 +1,78 @@
 #!/usr/bin/env bash
-# Provision Shinobi OS on a Kali box: apt deps, shinobi CLI on PATH, shinobi-recon
-# MCP server via pipx.
+# Provision Shinobi OS on a Kali box: build and install the layer packages,
+# then apply the layer with the same engine the ISO and the installation wizard
+# use.
+#
+#   ./install.sh                 core + desktop (the full layer)
+#   ./install.sh --cli-only      core only, no desktop stack
+#   ./install.sh --help
+#
+# This used to install the CLI and then tell you the desktop needed the ISO.
+# That was the gap the layer had: the Hyprland dotfiles, the Plymouth theme and
+# the wallpaper existed only inside the image build, so installing to a disk --
+# by any means -- produced Kali's own desktop with none of Shinobi's. They ship
+# in shinobi-desktop now, and applying them is shinobi-setup's job, the same as
+# in the image.
 set -euo pipefail
 
 SHINOBI_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
-PREFIX="${PREFIX:-/usr/local}"
+
+cli_only=false
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --cli-only) cli_only=true; shift ;;
+    -h | --help | '')
+      sed -n '2,14p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+      exit 0
+      ;;
+    *)
+      echo "install.sh: unknown option '$1' (try --help)" >&2
+      exit 64
+      ;;
+  esac
+done
+
+packages=core
+if [ "$cli_only" = false ]; then
+  packages="core desktop"
+fi
 
 echo "== Installing apt dependencies =="
 sudo apt-get update -y
-sudo apt-get install -y nmap python3-pip dpkg-dev
+# dpkg-dev for build-deb.sh. rsync for shinobi-setup, which applies the dotfiles
+# with rsync -a --chown so the home directory cannot land root-owned.
+sudo apt-get install -y dpkg-dev rsync
 
-echo "== Building and installing canonical shinobi-core package =="
-package="$SHINOBI_ROOT/shinobi-core.deb"
-"$SHINOBI_ROOT/packaging/build-deb.sh" "$package"
-# apt, not dpkg -i. The package depends on python3-mcp and python3-yaml, and
-# dpkg -i does not resolve dependencies: it unpacks, fails, and leaves the
-# package unconfigured with nothing installed. apt given a local .deb pulls the
-# Depends in first, which is also what lets the postinst's import check mean
-# anything.
-sudo apt-get install -y "$package"
-rm -f "$package"
+echo "== Building and installing the Shinobi layer =="
+# Built into a temporary directory rather than into the checkout.
+#
+# Writing the .deb beside the sources leaves an artefact in somebody's working
+# tree every time they run this, and it fails outright on a read-only checkout --
+# an unpacked source tarball, a distro's copy, or any tree owned by root that the
+# operator is invoking through sudo, which is how this is normally run.
+build_dir="$(mktemp -d)"
+trap 'rm -rf "$build_dir"' EXIT
 
-# The recon MCP server comes from the package now, at /usr/bin/shinobi-recon,
-# and is verified by its postinst. It used to be pipx-installed here as well,
-# which put a second copy on the operator's PATH ahead of the package's -- an
-# unpinned one, since the dependency was resolved by pip at install time, and so
-# a version the postinst had never checked.
+for pkg in $packages; do
+  package="$build_dir/shinobi-$pkg.deb"
+  "$SHINOBI_ROOT/packaging/build-deb.sh" "$pkg" "$package"
+  # apt, not dpkg -i. The packages depend on python3-mcp, python3-yaml and the
+  # desktop stack; dpkg -i resolves nothing, so it unpacks, fails, and leaves
+  # the package unconfigured with nothing installed. apt given a local .deb
+  # pulls the Depends in first, which is also what lets each postinst's
+  # self-check mean anything.
+  sudo apt-get install -y "$package"
+done
+
+# Apply the layer: dotfiles into /etc/skel and the account's home, the Nerd
+# Font, provenance.
+#
+# No account is renamed here. install.sh is run on machines somebody already
+# administers, and renaming their login to match a branding decision is not a
+# call a script makes for them -- shinobi-setup takes --rename-from, and says so
+# on stderr when the account it found is still Kali's.
+echo "== Applying the layer =="
+sudo shinobi-setup apply
 
 echo ""
 echo "Installed. Next steps:"
@@ -40,7 +87,8 @@ echo "its model provider directly, outside Shinobi's egress gate, and that part"
 echo "is not governed. To wire the server yourself instead, see"
 echo "config/claude/mcp-servers.json and pass --no-wire-mcp."
 echo ""
-echo "This installs the CLI only. shinobi-menu/shinobi-theme/shinobi-capture/"
-echo "shinobi-power need the Hyprland desktop stack (quickshell, wofi, grim, ...)"
-echo "to do anything — either install it yourself, or use the full desktop"
-echo "ISO in distro/ instead of this script."
+echo "Check what landed: shinobi-setup status"
+if [ "$cli_only" = true ]; then
+  echo "Note: --cli-only installed no desktop layer, so shinobi-menu,"
+  echo "shinobi-theme and shinobi-capture have no Hyprland stack to run against."
+fi

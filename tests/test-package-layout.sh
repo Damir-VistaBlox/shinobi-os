@@ -20,6 +20,8 @@
 #   * the declared dependencies cover what the shipped code actually imports
 #   * the postinst check passes when the dependency is present and fails with a
 #     message that names it when it is not
+#   * the command wrappers (shinobi-approval, shinobi-provider, ...) find the
+#     control plane where this package put it, not where a checkout keeps it
 #   * no bytecode residue
 set -euo pipefail
 
@@ -40,7 +42,7 @@ check() {
   fi
 }
 
-"$ROOT/packaging/build-deb.sh" --stage "$stage"
+"$ROOT/packaging/build-deb.sh" core --stage "$stage"
 
 # Checked before anything in this file runs code out of the stage. Importing the
 # staged server is the point of several checks below, and importing it writes
@@ -64,15 +66,22 @@ echo "== nothing installs the package in a way that cannot resolve Depends =="
 # check, the thing that stops a broken server looking installed, never runs.
 # Adding a Depends without fixing this broke both install paths, and only an
 # image build would have found it.
-installers=(
-  "$ROOT/install.sh"
-  "$ROOT/distro/overlay/kali-config/variant-shinobi/hooks/live/0020-shinobi-tooling.chroot"
-  "$ROOT/distro/overlay/kali-config/variant-shinobi-min/hooks/live/0020-shinobi-tooling.chroot"
-)
+# Discovered rather than listed: the hooks were renamed when the desktop layer
+# moved into its own package, and this test kept passing against a path that no
+# longer existed -- a check on a deleted file reads as a check on the new one.
+# glob, so a hook that installs the layer cannot escape this by being renamed.
+installers=("$ROOT/install.sh")
+shopt -s nullglob
+for hook in "$ROOT"/distro/overlay/kali-config/variant-*/hooks/live/*.chroot; do
+  grep -q 'build-deb.sh' "$hook" && installers+=("$hook")
+done
+shopt -u nullglob
+check "both variants' hooks that install the layer are examined" \
+  "$(printf '%s\n' "${installers[@]}" | grep -c 'hooks/live/' || true)" "2"
 for installer in "${installers[@]}"; do
   label="${installer#"$ROOT/"}"
   check "$label resolves dependencies" \
-    "$(grep -Eq 'apt-get install.*\.deb|apt(-get)? install.*\$package' "$installer" && echo yes || echo no)" "yes"
+    "$(grep -Eq 'apt-get install.*(\.deb|\$(package|deb))' "$installer" && echo yes || echo no)" "yes"
   check "$label does not use a bare dpkg -i on it" \
     "$(grep -Eq '^\s*(sudo )?dpkg -i\s+\S*\.deb' "$installer" && echo dpkg || echo no)" "no"
   # A second server copy earlier on PATH is the failure the postinst cannot see:
@@ -169,6 +178,65 @@ else
     "$(grep -c "site-packages\|dist-packages" "$errf" || true)" "0"
 fi
 
+echo "== the command wrappers find the control plane where this package put it =="
+# bin/ ships to /usr/bin and libexec/shinobi/ to /usr/lib/shinobi. A wrapper that
+# looks for a ../libexec sibling is therefore looking in /usr/libexec, which
+# nothing creates, and cannot import shinobi_control. Every other suite copies
+# bin/ and libexec/ side by side -- the checkout's shape -- so none of them ever
+# ran a wrapper from the package's, and `shinobi approval`, `shinobi provider`,
+# `shinobi evidence` and the rest were broken on an installed system with every
+# check green. The approval one decides whether the one active tool is usable at
+# all: nmap_scan asks `shinobi-approval request` for the approval an operator then
+# grants, so a wrapper that cannot run means nmap_scan can never be approved.
+sandbox="$stage/wrapper-sandbox"
+mkdir -p "$sandbox/home"
+
+# env -i, so a PYTHONPATH or SHINOBI_* variable on the machine running this
+# cannot supply the control plane that the wrapper failed to find. stdin is
+# closed because some of these read a prompt from it, and the exit status is
+# dropped because only what the wrapper managed to import is being asked.
+run_wrapper() {
+  local name=$1
+  shift
+  env -i PATH="$PATH" HOME="$sandbox/home" XDG_STATE_HOME="$sandbox/state" \
+    XDG_RUNTIME_DIR="$sandbox/run" PYTHONDONTWRITEBYTECODE=1 \
+    timeout 30 "$stage/usr/bin/$name" "$@" </dev/null 2>&1 || true
+}
+
+check "shinobi-approval lists approvals from the package's layout" \
+  "$(run_wrapper shinobi-approval list)" "[]"
+check "shinobi-event reads events from the package's layout" \
+  "$(run_wrapper shinobi-event recent)" "[]"
+
+# These need a provider directory, a daemon or an engagement to do anything
+# useful, so what is asked is only whether the control plane could be imported.
+for name in shinobi-egress shinobi-evidence shinobi-mcp shinobi-plugin shinobi-provider shinobi-webapp; do
+  check "$name imports the control plane from the package's layout" \
+    "$(run_wrapper "$name" help | grep -cE "No module named '?shinobi_control" || true)" "0"
+done
+
+# shinobi-context runs a script rather than importing a module, and with no
+# daemon it fails by design -- the question is whether it reached its client.
+context_out="$(run_wrapper shinobi-context)"
+check "shinobi-context finds its client script" \
+  "$(grep -c "can't open file" <<<"$context_out" || true)" "0"
+check "and reaches the client, which reports the missing daemon" \
+  "$(grep -c '^shinobi context:' <<<"$context_out" || true)" "1"
+rm -rf "$sandbox"
+
+# The behaviour above covers what could be run offline. This covers the rest: a
+# wrapper added later that locates the control plane by its ../libexec sibling
+# alone passes every checkout-shaped suite and fails only once installed.
+examined=0
+for wrapper in "$ROOT"/bin/shinobi-*; do
+  grep -qF '../libexec/shinobi' "$wrapper" || continue
+  examined=$((examined + 1))
+  check "${wrapper#"$ROOT/"} has a packaged location to fall back to" \
+    "$(grep -qE '\.\./lib/shinobi|/usr/lib/shinobi' "$wrapper" && echo yes || echo no)" "yes"
+done
+check "the scripts that locate the control plane are discovered, not listed" \
+  "$([[ $examined -ge 12 ]] && echo yes || echo no)" "yes"
+
 echo "== the postinst check is runnable and honest =="
 check "usr/lib/shinobi/shinobi-recon-check is executable" \
   "$([[ -x $stage/usr/lib/shinobi/shinobi-recon-check ]] && echo yes || echo no)" "yes"
@@ -254,6 +322,116 @@ done
 # a hard dependency -- the D-Bus surface is optional by design.
 check "the optional dbus_next import is not a hard dependency" \
   "$(grep -qw -- 'python3-dbus-next' <<<"$depends" && echo yes || echo no)" "no"
+
+# ---------------------------------------------------------------------------
+# The desktop package: the layer that used to exist only inside the image
+# ---------------------------------------------------------------------------
+# Everything below was in the ISO's includes.chroot, which is why installing to
+# a disk produced Kali's desktop with none of it. These checks exist so that
+# going back to an overlay copy is a test failure rather than a silent
+# regression discovered by the next person who installs to a disk.
+echo
+echo "== every package's control file is buildable =="
+# shinobi-desktop's Description had no trailing newline, and dpkg-deb --build
+# refused it: "end of file during value of field 'Description'". Nothing caught it
+# because the layout tests stage a tree rather than building an archive, and the
+# one suite that builds archives only builds shinobi-core. So a package that
+# could not be installed at all passed every check until something tried to build
+# it -- which, in the ISO hook, is 60 minutes into an image build.
+for pkg_dir in "$ROOT"/packaging/shinobi-*; do
+  pkg="$(basename "$pkg_dir")"
+  control="$pkg_dir/DEBIAN/control"
+  [[ -f $control ]] || continue
+  check "$pkg's control file ends with a newline" \
+    "$([[ -s $control && $(tail -c1 "$control" | od -An -c | tr -d ' ') == "\\n" ]] && echo yes || echo no)" "yes"
+  check "$pkg's Description is not the last line without a terminator" \
+    "$(grep -qE '^Description:[[:space:]]*\S' "$control" && echo yes || echo no)" "yes"
+  check "$pkg's control has no stray md5sums line" \
+    "$(grep -c '^Description-md5:' "$control" || true)" "0"
+done
+
+echo "== the desktop layer ships in a package, not in the image =="
+desktop_stage="$(mktemp -d)"
+desktop_trap="chmod -R u+rwX \"$desktop_stage\" 2>/dev/null; rm -rf \"$desktop_stage\""
+trap "$desktop_trap" RETURN
+"$ROOT/packaging/build-deb.sh" desktop --stage "$desktop_stage"
+
+for f in \
+  usr/share/shinobi-dotfiles/etc/skel/.config/hypr/hyprland.conf \
+  usr/share/shinobi-dotfiles/etc/skel/.config/quickshell/shell.qml \
+  usr/share/shinobi-dotfiles/etc/skel/.config/wofi/config \
+  usr/share/backgrounds/shinobi-os/shinobi-night.png \
+  usr/share/plymouth/themes/shinobi/shinobi.plymouth \
+  etc/xdg/xdg-desktop-portal/hyprland-portals.conf \
+  usr/lib/shinobi/shinobi-desktop-check
+do
+  check "shinobi-desktop ships $f" \
+    "$([[ -f $desktop_stage/$f ]] && echo yes || echo no)" "yes"
+done
+
+check "its version matches the core package it depends on" \
+  "$(grep -h '^Version:' "$desktop_stage/DEBIAN/control" "$stage/DEBIAN/control" | sort -u | wc -l)" "1"
+check "and it depends on the core package at that version" \
+  "$(grep -qE '^Depends:.*shinobi-core \(= *' "$desktop_stage/DEBIAN/control" && echo yes || echo no)" "yes"
+
+echo "== nothing is shipped twice =="
+# The image overlay and the packages were both carrying shinobi-session,
+# shinobi-welcome and four systemd units. /usr/local/bin precedes /usr/bin in
+# PATH, so the image ran the overlay's copy and the package's was dead code --
+# and when the RuntimeDirectory fix went into both, that is how a bug came to be
+# fixed twice by hand. One copy, or the test fails.
+overlay_files="$(cd "$ROOT/distro/overlay/includes.chroot" 2>/dev/null && find . -type f | sed 's|^\./||' || true)"
+if [[ -z $overlay_files ]]; then
+  check "the image overlay carries no file that a package also ships" \
+    "$(echo "$overlay_files" | grep -c . || true)" "0"
+else
+  check "the image overlay carries no file that a package also ships" \
+    "$(comm -12 <(printf '%s\n' $overlay_files | sort) \
+      <(find "$desktop_stage" "$stage" -type f | sed "s|^[^/]*/||" | sort) | grep -c . || true)" "0"
+fi
+
+echo "== the layer is applied by the engine, once =="
+# Three callers used to carry their own copy of this: the ISO hook, install.sh
+# and (planned) the wizard. They disagreed -- the ISO's version did things
+# install.sh's did not -- so three install paths meant three different layers,
+# and only one of them was tested.
+engine_callers="$(grep -rl 'shinobi-setup' \
+  --include='*.sh' --include='*.chroot' \
+  "$ROOT/install.sh" "$ROOT/distro/overlay/kali-config" 2>/dev/null | wc -l)"
+check "install.sh and both variants' hooks call the engine" \
+  "$engine_callers" "3"
+check "the engine is the only implementation of applying dotfiles" \
+  "$(grep -rl 'rsync.*shinobi-dotfiles' "$ROOT/install.sh" "$ROOT/distro/overlay/kali-config" 2>/dev/null | wc -l)" "0"
+check "the engine is shipped in every package" \
+  "$(for p in core desktop; do [[ -f "$ROOT/packaging/shinobi-$p/DEBIAN/control" ]] && echo x; done | wc -l)" "2"
+
+echo "== the desktop package verifies itself before dpkg believes it =="
+check "its postinst runs the check" \
+  "$(grep -c 'shinobi-desktop-check' "$ROOT/packaging/shinobi-desktop/DEBIAN/postinst")" "2"
+check "the check resolves a staged tree, not only a real install" \
+  "$(grep -q 'root=\$(cd -- "\$self/\.\./\.\./\.\." && pwd)' \
+    "$ROOT/packaging/shinobi-desktop/usr/lib/shinobi/shinobi-desktop-check" && echo yes || echo no)" "yes"
+check "it passes the tree it was built with" \
+  "$("$desktop_stage/usr/lib/shinobi/shinobi-desktop-check" >/dev/null 2>&1 && echo passed || echo rejected)" "passed"
+
+# Each mutation gets its own staged copy. Removing the wallpaper and appending an
+# unsatisfied exec-once are destructive, so sharing one tree between the
+# rejections and the pass above measured this test's own leftovers.
+check "it rejects a tree whose wallpaper is missing" \
+  "$(copy="$(mktemp -d)"; cp -a "$desktop_stage/." "$copy/"; \
+     rm -f "$copy/usr/share/backgrounds/shinobi-os/shinobi-night.png"; \
+     "$copy/usr/lib/shinobi/shinobi-desktop-check" >/dev/null 2>&1 && echo passed || echo rejected)" "rejected"
+
+check "and rejects a session whose commands nothing depends on" \
+  "$(copy="$(mktemp -d)"; cp -a "$desktop_stage/." "$copy/"; \
+     printf 'exec-once = a-command-nothing-provides\n' \
+       >> "$copy/usr/share/shinobi-dotfiles/etc/skel/.config/hypr/hyprland.conf"; \
+     "$copy/usr/lib/shinobi/shinobi-desktop-check" >/dev/null 2>&1 && echo passed || echo rejected)" "rejected"
+
+check "and rejects one whose shell config is missing" \
+  "$(copy="$(mktemp -d)"; cp -a "$desktop_stage/." "$copy/"; \
+     rm -f "$copy/usr/share/shinobi-dotfiles/etc/skel/.config/quickshell/shell.qml"; \
+     "$copy/usr/lib/shinobi/shinobi-desktop-check" >/dev/null 2>&1 && echo passed || echo rejected)" "rejected"
 
 echo
 if ((failures > 0)); then

@@ -38,10 +38,37 @@ interfaces without overwriting user configuration.
   binary, timeout, risk, whether it needs scope or approval — comes from a
   manifest in [`tools/`](./tools) rather than from constants in the server.
 - `themes/` — `kali-dark` (default) and `matrix`, switched with `shinobi-theme`.
-- `install.sh` — apt + pipx provisioning to add shinobi to an existing Kali box.
+- `install.sh` — provisions the layer onto an existing Kali box: the packages,
+  then the dotfiles, the account and the font, through `shinobi-setup`.
+- `packaging/` — the three layer packages: `shinobi-core` (CLI, control plane,
+  recon server), `shinobi-desktop` (the Hyprland desktop) and
+  `shinobi-installer` (the Shinobi Installation Wizard).
 - `distro/` — builds a custom Kali live ISO (Hyprland desktop + shinobi
   pre-installed) on top of Kali's own official `live-build` tooling. See
   [`distro/README.md`](./distro/README.md).
+
+## Three ways in
+
+- **The Shinobi Installation Wizard.** Build the image (`distro/build.sh`), boot
+  it, and choose *Install Shinobi OS* from the boot menu. It installs the system
+  you are running onto a disk — the same packages, the same desktop, the same
+  fonts — offline, and copies the live session's own account out of the way
+  first. Nothing is written until you confirm on the summary page.
+- **Onto an existing Kali box:**
+
+```
+./install.sh          # the layer, or --cli-only for the CLI without the desktop
+```
+
+- **The packages directly:**
+
+```
+apt install shinobi-core shinobi-desktop shinobi-installer
+```
+
+All three go through the same engine, `shinobi-setup`, so they produce the same
+system; applying the layer to an existing account will not overwrite your
+configuration.
 
 ## Quickstart
 

@@ -138,6 +138,27 @@ correlated, and never the prompt.
   and a hand-written `mcpServers` entry that has quietly stopped being right
   looks exactly like a server that is registered and never being called. An
   existing registration is left alone rather than re-added.
+- `providers/*.toml` — the LLM provider registry. Two wire shapes are
+  implemented and validated, because they are the two the market settled on:
+  OpenAI's `/chat/completions` and Anthropic's `/messages`. `api` says which,
+  and the difference is more than cosmetic — the tool schema nests under
+  `function.parameters` in one and sits at `input_schema` in the other, and the
+  system prompt is a top-level field in one and the first message in the other.
+  Getting either wrong yields a request the vendor accepts, with the tools
+  silently ignored, which presents as a model that cannot call tools.
+
+  `api` is deliberately not the same field as `egress`. `openai-compatible` is
+  a protocol, not a vendor, so xAI, DeepSeek, Mistral and Groq all use it while
+  remaining distinct cloud providers with their own keys, accounts and data
+  paths. Conflating the two would make "speaks a standard API" mean "is
+  somebody's cloud" and quietly waive the clearance that keeps client data off
+  a third party.
+
+  Shipped: `anthropic` (the Anthropic shape), `openai`, `xai`, `deepseek`,
+  `mistral`, `groq` (OpenAI shape), and `ollama` and `vllm` as the two local
+  examples. The self-hosted `vllm` manifest is the one to copy for a private
+  inference server, because `reachable_on` is what makes the cloud exemption
+  conditional on where the bytes actually go.
 - `mcp-servers/shinobi-recon` — Python MCP server. `nmap_scan` was the proof of
   concept for the scope-gate + audit-log pattern; `dns_lookup`,
   `whatweb_scan` and `http_headers` followed it, and each is a thin function
@@ -314,8 +335,31 @@ distro. Ported so far, all under `bin/shinobi-*`:
   graphical live boot: its `theme.conf.user` `background=` setting accepts an
   image path. The image hook now replaces that setting with the Shinobi
   wallpaper; the next full-image build will validate the rendered override.
-  Plymouth boot-splash theming remains unattempted: it is
-  script-based, higher effort, and still needs separate live-boot validation.
+
+### Not ports: rebuilt around the threat model
+
+Three subsystems have an Omarchy counterpart and are deliberately *not* ports of
+it. Each was rewritten around what a tool on an engagement host should assume
+about its own configuration, which is a question Omarchy — a personal desktop —
+never has to ask:
+
+- **`shinobi-webapp`** (`omarchy-webapp-*`) — HTTPS wrappers with isolated
+  browser profiles, so a wrapped tool cannot reach the operator's real session.
+  The stored record outlives the URL validation that created it, so `launch`
+  re-validates everything it uses and resolves the browser fresh on every launch
+  rather than reading it back from the record: anything able to edit that JSON — a
+  restored backup, a synced config directory, a bug in another tool — would
+  otherwise choose the program that runs.
+- **`shinobi-plugin`** (`omarchy-*` plugin system) — plugins are *explicitly
+  trusted*, and a manifest declares permissions (`filesystem`, `network`,
+  `shell`, `privileged`, `microphone`, `camera`, `engagement-data`,
+  `tool-execution`) that are validated rather than implied. A plugin here can
+  reach engagement data and invoke recon tools; that is not a category of thing
+  an operator should add by dropping a file in a directory.
+- **`shinobi-capture`** — screenshots land in the active engagement's
+  `evidence/` directory rather than `~/Pictures`, so material captured
+  mid-engagement joins the same audit trail `shinobi-recon` writes to. Omarchy's
+  equivalent has no reason to know what an engagement is.
 
 See the categorized table from the design discussion (agent framework, menu,
 webapp handler, voxtype = high value; theme, capture, notification/audio/
@@ -324,17 +368,116 @@ hardware-quirks layer, consumer app installers, plugin system, dev tooling,
 boot theming = low value / Arch-specific, skipped) for the full triage —
 not reproduced here since it doesn't change often enough to duplicate.
 
-## Deliberately not built yet (needs a decision, not more code)
+That triage predates the shell work and is kept for its reasoning, not its
+verdicts: the webapp handler, plugin system and update/snapshot system were all
+marked skip-or-later and have since been built — the last two because this is an
+installed system first, the first because a tool's web UI on an engagement host
+needs a trust model Omarchy's does not have. Read it for why a decision was
+originally declined, then read the sections above for what actually shipped.
 
-- **Webapp handler** (`omarchy-webapp-install`) — wraps a local web UI as a
-  native launcher app. Not ported yet; would matter if an MCP server grows a
-  control UI, or for wrapping a tool's web UI (BloodHound, etc.) the same way.
-- **Voxtype** (voice typing) — genuinely useful for dictating engagement
-  notes; low priority, not started.
-- **Update/versioning/snapshot system** — Omarchy's `omarchy-update-*` +
-  `omarchy-snapshot` solves "keep a rolling install in sync with upstream."
-  Only matters if Shinobi OS becomes an installed rolling distro rather than a
-  one-shot ISO — that's an open decision, not just unbuilt code.
+## Three packages, one engine, three ways in
+
+The layer ships as three Debian packages, and the whole system is that they have
+one way of being applied:
+
+| Package | Carries | Dependable by |
+| --- | --- | --- |
+| `shinobi-core` | CLI, control plane (user units), recon MCP server, tools, provider manifests, overlay repo tooling, archive keyring | anything |
+| `shinobi-desktop` | Hyprland/Quickshell/wofi/kitty dotfiles, Plymouth theme, wallpaper, portal selection — **and the desktop stack's dependencies** | a desktop |
+| `shinobi-installer` | The Shinobi Installation Wizard: Calamares configuration, branding, and the shellprocess steps | an image |
+
+And one implementation of "put the layer on this machine", `shinobi-setup`,
+called by three: the ISO build hook, `install.sh`, and the wizard's
+`shellprocess@finish`. This is the part that is not obvious and was not always
+true. Those three paths each carried their own copy of the provisioning logic,
+they disagreed — the ISO's hook did things `install.sh`'s did not — and the
+installed system was missing the entire desktop layer because that logic and the
+files it applied lived in `includes.chroot`, which only exists while an image is
+being built. Three install paths that each carry their own copy are three
+layers, and only one of them was ever tested.
+
+### Why the desktop stack's dependencies are in `Depends`
+
+They used to be in the live image's package list, which is the only place they
+were declared. That list is applied when an image is built, so an installed
+system and the image it came from could not be compared — they were assembled
+from two different sources, and nothing checked that they agreed. One declaration
+now feeds both paths.
+
+### Installing to disk
+
+The Shinobi Installation Wizard is Calamares, branded, with an `unpackfs` flow.
+The decision that everything else follows from: **what gets installed is the
+system that is already running.** The package set `live-build` assembled, the
+desktop layer from `shinobi-desktop`, the fonts fetched and checksum-verified
+during the image build — the image is copied to the disk. A `packages` flow would
+re-resolve all of that from a repository at the moment somebody picks a disk: a
+second list to keep in sync with the image, a network dependency on an install
+that currently has none, and a font it cannot reproduce at all, because that font
+is in no archive.
+
+Three consequences of installing a *live session* rather than assembling a
+system, each handled explicitly in `shellprocess@prep` and `@finish`:
+
+- The live session's own account comes across with the image, and Calamares
+  cannot create an account that already exists. It is removed first — but only
+  if it has no home directory, which is the signature of a copied live account.
+- Its home and `/root` are excluded from the copy. The operator's home is built
+  from `/etc/skel` instead, where the layer's dotfiles live.
+- Its autologin configuration, if a future image ever grows one, would come
+  across with it. A pentest distribution whose installed system logs itself in
+  is a serious defect and is invisible until somebody boots the disk on a train,
+  so the step that removes it is checked twice: once in what is excluded, once in
+  what is deleted.
+
+### The live account is created, not renamed
+
+Kali's live image gets its account name from the kernel command line, and
+live-config prefers that over anything in `/etc/live/config.conf.d`. So the boot
+entries name it — `username=shinobi`, after Kali's parameters, because
+live-config keeps the last value it sees — and live-config writes the sudoers
+grant for that name itself. The earlier approach, `usermod -l` in a build hook
+plus a rewrite of the sudoers rules that name the account, is kept only as a
+fallback for an image that somehow still has a `kali` account.
+
+It was not a close call. `usermod -l` on somebody who administers a machine is
+not a decision a build script should make for them, which is why `shinobi-setup`
+never renames an account unless asked for by name.
+
+### What "installable" costs the other paths
+
+An install must *coexist* rather than own, which is a stricter discipline than
+the ISO gets for free: systemd user units rather than system units, credentials
+in the kernel keyring on a live system and in a `0600` file otherwise,
+`/etc/shinobi` data treated as the operator's, and postinsts that refuse to call
+a package installed when it is not usable. Applying the layer does not overwrite
+an operator's configuration either — homes are completed rather than synced, and
+`--force` is required to overwrite.
+
+## Deliberately not built yet
+
+- **Voxtype** (voice typing) — genuinely useful for dictating engagement notes;
+  low priority, not started. This is the only subsystem in Omarchy's inventory
+  that is simply absent.
+- **A single themed shell process.** Omarchy v4 "Quattro" merged the bar,
+  launcher, menus, OSD, lock screen and polkit agent into one long-running
+  Quickshell with a plugin architecture, replacing Waybar, Walker, Mako, hyprlock,
+  hypridle, swaybg and polkit-gnome. Shinobi has a Quickshell bar plus a
+  stateless wofi menu, because the menu port assumed no shell daemon to talk to.
+  That assumption is now weaker than it was — `shinobi-shellctl` exists — so this
+  is the largest remaining UX gap and worth a decision rather than a port.
+- **Menu depth.** The palette is seven routes (agent, engagement, scope,
+  clipboard, theme, keybindings, ...). Omarchy's is a nested, filterable JSONC
+  palette that searches apps and commands from one surface. Same wofi mechanism,
+  much less of it.
+- **`refresh config`.** Omarchy can restore any shipped config file into
+  `~/.config` on demand, so a broken setting is one command to recover rather
+  than an archaeology exercise. Shinobi has no equivalent escape hatch.
+- **Plymouth boot-splash theming** — shipped (it reaches installed systems now
+  that it is in `shinobi-desktop`), but it has been seen exactly once, on a live
+  boot. The image's journal was clean and the splash appeared; that is one
+  observation, and the theme is script-based, so the remaining work is boots on
+  hardware rather than code.
 - **External agent CLIs are outside the egress gate. Their tools are not.**
   There are two gates, and an external agent was outside both at once.
   `shinobi agent` now closes the first: it registers the recon server with the
@@ -382,22 +525,51 @@ not reproduced here since it doesn't change often enough to duplicate.
   egress policy and the scope policy are both parsed with it, so the control
   plane already shipped code that could not be imported on a host without it,
   and `shinobi egress check` was one import away from failing.
+- **The status bar's `AI offline` is one word for four different states.** The
+  panel reads the daemon socket and knows whether the broker is up, which is not
+  the same question as whether a provider could be used. No key stored, an
+  engagement that has not cleared cloud egress, and a trust profile below
+  operator are three separate fixes, and an operator reading "offline" cannot
+  act on any of them. `shinobi provider readiness` answers the question the bar
+  was being asked, per provider and per blocker, and `shinobi doctor` prints the
+  same report. It reuses the gate's own clearance reader so it cannot drift from
+  what actually authorizes a request, and it deliberately does *not* call
+  `authorize()` — a status command must never consume a per-turn approval.
+
+  What it does not solve is selection: there is still no default provider, so
+  every `shinobi llm ask` names one explicitly, and the desktop has nothing
+  stable to bind to. That is defensible for the CLI and is the reason provider
+  readiness is not surfaced in the panel yet.
 - **Response streaming is deferred.** Requests are non-streaming, so a provider
   that only streams is not supported yet. Nothing in the gate depends on it.
-- **The image has not been built since the agent and packaging work.** The
-  source suite is green, and the package was installed into a Kali container and
-  checked end to end — build, dependency resolution, postinst, one
-  `shinobi-recon` on `PATH`, all four tools served from the installed copy. That
-  is not the same as a booted image, and the checks that would be are exactly the
-  ones that were skipped: live-build's chroot, the image's own contents, and
-  BIOS/UEFI boot. Two things in particular are unproven on real hardware — that
-  `apt-get install` of the package resolves `python3-mcp` inside live-build's
-  chroot, and that the image ends up with the recon server from the package and
-  no second copy. The first is the same apt call the container test made; the
-  second is asserted statically in `tests/test-package-layout.sh`. Run
-  `gh workflow run build-preview.yml --ref audit-remediation` to close it.
-- The full `shinobi` image still needs a graphical live-boot test: confirm
-  SDDM, Hyprland, Quickshell, and keybindings work together in a real session.
+- **The image builds, and this branch's first build ever is the one that proved
+  it.** Run `36335285871` (2026-09-27, sha `03e85b2`) built the ISO and passed
+  every step: live-build's chroot, the image's own contents, and BIOS/UEFI boot.
+  That closed the two things only a chroot could answer — `apt-get install`
+  resolves `python3-mcp` there, and the image ends up with the package's recon
+  server and no second copy ahead of it on `PATH`.
+
+  Worth recording how the first attempt failed, because the test suite could not
+  have caught it: fifteen minutes of live-build, then
+  `cp: cannot stat '/opt/shinobi/providers/.'`. `distro/build.sh` stages a subset
+  of the repo into the chroot and the image hook builds the package from *that*,
+  so a top-level path in `build-deb.sh` but not in the staging list is simply
+  absent at build time — while the checkout has it, so every local check passes.
+  `providers` arrived that way with the provider-registry stage. Green source
+  checks had never meant this branch could build an image, and now they do;
+  `tests/test-build-config.sh` compares the two lists so the next one is caught in
+  seconds.
+
+  **The boot tests are survival checks, not login tests.** Both logs read
+  "remained alive for the timeout (serial console unavailable)" and "firmware-only
+  serial output": the kernel came up and did not panic, under BIOS and under UEFI.
+  Nobody has watched SDDM start, Hyprland come up, or `shinobi agent` run inside
+  the image. That gap is the next one below, and it is a real one.
+- **The full `shinobi` image still needs a graphical live-boot test:** confirm
+  SDDM, Hyprland, Quickshell, and keybindings work together in a real session,
+  and that `shinobi agent --accept-ungoverned-egress` wires the recon server
+  into an agent *on the image*. The ISO has been built and booted to a live
+  kernel; nothing past that has been observed.
 - Which additional recon tools get MCP wrappers, and in what order —
   proposed next: `gobuster`/`ffuf` (web content discovery), `nikto`,
   `whatweb`, Metasploit RPC. Each is a judgment call about what's safe to

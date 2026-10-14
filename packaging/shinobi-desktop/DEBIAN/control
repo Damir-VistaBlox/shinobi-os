@@ -1,0 +1,21 @@
+Package: shinobi-desktop
+Version: 0.1.0
+Section: x11
+Priority: optional
+Architecture: all
+Maintainer: Shinobi OS Maintainers <maintainers@shinobi-os.local>
+Depends: shinobi-core (= 0.1.0), dbus-user-session, hyprland, quickshell, wofi, mako-notifier, swaybg, hypridle, hyprlock, hyprpolkitagent, kitty, sddm, plymouth, pipewire, wireplumber, pipewire-pulse, network-manager, bluez, xdg-desktop-portal, xdg-desktop-portal-hyprland, xdg-desktop-portal-gtk, grim, slurp, wl-clipboard, cliphist, libnotify-bin, jq, btop, rsync, fontconfig
+Description: Shinobi OS desktop layer
+ The Hyprland desktop Shinobi OS presents: dotfiles for Hyprland, Quickshell,
+ wofi and kitty, the Plymouth boot splash, the wallpaper, and the portal
+ configuration.
+ .
+ The desktop stack is declared here rather than in a list unique to the live
+ image, so an installed system and the image it was installed from cannot
+ drift apart. It used to live in the ISO's package list alone, which meant
+ installing to disk produced Kali's own desktop with none of this -- the layer
+ existed only as a side effect of how the image was built. One declaration now
+ feeds both paths.
+ .
+ shinobi-setup applies the dotfiles to an account; nothing here edits a home
+ directory. See shinobi-setup(8).

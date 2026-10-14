@@ -1,0 +1,32 @@
+# vLLM, self-hosted. The reference case for `openai-compatible`: this is not a
+# vendor, it is an operator's own inference server, so the interesting detail is
+# reachable_on rather than the model list.
+#
+# Nothing sent here leaves the machine, so no cloud clearance is required --
+# which is exactly why reachable_on matters. It is compared against the peer
+# address of every connection, so pointing base_url at a remote host does not
+# quietly turn a local provider into a cloud one. That is the whole reason a
+# local provider is exempt by being local rather than by being trusted.
+#
+# Delete this manifest and write your own if your server is elsewhere; the
+# packaged copy documents the shape, and /etc/shinobi/providers.d overrides it
+# by dropping a file with the same id in place of this one.
+id = "vllm"
+name = "vLLM (self-hosted)"
+api = "openai-compatible"
+base_url = "http://127.0.0.1:8000/v1"
+
+# vLLM's default port, and the loopback it binds by default. If yours is on the
+# LAN, this is the field to change -- and the one that makes the exemption
+# conditional on where the bytes actually go.
+reachable_on = ["127.0.0.1", "::1", "localhost"]
+
+egress = "local"
+requires_key = false
+
+# vLLM serves whatever model was loaded with --model, and that is per-instance
+# and changes when the operator changes it. There is no fixed catalogue to
+# validate against, so none is declared: an empty list means the client sends
+# whatever model the operator names rather than refusing a name it does not
+# recognise.
+default_model = "local-model"
