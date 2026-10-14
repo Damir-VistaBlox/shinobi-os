@@ -27,6 +27,7 @@ SOURCE_TESTS=(
   tests/test-doctor.sh
   tests/test-hook.sh
   tests/test-event-helper.sh
+  tests/test-theme-set.sh
   tests/test-launcher-env.sh
   tests/test-agent-egress.sh
   tests/test-migrate.sh
