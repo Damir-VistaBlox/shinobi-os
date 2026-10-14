@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # shinobi:summary=List and manage LLM providers available to Shinobi
-# shinobi:args=<list|inspect|check|readiness|key|forget> [id]
-# shinobi:examples=shinobi provider list | shinobi provider readiness
+# shinobi:args=<list|inspect|check|readiness|default|key|forget> [id] [--clear] [--json]
+# shinobi:examples=shinobi provider list | shinobi provider readiness | shinobi provider default ollama
 set -euo pipefail
 bin_dir="$(dirname -- "$(readlink -f -- "${BASH_SOURCE[0]}")")"
 root="$bin_dir/../libexec/shinobi"

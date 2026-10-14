@@ -35,10 +35,13 @@ credential there.
 """
 from __future__ import annotations
 
+import errno
 import ipaddress
 import os
 import re
+import stat
 import sys
+import tempfile
 import tomllib
 from dataclasses import dataclass
 from pathlib import Path
@@ -126,17 +129,23 @@ def _readiness(as_json: bool) -> int:
     # a status command.
     cloud_cleared = False
     engagement_note = "no active engagement"
+    engagement_problem: str | None = None
+    provider_allow = None
+    model_allow = None
     try:
         engagement_dir = gate._engagement_dir()
         allowed = gate.clearance(gate.load_scope(engagement_dir))
         cloud_cleared = allowed.cloud
         engagement_note = f"engagement {engagement_dir.name}"
         provider_allow = allowed.providers
+        model_allow = allowed.models
     except gate.EgressRefused as exc:
         engagement_note = f"unavailable: {exc}"
-        provider_allow = None
+        engagement_problem = str(exc)
     except Exception:  # noqa: BLE001 - status must not die on a surprise
-        provider_allow = None
+        engagement_problem = "the engagement could not be read"
+
+    setting = default_provider(providers)
 
     try:
         profile = current_profile()
@@ -147,8 +156,20 @@ def _readiness(as_json: bool) -> int:
     rows = []
     for provider in sorted(providers.values(), key=lambda p: p.id):
         blockers = []
+        if engagement_problem is not None:
+            # The gate refuses every provider, local ones included, when there is
+            # no usable engagement. Reporting a local provider as ready here is
+            # a promise the gate would break on the first question.
+            # Short on purpose: the reason is on the `engagement:` line and in the
+            # JSON `engagement` field, and repeating a sentence of it under every
+            # provider buries the one thing that differs between them.
+            blockers.append("no usable engagement (see the engagement line)")
         if provider_allow is not None and provider.id not in provider_allow:
             blockers.append(f"not permitted by this engagement (llm.providers)")
+        if model_allow is not None and provider.default_model and provider.default_model not in model_allow:
+            blockers.append(
+                f"default model {provider.default_model} is not permitted by this engagement (llm.models)"
+            )
         if provider.egress == "cloud":
             if not cloud_cleared:
                 blockers.append("engagement has not cleared cloud egress (llm.cloud)")
@@ -168,10 +189,31 @@ def _readiness(as_json: bool) -> int:
                 "egress": provider.egress,
                 "default_model": provider.default_model,
                 "requires_key": provider.requires_key,
+                "default": provider.id == setting.id,
                 "usable": not blockers,
                 "blockers": blockers,
             }
         )
+
+    # The default provider as a status consumer needs it: which one, where the
+    # setting came from, and whether it could be used right now. A default that
+    # is set but unusable carries its own blockers, so a bar or a menu can say
+    # what is wrong with the thing the operator picked instead of showing
+    # "unavailable". A missing default is a blocker too, not an empty field.
+    default_row = next((r for r in rows if r["id"] == setting.id), None)
+    if default_row is not None:
+        default_blockers = list(default_row["blockers"])
+    elif setting.problem is not None:
+        default_blockers = [setting.problem]
+    else:
+        default_blockers = ["no default provider is set (shinobi provider default <id>)"]
+    default_block = {
+        "id": setting.id,
+        "source": setting.source,
+        "problem": setting.problem,
+        "usable": bool(default_row and default_row["usable"]),
+        "blockers": default_blockers,
+    }
 
     if as_json:
         import json
@@ -182,6 +224,7 @@ def _readiness(as_json: bool) -> int:
                     "engagement": engagement_note,
                     "profile": profile,
                     "cloud_cleared": cloud_cleared,
+                    "default": default_block,
                     "providers": rows,
                     "any_usable": any(r["usable"] for r in rows),
                 },
@@ -195,6 +238,12 @@ def _readiness(as_json: bool) -> int:
     print(f"profile:    {profile}" + ("" if profile_ok else "  (below operator: no cloud egress)"))
     cloud = "yes" if cloud_cleared else "no"
     print(f"cloud:      {cloud}")
+    if setting.id is not None and setting.problem is None:
+        print(f"default:    {setting.id} ({setting.source})")
+    elif setting.problem is not None:
+        print(f"default:    unusable: {setting.problem}")
+    else:
+        print("default:    none set (shinobi provider default <id>)")
     print()
     usable = [r for r in rows if r["usable"]]
     if not rows:
@@ -202,7 +251,8 @@ def _readiness(as_json: bool) -> int:
         return 0
     for row in rows:
         mark = "ok  " if row["usable"] else "--  "
-        print(f"{mark}{row['id']:28} {row['egress']:6} {row['default_model']}")
+        suffix = "  (default)" if row["default"] else ""
+        print(f"{mark}{row['id']:28} {row['egress']:6} {row['default_model']}{suffix}")
         for blocker in row["blockers"]:
             print(f"        - {blocker}")
     print()
@@ -522,6 +572,256 @@ def get(provider_id: str, directories: list[str | os.PathLike[str]] | None = Non
         raise ProviderError(f"no provider manifest for {provider_id!r}") from None
 
 
+# ---------------------------------------------------------------------------
+# The default provider
+# ---------------------------------------------------------------------------
+#
+# One non-secret value: a provider id. It is a selection convenience and nothing
+# else. It never holds a key, an endpoint or an egress class, because those are
+# always re-read from the manifest by id: a stored preference must not be able to
+# waive a clearance, so the egress gate does not read this at all. It still asks
+# for an explicit provider, and an audit record still names the concrete one.
+#
+# It is the first setting to need the documented precedence (docs/architecture.md:
+# packaged defaults, then /etc/shinobi, then the user's own), so the chain is read
+# here, once.
+
+DEFAULT_FILE = "default-provider"
+
+# An id is a short token. Anything bigger is not one, and is refused unread.
+_DEFAULT_MAX_BYTES = 256
+
+
+@dataclass(frozen=True)
+class DefaultSetting:
+    """What the default-provider setting says, and whether it can be believed."""
+
+    id: str | None
+    source: str  # "user", "system", "packaged" or "none"
+    problem: str | None  # why it cannot be used, when it cannot
+
+
+def _user_config_dir() -> Path:
+    # An XDG base directory must be absolute; a relative one is ignored, as the
+    # specification says. Honouring it would make the setting that decides where
+    # prompts go depend on the directory the command happened to run from.
+    configured = os.environ.get("XDG_CONFIG_HOME", "")
+    if configured and os.path.isabs(configured):
+        return Path(configured) / "shinobi"
+    try:
+        return Path.home() / ".config" / "shinobi"
+    except RuntimeError as exc:  # no HOME and no passwd entry
+        raise ProviderError("cannot tell where your configuration lives: no home directory") from exc
+
+
+def default_layers() -> list[tuple[str, Path]]:
+    """Where the setting may live, most specific first.
+
+    The same three places the shell helpers print for `shinobi config paths`,
+    with the same overrides, so a test or a pinned deployment moves all of them
+    the same way.
+    """
+    return [
+        ("user", _user_config_dir()),
+        ("system", Path(os.environ.get("SHINOBI_SYSTEM_CONFIG") or "/etc/shinobi")),
+        ("packaged", Path(os.environ.get("SHINOBI_DEFAULTS_DIR") or "/usr/share/shinobi/default")),
+    ]
+
+
+def _read_setting(path: Path) -> tuple[str | None, str | None]:
+    """Read one layer's file: (text, None), (None, None) if absent, or (None, why not).
+
+    Opened without following a symlink and without blocking, and checked on the
+    open descriptor rather than on the path. Checking the path and then opening
+    it is two steps an attacker can put a FIFO between, and a read that blocks
+    forever would hang every command that asks for the default. The same
+    standard as a scope file or a stored key: owned by the user or root, and not
+    writable by anyone else, because this file decides where prompts go.
+    """
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC)
+    except FileNotFoundError:
+        return None, None
+    except OSError as exc:
+        if exc.errno == errno.ELOOP:
+            return None, f"{path} is a symlink; refusing to follow it"
+        return None, f"cannot read {path}: {exc.strerror}"
+    try:
+        info = os.fstat(fd)
+        if not stat.S_ISREG(info.st_mode) or info.st_size > _DEFAULT_MAX_BYTES:
+            return None, f"{path} is not a small regular file; refusing to read it"
+        if info.st_uid not in (0, os.geteuid()) or info.st_mode & 0o022:
+            return None, (
+                f"{path} is owned by another user or writable by its group or others, so it "
+                "cannot be trusted to say where prompts go. Fix: chmod go-w on it"
+            )
+        data = os.read(fd, _DEFAULT_MAX_BYTES + 1)
+    except OSError as exc:
+        return None, f"cannot read {path}: {exc.strerror}"
+    finally:
+        os.close(fd)
+    try:
+        return data.decode("utf-8"), None
+    except UnicodeDecodeError:
+        return None, f"{path} is not valid UTF-8"
+
+
+def default_provider(providers: dict[str, Provider] | None = None) -> DefaultSetting:
+    """The configured default provider, or why there is not a usable one.
+
+    The first layer that has the file decides, even when what it holds is
+    unusable. Falling through to a lower layer on a bad value would route a
+    prompt to a provider the operator never chose, which is the failure this
+    whole registry exists to prevent, and "first ready provider" is never a
+    fallback for the same reason.
+    """
+    try:
+        layers = default_layers()
+    except ProviderError as exc:
+        return DefaultSetting(None, "none", str(exc))
+    for source, root in layers:
+        path = root / DEFAULT_FILE
+        raw, problem = _read_setting(path)
+        if problem is not None:
+            return DefaultSetting(None, source, problem)
+        if raw is None:
+            continue  # this layer has no file
+        provider_id = raw.strip()
+        if not PROVIDER_ID_RE.fullmatch(provider_id) or ".." in provider_id:
+            return DefaultSetting(None, source, f"{path} does not hold a provider id")
+
+        if providers is None:
+            try:
+                providers = load_all()
+            except ProviderError as exc:
+                return DefaultSetting(provider_id, source, str(exc))
+        if provider_id not in providers:
+            return DefaultSetting(provider_id, source, f"no provider manifest for {provider_id!r}")
+        return DefaultSetting(provider_id, source, None)
+    return DefaultSetting(None, "none", None)
+
+
+def resolve_provider_id(requested: str | None) -> str:
+    """The provider a command should use: the one it was given, else the default.
+
+    Fails closed. No default, or a default that cannot be used, is an error that
+    says how to fix it; it is never replaced by whichever provider happens to be
+    ready.
+    """
+    # `is not None`, not truthiness: an empty argument (an unset shell variable
+    # in `shinobi llm ask "$P"`) is a mistake to report, not a request for the
+    # default, which could be a cloud provider nobody meant to use.
+    if requested is not None:
+        return requested
+    setting = default_provider()
+    if setting.problem is not None:
+        raise ProviderError(f"the default provider cannot be used: {setting.problem}")
+    if setting.id is None:
+        raise ProviderError(
+            "no provider given and no default is set. Name one, or choose a default: "
+            "shinobi provider default <id>"
+        )
+    return setting.id
+
+
+def set_default(provider_id: str) -> Provider:
+    """Make `provider_id` the user's default. Only the user layer is ever written."""
+    provider = get(provider_id)
+    root = _user_config_dir()
+    tmp_name = None
+    try:
+        root.mkdir(mode=0o700, parents=True, exist_ok=True)
+        # A private temp file in the same directory, then a rename, so a reader
+        # never sees a half-written setting and a crash leaves the old one intact.
+        handle, tmp_name = tempfile.mkstemp(dir=root, prefix=f".{DEFAULT_FILE}.")
+        with os.fdopen(handle, "w", encoding="utf-8") as stream:
+            stream.write(provider.id + "\n")
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(tmp_name, root / DEFAULT_FILE)
+    except OSError as exc:
+        if tmp_name is not None:
+            try:
+                os.unlink(tmp_name)
+            except OSError:
+                pass
+        raise ProviderError(f"cannot write the default provider: {exc.strerror}") from exc
+    return provider
+
+
+def clear_default() -> bool:
+    """Remove the user's setting. Returns whether there was one to remove."""
+    try:
+        (_user_config_dir() / DEFAULT_FILE).unlink()
+    except FileNotFoundError:
+        return False
+    except OSError as exc:
+        raise ProviderError(f"cannot remove the default provider: {exc.strerror}") from exc
+    return True
+
+
+def _actor() -> str:
+    """Who is making the change: the account the process runs as, not $USER.
+
+    $USER is whatever the caller exported, so a record built from it can name
+    anyone. The effective uid's account name cannot be set from the environment.
+    """
+    try:
+        import pwd
+
+        name = pwd.getpwuid(os.geteuid()).pw_name
+    except (ImportError, KeyError, OSError):
+        name = os.environ.get("USER", "")
+    return (name or "unknown")[:64]
+
+
+def _record(capability: str, arguments: dict, detail: str, event: str, payload: dict) -> bool:
+    """Leave a trace that a provider setting changed, in the audit journal and
+    on the event bus. Neither ever carries a key. Returns whether the audit
+    record was written.
+
+    A setting that decides where prompts may go, or a stored credential, is the
+    kind of change an operator needs to be able to find afterwards. The change
+    has already happened by the time this runs, so a failed audit write cannot
+    undo it; what it can do is say so loudly, and make the caller exit non-zero,
+    so a script or the desktop does not read an unrecorded change as a clean one.
+    """
+    from . import audit, events
+
+    recorded = True
+    try:
+        audit.write(
+            actor=_actor(),
+            capability=capability,
+            arguments=arguments,
+            status="completed",
+            detail=detail,
+        )
+    except OSError as exc:
+        recorded = False
+        print(
+            f"shinobi-provider: the change WAS made, but it could NOT be recorded in the audit "
+            f"journal ({exc.strerror}). Treat it as unaudited.",
+            file=sys.stderr,
+        )
+    try:
+        events.publish(event, payload)
+    except (OSError, ValueError):
+        pass  # the event bus is a convenience; the audit record above is the record
+    return recorded
+
+
+def _egress_notice(provider: Provider) -> str:
+    """What choosing this provider does and does not change."""
+    if provider.egress == "cloud":
+        return (
+            "cloud: prompts leave this machine. A default waives nothing: every turn still needs "
+            "the engagement's cloud clearance (llm.cloud), an operator-or-above profile, a stored "
+            "key and your approval."
+        )
+    return "local: no per-turn approval is needed, but an active engagement is still required."
+
+
 def main() -> int:
     from . import credentials
 
@@ -530,13 +830,17 @@ def main() -> int:
 
     if action in {"help", "-h", "--help"}:
         print(
-            "Usage: shinobi provider <list|inspect|check|readiness|key|forget> [id] [--json]\n"
+            "Usage: shinobi provider <list|inspect|check|readiness|default|key|forget> [id] [--json]\n"
             "\n"
             "  list            every provider, with whether a key is stored\n"
             "  inspect <id>    one manifest, verbatim\n"
             "  check           validate every manifest and report\n"
             "  readiness       which providers could be used right now, and what\n"
             "                  blocks each one; exit 1 if none are ready\n"
+            "  default [id]    show, or choose, the provider 'shinobi llm ask' uses\n"
+            "                  when none is named; --clear removes your choice. It is\n"
+            "                  a selection and waives no clearance or approval.\n"
+            "                  With --json it always exits 0: read 'valid'\n"
             "  key <id>        store an API key, read from a prompt or stdin\n"
             "  forget <id>     remove the stored key\n"
             "\n"
@@ -614,6 +918,91 @@ def main() -> int:
     if action == "readiness":
         return _readiness(as_json)
 
+    if action == "default":
+        words = [a for a in sys.argv[2:] if not a.startswith("--")]
+        flags = [a for a in sys.argv[2:] if a.startswith("--")]
+        clear = "--clear" in flags
+        # An unknown flag is a usage error, not something to ignore: `--claer`
+        # falling through to "show the default" would leave an operator believing
+        # a setting was cleared that was not.
+        if (
+            any(f not in ("--clear", "--json") for f in flags)
+            or len(words) > 1
+            or (clear and words)
+        ):
+            print("usage: shinobi provider default [<id> | --clear] [--json]", file=sys.stderr)
+            return 2
+
+        if clear:
+            try:
+                removed = clear_default()
+            except ProviderError as exc:
+                print(f"shinobi-provider: {exc}", file=sys.stderr)
+                return 1
+            recorded = True
+            if removed:
+                recorded = _record("provider.default", {"provider": None}, "default provider cleared",
+                                   "provider.default.changed", {"provider": None})
+            print(
+                "shinobi-provider: cleared your default provider"
+                if removed
+                else "shinobi-provider: you had no default provider set"
+            )
+            remaining = default_provider()
+            if remaining.problem is not None:
+                print(f"  the {remaining.source} default is set but cannot be used: {remaining.problem}")
+            elif remaining.id is not None:
+                print(f"  the {remaining.source} default still applies: {remaining.id}")
+            return 0 if recorded else 1
+
+        if words:
+            try:
+                provider = set_default(words[0])
+            except ProviderError as exc:
+                print(f"shinobi-provider: {exc}", file=sys.stderr)
+                return 1
+            recorded = _record("provider.default", {"provider": provider.id},
+                               f"default provider set to {provider.id}",
+                               "provider.default.changed", {"provider": provider.id})
+            print(f"shinobi-provider: default provider is now {provider.id} ({provider.egress})")
+            print(f"  {_egress_notice(provider)}")
+            if provider.requires_key and not credentials.has_key(provider.id):
+                print(f"  no API key is stored for it yet: shinobi provider key {provider.id}")
+            return 0 if recorded else 1
+
+        try:
+            providers = load_all()
+        except ProviderError as exc:
+            print(f"shinobi-provider: {exc}", file=sys.stderr)
+            return 1
+        setting = default_provider(providers)
+        chosen = providers.get(setting.id) if setting.id else None
+        if as_json:
+            import json
+
+            print(
+                json.dumps(
+                    {
+                        "default": setting.id,
+                        "source": setting.source,
+                        "valid": setting.id is not None and setting.problem is None,
+                        "problem": setting.problem,
+                        "egress": chosen.egress if chosen else None,
+                    },
+                    indent=2,
+                    sort_keys=True,
+                )
+            )
+            return 0
+        if setting.problem is not None:
+            print(f"shinobi-provider: the default provider cannot be used: {setting.problem}", file=sys.stderr)
+            return 1
+        if setting.id is None:
+            print("shinobi-provider: no default provider is set (shinobi provider default <id>)", file=sys.stderr)
+            return 0
+        print(setting.id)
+        return 0
+
     if action == "key":
         provider_id = sys.argv[2] if len(sys.argv) > 2 else ""
         if not provider_id:
@@ -639,15 +1028,25 @@ def main() -> int:
             secret = getpass.getpass(f"API key for {provider_id}: ")
         else:
             secret = sys.stdin.read()
+            # `echo KEY | shinobi provider key x` and most secret managers end
+            # their output with a newline. That one is the terminator, not part
+            # of the key, so it is dropped; a newline anywhere else is still
+            # refused by the credential store.
+            if secret.endswith("\r\n"):
+                secret = secret[:-2]
+            elif secret.endswith("\n"):
+                secret = secret[:-1]
         try:
             used = credentials.set_key(provider_id, secret)
         except credentials.CredentialError as exc:
             print(f"shinobi-provider: {exc}", file=sys.stderr)
             return 1
+        recorded = _record("provider.key.set", {"provider": provider_id}, f"key stored in the {used} backend",
+                           "provider.key.changed", {"provider": provider_id, "stored": True})
         print(f"shinobi-provider: stored the key for {provider_id} in the {used} backend")
         if used == "keyring":
             print("  it is held in kernel memory and will not survive a reboot")
-        return 0
+        return 0 if recorded else 1
 
     if action == "forget":
         provider_id = sys.argv[2] if len(sys.argv) > 2 else ""
@@ -659,12 +1058,16 @@ def main() -> int:
         except credentials.CredentialError as exc:
             print(f"shinobi-provider: {exc}", file=sys.stderr)
             return 1
+        recorded = True
+        if removed:
+            recorded = _record("provider.key.forget", {"provider": provider_id}, "stored key removed",
+                               "provider.key.changed", {"provider": provider_id, "stored": False})
         print(
             f"shinobi-provider: removed the key for {provider_id}"
             if removed
             else f"shinobi-provider: no key stored for {provider_id}"
         )
-        return 0
+        return 0 if recorded else 1
 
     raise SystemExit(f"unknown provider action: {action}")
 

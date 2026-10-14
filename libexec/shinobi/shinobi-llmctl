@@ -22,6 +22,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from shinobi_control import egress as gate  # noqa: E402
+from shinobi_control import providerctl  # noqa: E402
 from shinobi_control.llm import agent, mcp  # noqa: E402
 
 # Servers whose tools are offered to the model when none are named. The recon
@@ -59,16 +60,49 @@ def _servers(names: list[str]) -> list[mcp.Server]:
     return [mcp.Server(name) for name in names]
 
 
+def _provider_for(args: argparse.Namespace):
+    """The provider this command is about: the one named, else the default.
+
+    `shinobi llm ask "what is open on 10.10.10.5?"` is a prompt pasted into argv,
+    and it parses as the one optional positional, a provider id. An error that
+    quoted it back would put the question into stderr and a terminal scrollback,
+    which is the leak the argument parser below is built to avoid.
+
+    Shape alone is not enough: a bare address, a hostname or a single word all
+    look like ids. So an explicit argument is checked against the providers that
+    exist, and a miss is reported without repeating it. The known ids are listed
+    instead, which are manifest names and safe to print.
+    """
+    requested = args.provider
+    if requested is None:
+        return gate.get_provider(providerctl.resolve_provider_id(None))
+    known = providerctl.load_all()
+    if not providerctl.PROVIDER_ID_RE.fullmatch(requested) or requested not in known:
+        raise gate.ProviderError(
+            "that argument is not a provider this system knows (known: "
+            + (", ".join(sorted(known)) or "none")
+            + "). A prompt is not accepted as an argument, because argv is world-readable: "
+            "pipe it in or use --file."
+        )
+    return known[requested]
+
+
 def _cmd_check(args: argparse.Namespace) -> int:
     """Report whether this provider could be used at all, and what it would cost."""
     try:
-        decision_probe = gate.get_provider(args.provider)
+        decision_probe = _provider_for(args)
     except gate.ProviderError as exc:
         print(f"shinobi-llm: {exc}", file=sys.stderr)
         return 1
     if args.json:
-        print(json.dumps(gate.registry_summary()[decision_probe.id], indent=2, sort_keys=True))
+        # The id is part of the answer: with the provider optional, a caller that
+        # named none would otherwise get an anonymous object.
+        summary = dict(gate.registry_summary()[decision_probe.id], id=decision_probe.id,
+                       from_default=args.provider is None)
+        print(json.dumps(summary, indent=2, sort_keys=True))
     else:
+        if args.provider is None:
+            print("(the default provider)")
         print(f"{decision_probe.id}: {decision_probe.name}")
         print(f"  api      {decision_probe.api}")
         print(f"  egress   {decision_probe.egress}")
@@ -81,11 +115,31 @@ def _cmd_check(args: argparse.Namespace) -> int:
 
 
 def _cmd_ask(args: argparse.Namespace) -> int:
+    # The provider is settled before the prompt is read. A default that is not
+    # set, or cannot be used, should fail before anyone has typed a question
+    # into a pipe, and it must never be replaced by whichever provider is ready.
+    try:
+        provider = _provider_for(args)
+    except gate.ProviderError as exc:
+        print(f"shinobi-llm: {exc}", file=sys.stderr)
+        return 1
+    if args.provider is None:
+        print(f"shinobi-llm: using the default provider: {provider.id} ({provider.egress})", file=sys.stderr)
+
     prompt = _read_prompt(args)
     servers = _servers(args.server)
 
     approve = None
-    if args.approval_id:
+    if args.approval_id and provider.egress != "cloud":
+        # A local provider never consumes an approval, so there is nothing for
+        # this one to cover. Installing the one-turn closure below anyway would
+        # abort a conversation that has tool calls at its second turn, for want
+        # of an approval nothing would have read.
+        print(
+            "shinobi-llm: --approval-id is ignored: a local provider needs no approval.",
+            file=sys.stderr,
+        )
+    elif args.approval_id:
         # Scripted use: one turn, one pre-made approval, no waiting. Anything
         # that needs a second approval will stop and say so, which is the
         # correct outcome rather than a retry loop.
@@ -101,18 +155,24 @@ def _cmd_ask(args: argparse.Namespace) -> int:
                 return None
             return wanted
 
-    elif not args.yes:
+    elif not args.yes and provider.egress == "cloud":
         approve = agent.interactive_approver(wait=not args.no_wait)
     else:
-        # --yes is for local providers, where there is no per-turn approval to
-        # give. A cloud provider still refuses: the whole point of the cloud
-        # rule is that a standing yes is not consent for a specific prompt, and
-        # this flag must not become a way around it.
+        # A local provider has no per-turn approval to give: the gate never
+        # consumes one for it. Installing the interactive approver anyway made
+        # every local question create an approval nothing would read and wait
+        # ten minutes on it, which contradicts "a local provider needs no
+        # approval at all". --yes says the same thing out loud.
+        #
+        # A cloud provider with --yes still refuses: the whole point of the
+        # cloud rule is that a standing yes is not consent for a specific
+        # prompt, and this flag must not become a way around it. With no
+        # approver the gate has nothing to consume and says so.
         approve = None
 
     try:
         result = agent.run(
-            args.provider,
+            provider.id,
             prompt,
             model=args.model,
             system=None if args.no_system else args.system,
@@ -175,7 +235,11 @@ def build_parser() -> argparse.ArgumentParser:
     sub = parser.add_subparsers(dest="command", required=True, parser_class=_QuietParser)
 
     ask = sub.add_parser("ask", help="ask a provider a question")
-    ask.add_argument("provider", help="provider id, as in 'shinobi provider list'")
+    ask.add_argument(
+        "provider",
+        nargs="?",
+        help="provider id, as in 'shinobi provider list' (default: 'shinobi provider default')",
+    )
     ask.add_argument("--model", help="model id (defaults to the manifest's)")
     ask.add_argument("--file", help="read the prompt from this file, or - for stdin")
     ask.add_argument(
@@ -202,7 +266,7 @@ def build_parser() -> argparse.ArgumentParser:
     ask.set_defaults(func=_cmd_ask)
 
     check = sub.add_parser("check", help="describe a provider and its governance")
-    check.add_argument("provider")
+    check.add_argument("provider", nargs="?", help="provider id (default: 'shinobi provider default')")
     check.add_argument("--json", action="store_true")
     check.set_defaults(func=_cmd_check)
 
@@ -220,6 +284,15 @@ class _QuietParser(argparse.ArgumentParser):
     """
 
     def error(self, message: str) -> None:
+        # Forgetting the subcommand puts the prompt where the command name goes,
+        # and a mistyped number option can swallow one too; argparse quotes both.
+        if "invalid choice" in message:
+            raise SystemExit(
+                f"{self.prog}: unknown command. Use 'ask' or 'check'. A prompt is not accepted "
+                "as an argument, because argv is world-readable: pipe it in or use --file."
+            )
+        if "invalid" in message and "value" in message:
+            raise SystemExit(f"{self.prog}: an option was given a value it cannot use (not repeated here).")
         if "unrecognized arguments" in message:
             raise SystemExit(
                 f"{self.prog}: unexpected argument. The prompt is not accepted as an "

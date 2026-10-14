@@ -536,10 +536,37 @@ an operator's configuration either — homes are completed rather than synced, a
   what actually authorizes a request, and it deliberately does *not* call
   `authorize()` — a status command must never consume a per-turn approval.
 
-  What it does not solve is selection: there is still no default provider, so
-  every `shinobi llm ask` names one explicitly, and the desktop has nothing
-  stable to bind to. That is defensible for the CLI and is the reason provider
-  readiness is not surfaced in the panel yet.
+  Selection is now a setting, which is what the desktop needed to bind to.
+  `shinobi provider default <id>` stores one non-secret provider id (the user's
+  layer, over `/etc/shinobi`, over the packaged defaults, in the order
+  `docs/architecture.md` promises), `shinobi llm ask` and `shinobi llm check` use
+  it when no provider is named, and `readiness --json` reports it with its own
+  blockers. It is a selection and waives nothing: the gate never reads it, still
+  takes an explicit provider id, and still demands what it always did. Any
+  provider needs an active engagement and respects its `llm.providers` and
+  `llm.models` allowlists; a cloud provider also needs the engagement's written
+  clearance, an operator profile, a stored key (when the manifest requires one)
+  and a per-turn approval. A default that is unset, malformed, unreadable or names
+  a provider that no longer exists is an error, in whichever layer it is found,
+  and is never replaced by a lower layer or by whichever provider happens to be
+  ready, because that would route a prompt to an endpoint nobody chose. The file
+  is held to the standard of a scope file or a stored key: a small regular file,
+  opened without following a symlink, owned by you or root and writable by no one
+  else, in an absolute XDG directory.
+
+  Readiness now agrees with the gate where it used to promise more: it stopped
+  calling a local provider ready when there was no usable engagement or when the
+  engagement's `llm.models` excluded the provider's model. Around the setting:
+  `shinobi llm ask` no longer waits ten minutes on a per-turn approval for a local
+  provider that never consumes one; a key piped in by a secret manager is
+  accepted with its single trailing newline dropped, and a key with a control or
+  non-ASCII character is refused (it would become an HTTP header, and the HTTP
+  client's error text is the whole header); an argument that is not a provider
+  the system knows is refused without being repeated, so a prompt pasted into
+  argv is not echoed. Changing the default, or storing or forgetting a key, leaves
+  an audit record and an event, neither of which carries a key, and a change that
+  cannot be audited exits non-zero rather than looking clean. The desktop does
+  not surface any of this yet.
 - **Response streaming is deferred.** Requests are non-streaming, so a provider
   that only streams is not supported yet. Nothing in the gate depends on it.
 - **The image builds, and this branch's first build ever is the one that proved
