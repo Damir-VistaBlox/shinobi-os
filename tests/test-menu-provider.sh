@@ -47,8 +47,13 @@ contains() { grep -qF -- "$2" <<<"$1" && echo yes || echo no; }
 export HOME="$work/home" XDG_CONFIG_HOME="$work/config" XDG_STATE_HOME="$work/state" \
   XDG_RUNTIME_DIR="$work/run" SHINOBI_SYSTEM_CONFIG="$work/etc" SHINOBI_DEFAULTS_DIR="$work/share" \
   SHINOBI_PROVIDERS_DIR="$ROOT/providers" SHINOBI_ENGAGEMENTS_DIR="$work/engagements"
+# A locale that is named but not installed makes every bash script print a
+# warning on stderr, and the menu shows stderr; the test pins the locale rather
+# than inherit whatever the machine has. TMPDIR is this test's own so a temporary
+# file the menu forgets to remove is visible.
+export LC_ALL=C TMPDIR="$work/tmp"
 unset SHINOBI_ENGAGEMENT SHINOBI_ENGAGEMENT_DIR SHINOBI_STATE_FILE SHINOBI_AUDIT_FILE
-mkdir -p "$HOME" "$XDG_CONFIG_HOME/shinobi" "$XDG_STATE_HOME/shinobi" "$SHINOBI_SYSTEM_CONFIG" \
+mkdir -p "$TMPDIR" "$HOME" "$XDG_CONFIG_HOME/shinobi" "$XDG_STATE_HOME/shinobi" "$SHINOBI_SYSTEM_CONFIG" \
   "$SHINOBI_DEFAULTS_DIR" "$SHINOBI_ENGAGEMENTS_DIR" "$XDG_RUNTIME_DIR"
 export PYTHONPATH="$ROOT/libexec/shinobi${PYTHONPATH:+:$PYTHONPATH}"
 
@@ -75,6 +80,7 @@ ans="$(head -n1 "$T/answers")"
 sed -i 1d "$T/answers"
 case "$ans" in
   @ESC) exit 1 ;;
+  @FIRST) head -n1 "$T/picker.$n.rows" ;;   # a bare Enter: wofi highlights the first row
   @ROW:*)
     # The row whose first word is this id, as a click would return it.
     row="$(awk -v id="${ans#@ROW:}" '$1 == id { print; exit }' "$T/picker.$n.rows")"
@@ -166,6 +172,15 @@ check "with an engagement a local provider is ready" "$(rows_of 1 | awk '$1 == "
 check "a cloud provider says what it lacks" "$(rows_of 1 | grep '^openai ' | grep -c 'blocked: engagement has not cleared cloud egress')" "1"
 check "the prompt names the engagement" "$(contains "$(prompt_of 1)" 'engagement acme')" "yes"
 
+before="$(acount provider.default)"
+drive provider "@ROW:openai" "@ESC"
+check "Esc at an action list ends the menu without a word or a change" "$rc|$(notifications)|$(($(acount provider.default) - before))" "0|0|0"
+want_first="$(shinobi-provider readiness --json | jq -r '.providers[] | select(.id == "openai") | "blocked: " + .blockers[0]')"
+drive provider "@ESC"
+check "a row carries the first thing blocking it, and only that" \
+  "$(rows_of 1 | awk '$1 == "openai" { $1 = $2 = ""; sub(/^ +/, ""); print }')" "$want_first"
+check "while the provider has more than one" "$(shinobi-provider readiness --json | jq -r '.providers[] | select(.id == "openai") | .blockers | length > 1')" "true"
+
 echo "== making a local provider the default =="
 drive provider "@ROW:ollama" "Make this the default"
 check "the actions offered for a local, non-default provider" \
@@ -205,6 +220,19 @@ drive provider "@ROW:ollama" "@ESC"
 check "a default that comes from the system layer cannot be cleared from here" \
   "$(rows_of 2 | paste -sd'|')" "Back"
 rm -f "$SHINOBI_SYSTEM_CONFIG/default-provider"
+printf 'ollama\n' >"$SHINOBI_DEFAULTS_DIR/default-provider"
+drive provider "@ROW:ollama" "@ESC"
+check "nor one that comes from the package" "$(rows_of 2 | paste -sd'|')" "Back"
+rm -f "$SHINOBI_DEFAULTS_DIR/default-provider"
+
+# "Show what blocks it" is the only place the whole list of blockers is shown.
+want_blockers="$(shinobi-provider readiness --json | jq -r '.providers[] | select(.id == "openai") | .blockers[]')"
+before="$(acount provider.default)"
+drive provider "@ROW:openai" "Show what blocks it"
+check "'Show what blocks it' opens a third list, titled with the provider" "$(pickers)|$(prompt_of 3)" "3|blocked: openai"
+check "it lists every blocker of that provider" "$(rows_of 3)" "$want_blockers"
+check "and nothing about any other provider" "$(contains "$(rows_of 3)" 'groq')" "no"
+check "it changes nothing and says nothing" "$rc|$(notifications)|$(($(acount provider.default) - before))" "0|0|0"
 drive provider "@ROW:ollama" "Back" "@ROW:groq" "@ESC"
 check "Back shows the list again" "$(pickers)" "4"
 check "and the list is the same" "$(rows_of 3 | wc -l)" "$(rows_of 1 | wc -l)"
@@ -216,6 +244,28 @@ drive provider "@ROW:openai" "Clear my default"
 check "the file is gone" "$([[ -e $user_default ]] && echo present || echo gone)" "gone"
 check "one audit record" "$(($(acount provider.default) - before))" "1"
 check "the operator is told" "$(contains "$(all_notes)" 'cleared your default provider')" "yes"
+
+echo "== a default of your own that cannot be used =="
+for bad in "gone" "Not An Id"; do
+  printf '%s\n' "$bad" >"$user_default"
+  want_problem="$(shinobi-provider readiness --json | jq -r '.default.problem')"
+  drive provider "@ROW:groq" "@ESC"
+  check "'$bad': the header says the default is unusable" "$(contains "$(prompt_of 1)" 'default: unusable')" "yes"
+  check "'$bad': the reason is shown as soon as the list opens" "$(contains "$(note 1 -1)" "$want_problem")" "yes"
+  check "'$bad': no row is marked as the default" "$(rows_of 1 | grep -c '(default)$' || true)" "0"
+  check "'$bad': Clear my default is offered, on a provider that is not the default" \
+    "$(rows_of 2 | paste -sd'|')" "Make this the default|Clear my default|Store API key|Forget stored API key|Show what blocks it|Back"
+  before="$(acount provider.default)"
+  drive provider "@ROW:ollama" "Clear my default"
+  check "'$bad': clearing it removes the file" "$([[ -e $user_default ]] && echo present || echo gone)" "gone"
+  check "'$bad': with one audit record" "$(($(acount provider.default) - before))" "1"
+done
+# The same state from the system layer is not yours to clear from here.
+printf 'gone\n' >"$SHINOBI_SYSTEM_CONFIG/default-provider"
+drive provider "@ROW:ollama" "@ESC"
+check "a system default that cannot be used is explained but not offered for clearing" \
+  "$(contains "$(note 1 -1)" 'cannot be used')|$(contains "$(rows_of 2)" 'Clear my default')" "yes|no"
+rm -f "$SHINOBI_SYSTEM_CONFIG/default-provider"
 
 echo "== what is typed is never run =="
 printf 'openai\n' >"$user_default"
@@ -279,6 +329,10 @@ drive provider "@ROW:openai" "Forget stored API key" "Keep it"
 check "declining keeps the key" "$([[ -e $keyfile ]] && echo kept || echo gone)" "kept"
 check "and records nothing" "$(($(acount provider.key.forget) - before))" "0"
 check "the confirmation names the provider" "$(contains "$(rows_of 3)" 'Forget the key for openai')" "yes"
+check "the safe answer is the first row" "$(rows_of 3 | head -n1)" "Keep it"
+drive provider "@ROW:openai" "Forget stored API key" "@FIRST"
+check "so a bare Enter at the confirmation keeps the key" "$([[ -e $keyfile ]] && echo kept || echo gone)" "kept"
+check "and records nothing" "$(($(acount provider.key.forget) - before))" "0"
 for typed in "yes" "Forget the key for groq" "forget the key for openai" "Forget the key for openai " ""; do
   drive provider "@ROW:openai" "Forget stored API key" "$typed"
   check "typing '${typed:0:30}' at the confirmation does not forget" "$([[ -e $keyfile ]] && echo kept || echo gone)" "kept"
@@ -301,6 +355,24 @@ check "and is not reported as done" "$(contains "$(all_notes)" 'default provider
 check "the menu ends cleanly" "$rc" "0"
 rm -f "$XDG_CONFIG_HOME/shinobi"
 mv "$XDG_CONFIG_HOME/shinobi.aside" "$XDG_CONFIG_HOME/shinobi"
+
+# The change happens and cannot be recorded: the CLI exits 1 after printing that
+# the change WAS made, and everything it printed has to reach the operator, the
+# warning included, because that is the one line that says the journal is short.
+rm -f "$user_default"
+mv "$audit" "$audit.aside"
+mkdir "$audit"
+drive provider "@ROW:openai" "Make this the default"
+check "an unrecorded change: the change was made" "$(current_default)" "openai"
+check "the exit status is shown" "$(contains "$(all_notes)" 'exited with status 1')" "yes"
+check "the operator is told it was not recorded" "$(contains "$(all_notes)" 'could NOT be recorded')" "yes"
+check "and that the change was made" "$(contains "$(all_notes)" 'the change WAS made')" "yes"
+check "and the rest of what the command said, the cloud notice included" \
+  "$(contains "$(all_notes)" 'default provider is now openai (cloud)')|$(contains "$(all_notes)" 'waives nothing')|$(contains "$(all_notes)" 'no API key is stored for it yet')" "yes|yes|yes"
+check "in one notification" "$(notifications)" "1"
+rmdir "$audit"
+mv "$audit.aside" "$audit"
+rm -f "$user_default"
 
 # A provider manifest that does not parse: readiness fails, and the menu says so
 # instead of showing an empty list or nothing.
@@ -342,7 +414,7 @@ EOF
 chmod +x "$stub/shinobi-provider"
 cat >"$T/canned.json" <<'EOF'
 {
-  "engagement": "engagement acme",
+  "engagement": "engagement acme\nsecond line\u001fx and a very long tail that goes on and on and on and on and on and on and on",
   "profile": "operator",
   "cloud_cleared": false,
   "default": {"id": null, "source": "none", "problem": null, "usable": false, "blockers": []},
@@ -350,6 +422,7 @@ cat >"$T/canned.json" <<'EOF'
   "providers": [
     {"id": "--clear", "name": "x", "egress": "local", "default_model": "m", "requires_key": false, "default": false, "usable": true, "blockers": []},
     {"id": "../etc/passwd", "name": "x", "egress": "local", "default_model": "m", "requires_key": false, "default": false, "usable": true, "blockers": []},
+    {"id": "", "name": "x", "egress": "local", "default_model": "m", "requires_key": false, "default": false, "usable": true, "blockers": []},
     {"id": "Upper", "name": "x", "egress": "local", "default_model": "m", "requires_key": false, "default": false, "usable": true, "blockers": []},
     {"id": "honest", "name": "x", "egress": "cloud", "default_model": "m", "requires_key": true, "default": false, "usable": false,
      "blockers": ["first line\nfake-id   local  ready"]}
@@ -364,9 +437,22 @@ PATH="$stub:$PATH" "$ROOT/bin/shinobi-menu" provider >/dev/null 2>"$work/menu.er
 check "only the well-formed id is offered" "$(rows_of 1 | awk '{print $1}')" "honest"
 check "and a newline in a reason does not make a second row" "$(rows_of 1 | wc -l)" "1"
 check "the reason is on the one row, flattened" "$(contains "$(rows_of 1)" 'first line fake-id')" "yes"
+check "an empty id is not offered, and does not shift the next field into its place" "$(rows_of 1 | grep -c '^local ' || true)" "0"
+check "the header is one line" "$(prompt_of 1 | wc -l)" "0"
+check "with no control character in it" "$(prompt_of 1 | tr -d '[:print:]' | wc -c)" "0"
+check "and the engagement part is bounded" "$(prompt_of 1 | awk -F' [|] ' '{ print length($3) <= 48 }')" "1"
 check "the command that ran is exactly: default honest" "$(tr '\0' '|' <"$T/stub.argv")" "default|honest|"
 check "one command ran" "$(wc -l <"$T/stub.calls")" "1"
 check "output that begins with a dash is shown as text, after --" "$(note 1 0)|$(note 1 -1)" "--|-leading dash in the output"
+
+# No providers at all: say so, rather than open an empty list.
+emptyprov="$work/emptyprov"
+mkdir -p "$emptyprov"
+rm -f "$T"/picker.* "$T"/notify.*
+: >"$T/answers"
+rc=0
+SHINOBI_PROVIDERS_DIR="$emptyprov" "$ROOT/bin/shinobi-menu" provider >/dev/null 2>&1 || rc=$?
+check "no providers configured: said so, no list shown, not an error" "$(contains "$(all_notes)" 'No providers are configured')|$(pickers)|$rc" "yes|0|0"
 
 # Valid JSON on stdout does not make a report trustworthy when the command that
 # wrote it failed: the exit status is part of the answer.
@@ -381,6 +467,9 @@ check "a failing readiness command with parseable output: the menu exits non-zer
 check "it says it cannot read the providers, and why" \
   "$(contains "$(all_notes)" 'Cannot read the providers')|$(contains "$(all_notes)" 'boom: the readiness check itself failed')" "yes|yes"
 check "and shows no list to act on" "$(pickers)" "0"
+
+echo "== the menu leaves nothing behind =="
+check "no temporary file is left in TMPDIR after all of the above" "$(find "$TMPDIR" -mindepth 1 | wc -l)" "0"
 
 echo "== the menu stays out of the gate =="
 check "no route of the provider menu runs the LLM client or the gate" \

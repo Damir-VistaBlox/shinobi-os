@@ -76,11 +76,14 @@ provider_menu() {
     exit 1
   fi
 
-  # One TSV row per provider. Every field that came from a manifest or an error
-  # string has its control characters replaced, so a stray newline cannot split a
-  # row in two or smuggle a second row into the list.
+  # One row per provider, fields separated by the ASCII unit separator. Not a tab:
+  # tab is IFS whitespace, so `read` would collapse an empty field and shift the
+  # rest one to the left, and an empty id would turn the egress into the id. Every
+  # field that came from a manifest or an error string has its control characters
+  # replaced (the separator included), so a stray newline cannot split a row in two
+  # or smuggle a second row into the list.
   local ids=() rows=() id egress status is_default line
-  while IFS=$'\t' read -r id egress status is_default; do
+  while IFS=$'\037' read -r id egress status is_default; do
     # The id becomes an argument to `shinobi-provider`; one that does not have
     # the shape of a provider id is never offered.
     [[ "$id" =~ ^[a-z0-9][a-z0-9._-]{0,63}$ ]] || continue
@@ -95,10 +98,18 @@ provider_menu() {
         (.egress | clean),
         (if .usable then "ready" else "blocked: " + ((.blockers[0] // "unknown") | clean) end),
         (.default | tostring) ]
-    | @tsv' <<<"$state")
+    | join("\u001f")' <<<"$state")
   if [[ ${#ids[@]} -eq 0 ]]; then
     notify "No providers are configured."
     exit 0
+  fi
+
+  # A default that is set but cannot be used has no row to carry its reason, so say
+  # it here; the prompt only has room for the word "unusable".
+  local default_problem
+  default_problem="$(jq -r '(.default.problem // "") | tostring | gsub("[[:cntrl:]]"; " ")' <<<"$state")"
+  if [[ -n "$default_problem" ]]; then
+    notify "The default provider cannot be used: $default_problem"
   fi
 
   local header
@@ -130,17 +141,23 @@ provider_menu() {
 # provider_actions <readiness json> <id>: what can be done with one provider.
 # Returns non-zero for "Back" so the caller shows the list again.
 provider_actions() {
-  local state="$1" id="$2" requires_key="" usable="" is_default="" default_source
-  IFS=$'\t' read -r requires_key usable is_default < <(
-    jq -r --arg id "$id" '.providers[] | select(.id == $id) | [.requires_key, .usable, .default] | @tsv' <<<"$state") || true
+  local state="$1" id="$2" requires_key="" usable="" is_default="" default_source default_problem
+  IFS=$'\037' read -r requires_key usable is_default < <(
+    jq -r --arg id "$id" '.providers[] | select(.id == $id)
+      | [.requires_key, .usable, .default] | map(tostring) | join("\u001f")' <<<"$state") || true
   default_source="$(jq -r '.default.source // ""' <<<"$state")"
+  default_problem="$(jq -r '.default.problem // ""' <<<"$state")"
 
   local actions=()
   [[ "$is_default" == true ]] || actions+=("Make this the default")
   # `--clear` removes your own setting only. When the default comes from the
   # system or the package, clearing would change nothing and say so, so it is not
-  # offered.
-  if [[ "$is_default" == true && "$default_source" == user ]]; then actions+=("Clear my default"); fi
+  # offered. A default of your own that names a provider that no longer exists, or
+  # is malformed, has no row to be the default of, and is the case where clearing
+  # matters most: it is offered on every provider then.
+  if [[ "$default_source" == user && ( "$is_default" == true || -n "$default_problem" ) ]]; then
+    actions+=("Clear my default")
+  fi
   if [[ "$requires_key" == true ]]; then
     actions+=("Store API key" "Forget stored API key")
   fi
@@ -174,7 +191,8 @@ provider_actions() {
       ;;
     "Forget stored API key")
       local sure
-      sure="$(provider_pick "forget the key for $id?" "Forget the key for $id" "Keep it")"
+      # "Keep it" first: wofi highlights the first row, so a bare Enter keeps the key.
+      sure="$(provider_pick "forget the key for $id?" "Keep it" "Forget the key for $id")"
       if [[ "$sure" == "Forget the key for $id" ]]; then
         provider_run forget "$id"
       else

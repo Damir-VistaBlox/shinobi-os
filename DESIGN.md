@@ -579,7 +579,12 @@ an operator's configuration either — homes are completed rather than synced, a
   because wofi cannot hide input; forgetting one asks first; and the commands'
   own output, including the cloud notice and a change that happened but could not
   be audited, is shown as a notification, since a menu has no terminal to print
-  it to. The bar and a panel do not surface any of this yet.
+  it to. A default of your own that cannot be used (it names a provider that was
+  removed, or the file is malformed) has no row to be the default of, so the
+  reason is shown when the list opens and "Clear my default" is offered on every
+  provider; a default from the system or the package is explained but not offered
+  for clearing, since clearing would change nothing. The bar and a panel do not
+  surface any of this yet.
 - **Response streaming is deferred.** Requests are non-streaming, so a provider
   that only streams is not supported yet. Nothing in the gate depends on it.
 - **The image builds, and this branch's first build ever is the one that proved
