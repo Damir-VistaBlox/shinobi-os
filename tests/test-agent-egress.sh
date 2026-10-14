@@ -71,6 +71,8 @@ chmod +x "$work/bin/otheragent"
 
 export PATH="$work/bin:$PATH"
 export XDG_DATA_HOME="$work/data" XDG_STATE_HOME="$work/state" XDG_CONFIG_HOME="$work/config"
+# Events the launcher publishes land here, not in the operator's runtime dir.
+export XDG_RUNTIME_DIR="$work/run"
 export FAKE_LOG="$work/vendor.log" FAKE_ADD="$work/add.txt"
 unset SHINOBI_ENGAGEMENTS_DIR SHINOBI_ENGAGEMENT SHINOBI_ENGAGEMENT_DIR
 unset SHINOBI_ACCEPT_UNGOVERNED_EGRESS SHINOBI_AGENT_CMD
