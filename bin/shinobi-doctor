@@ -133,8 +133,10 @@ libexec_root="$(shinobi_self_dir)/../libexec/shinobi"
 # The engagement and service checks above are the ones that decide the exit
 # status. A machine with no LLM provider configured is a working Shinobi.
 provider_readiness=""
+# python3 -P: see bin/shinobi-provider for why the current directory must not be
+# on sys.path.
 if provider_ctl="$libexec_root/shinobi_control/providerctl.py"; then
-  provider_readiness="$(PYTHONPATH="$(dirname -- "$(dirname -- "$provider_ctl")")" python3 -m shinobi_control.providerctl readiness 2>&1 || true)"
+  provider_readiness="$(PYTHONPATH="$(dirname -- "$(dirname -- "$provider_ctl")")" python3 -P -m shinobi_control.providerctl readiness 2>&1 || true)"
 fi
 if [[ -n "$provider_readiness" ]]; then
   printf '\n%s\n' "$provider_readiness"
