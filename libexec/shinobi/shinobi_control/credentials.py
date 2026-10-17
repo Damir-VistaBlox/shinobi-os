@@ -73,6 +73,20 @@ def _check_id(provider_id: str) -> str:
     return provider_id
 
 
+def _check_secret_chars(secret: str) -> None:
+    """A key is printable ASCII, and anything else is refused without being shown.
+
+    A key becomes the value of an HTTP header. A control character in one, a
+    lone carriage return for instance, makes the HTTP client raise an exception
+    whose text is the whole header, key included, and nothing downstream is
+    expecting to catch that. Refusing it where it is stored, and again where it
+    is read back (a file written before this check existed is still a file), keeps
+    the key out of a traceback. The message never carries the key.
+    """
+    if not secret.isascii() or any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in secret):
+        raise CredentialError("a key must be printable ASCII; this one has a control or non-ASCII character")
+
+
 def backend() -> str:
     """Which store this machine uses: 'keyring' or 'file'."""
     return "keyring" if is_live_mode() else "file"
@@ -132,6 +146,7 @@ def set_key(provider_id: str, secret: str) -> str:
         # A newline would split a keyctl stdin payload across keys, and a NUL
         # cannot survive the round trip at all.
         raise CredentialError("refusing to store a key containing NUL or newline")
+    _check_secret_chars(secret)
 
     if backend() == "keyring":
         if not _keyring_available():
@@ -198,6 +213,7 @@ def get_key(provider_id: str) -> str:
         secret = _keyring(KEYRING_PREFIX + provider_id, "request").strip()
         if not secret:
             raise CredentialError(f"no key stored for provider {provider_id!r}")
+        _check_secret_chars(secret)
         return secret
 
     path = _key_path(provider_id)
@@ -221,6 +237,7 @@ def get_key(provider_id: str) -> str:
         raise CredentialError(f"cannot read the credential file: {type(exc).__name__}") from exc
     if not secret:
         raise CredentialError(f"the stored key for provider {provider_id!r} is empty")
+    _check_secret_chars(secret)
     return secret
 
 
