@@ -437,8 +437,15 @@ live-config prefers that over anything in `/etc/live/config.conf.d`. So the boot
 entries name it — `username=shinobi`, after Kali's parameters, because
 live-config keeps the last value it sees — and live-config writes the sudoers
 grant for that name itself. The earlier approach, `usermod -l` in a build hook
-plus a rewrite of the sudoers rules that name the account, is kept only as a
-fallback for an image that somehow still has a `kali` account.
+plus a rewrite of the sudoers rules that name the account, is gone from the hook.
+It was not only unnecessary: a build chroot has no login account at all (Kali
+creates its own at boot), so a hook that asked the engine to apply the layer to
+"the" account found none and exited 1, which aborts the whole ISO build at that
+step. The hook now runs `shinobi-setup apply --skel-only`, which stages the
+dotfiles into `/etc/skel` and `/root`, the font and the provenance and touches no
+account; the account is created at boot, under the right name, with its home
+copied from that skeleton. `tests/test-setup.sh` runs the hook's own command line
+in a system that has only root, which is the state of the chroot.
 
 It was not a close call. `usermod -l` on somebody who administers a machine is
 not a decision a build script should make for them, which is why `shinobi-setup`

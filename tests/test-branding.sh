@@ -153,11 +153,18 @@ check "live-config is configured to create it too, as a second path" \
   "$(grep -qE '^[[:space:]]*LIVE_USERNAME="shinobi"' "$ROOT/distro/overlay/includes.chroot/etc/live/config.conf.d/shinobi.conf" && echo yes || echo no)" "yes"
 check "our file is the one that wins" \
   "$([[ distro/overlay/includes.chroot/etc/live/config.conf.d/shinobi.conf > distro/kali-live/kali-config/common/includes.chroot/etc/live/config.conf.d/kali.conf ]] && echo yes || echo no)" "yes"
-# And the rename stays as a fallback: if an image somehow still has a kali
-# account, the engine deals with it rather than the image shipping a session
-# called kali.
-check "the ISO hook still renames a legacy account as a fallback" \
-  "$(grep -q 'shinobi-setup apply --rename-from kali' "$ROOT/distro/overlay/kali-config/variant-shinobi/hooks/live/0010-install-layer.chroot" && echo yes || echo no)" "yes"
+# The hook does not rename anything. A build chroot has no login account (Kali
+# creates its own at boot), so a hook that asked the engine to apply the layer to
+# "the" account exited 1 and aborted the build; and the account is created under
+# the right name at boot anyway, by the override above. The hook stages the layer
+# for an account that does not exist yet.
+hook="$ROOT/distro/overlay/kali-config/variant-shinobi/hooks/live/0010-install-layer.chroot"
+# (Comment lines are filtered by hand: strip_comments only knows config file
+# extensions, and the hook explains itself at length.)
+check "the ISO hook stages the layer without an account" \
+  "$(grep -v '^[[:space:]]*#' "$hook" | grep -c 'shinobi-setup apply --skel-only' || true)" "1"
+check "and renames nothing" \
+  "$(grep -v '^[[:space:]]*#' "$hook" | grep -cE 'rename-from|usermod' || true)" "0"
 
 section "the wizard is launched from a marker nothing else sets"
 # Once per boot entry, counted on the entries themselves: the explanatory comment

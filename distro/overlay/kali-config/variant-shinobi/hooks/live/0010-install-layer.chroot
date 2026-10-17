@@ -27,16 +27,21 @@ for pkg in core desktop; do
   rm -f "$deb"
 done
 
-# Apply the layer: dotfiles, the account, the font, provenance.
+# Apply the layer: dotfiles into /etc/skel and /root, the font, provenance.
 #
-# --rename-from kali because this image inherits Kali's live user account, and
-# the engine never renames an account on its own initiative. On a system
-# somebody already administers that is not a decision a build should make; in
-# the image it is the last step of the rebrand, so it is named explicitly here.
+# --skel-only, because a build chroot has no login account to apply it to: Kali
+# creates its live account at boot (live-config's 0031-kali-user-setup), so the
+# only account here is root. Without this the engine looks for a single login
+# account, finds none, and exits 1, which aborts the whole build at this hook.
+# The account is created at boot, under the right name, by live-config reading
+# config.conf.d/shinobi.conf (LIVE_USERNAME="shinobi"), with its home copied
+# from the /etc/skel this stages. Nothing is renamed: an earlier version of this
+# hook renamed Kali's account with usermod, and that was papering over the simpler
+# thing the live-config override now does.
 #
 # The font is installed here rather than by its own hook: it is part of applying
 # the layer, and a second hook for it meant a second place to forget it.
-/usr/lib/shinobi/shinobi-setup apply --rename-from kali
+/usr/lib/shinobi/shinobi-setup apply --skel-only
 
 # Nothing runs the desktop's services from here. They are started by
 # shinobi-session at login, and enabling them in a chroot would require a
