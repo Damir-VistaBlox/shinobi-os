@@ -213,6 +213,48 @@ check "and tells the operator how to name one" \
 check "and does not touch root's home" \
   "$([[ -d $R/root/.config/hypr ]] && echo touched || echo untouched)" "untouched"
 
+# --- an image build: a chroot with no login account yet -----------------------
+# Kali creates its live account at boot, so the chroot the ISO build runs the hook
+# in has only root. The hook used to ask the engine to apply the layer to "the"
+# account, found none, and exited 1, which aborts the whole build at that hook.
+# This runs in a copy of the root-only system so that what it stages cannot make
+# the later checks (which assert the same files appear) pass by leftover state.
+section "an image build: no login account yet"
+B=$(mktemp -d)
+cp -a "$R/." "$B/"
+mkdir -p "$B/usr/lib/shinobi"
+ln -sf /engine "$B/usr/lib/shinobi/shinobi-setup"
+passwd_before=$(cksum <"$B/etc/passwd")
+
+# The exact command the ISO hook runs, taken from the hook and not retyped here,
+# so the test fails when the hook is wrong and not only when this file is.
+HOOK="$ROOT/distro/overlay/kali-config/variant-shinobi/hooks/live/0010-install-layer.chroot"
+hook_cmd=$(grep -E '^/usr/lib/shinobi/shinobi-setup apply' "$HOOK" | head -n1)
+check "the hook runs the engine once" "$(grep -cE '^/usr/lib/shinobi/shinobi-setup apply' "$HOOK" || true)" "1"
+out=$(chroot "$B" sh -c "$hook_cmd --skip-fonts" 2>&1)
+check "the hook's own command succeeds with only root in the system" "$?" "0"
+check "it says what it staged" "$(grep -c 'applied to /etc/skel and /root (no account)' <<<"$out" || true)" "1"
+check "it fills /etc/skel, for the account that is created at boot" \
+  "$([[ -f $B/etc/skel/.config/hypr/hyprland.conf ]] && echo yes || echo no)" "yes"
+check "it fills root's home" "$([[ -f $B/root/.config/hypr/hyprland.conf ]] && echo yes || echo no)" "yes"
+check "it writes the provenance" "$([[ -s $B/usr/share/shinobi/provenance ]] && echo yes || echo no)" "yes"
+check "it creates no account" "$(cksum <"$B/etc/passwd")" "$passwd_before"
+check "and no home directory" "$(ls -A "$B/home" | wc -l)" "0"
+# Numeric, because busybox cannot name an owner here. The directory is root's, and
+# the files keep whatever owner the package staged them with: nothing was chowned to
+# an account, since there is none to chown them to.
+check "/etc/skel is not given to an account that does not exist" \
+  "$(chroot "$B" stat -c %u /etc/skel)|$(chroot "$B" stat -c %u /etc/skel/.config/hypr/hyprland.conf)" \
+  "0|$(chroot "$B" stat -c %u /usr/share/shinobi-dotfiles/etc/skel/.config/hypr/hyprland.conf)"
+check "an account made from it later gets the desktop configuration" \
+  "$(mkdir -p "$B/home/newuser" && cp -a "$B/etc/skel/." "$B/home/newuser/" && [[ -f $B/home/newuser/.config/quickshell/shell.qml ]] && echo yes || echo no)" "yes"
+
+out=$(chroot "$B" /engine apply --skel-only --account shinobi --skip-fonts 2>&1)
+check "--skel-only with --account is refused: it touches no account" "$?|$(grep -c 'cannot be combined' <<<"$out" || true)" "64|1"
+out=$(chroot "$B" /engine apply --skel-only --rename-from kali --skip-fonts 2>&1)
+check "and with --rename-from" "$?|$(grep -c 'cannot be combined' <<<"$out" || true)" "64|1"
+rm -rf "$B"
+
 add_user shinobi 1000
 
 section "applying the layer"

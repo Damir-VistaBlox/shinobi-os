@@ -9,7 +9,7 @@
 # three layers, and only one of them is the one that was tested.
 #
 # Usage:
-#   shinobi-setup apply [--account NAME] [--rename-from NAME] [--force]
+#   shinobi-setup apply [--account NAME] [--rename-from NAME] [--skel-only] [--force]
 #                       [--skip-fonts] [--quiet]
 #   shinobi-setup status [--json]
 #   shinobi-setup provenance
@@ -39,6 +39,9 @@ shinobi-setup -- apply the Shinobi desktop layer
   apply              Apply dotfiles, the account, the font and provenance
     --account NAME   Apply to NAME's home instead of the auto-detected account
     --rename-from N  Rename account N to shinobi (never done implicitly)
+    --skel-only      Stage /etc/skel, /root, the font and provenance and touch no
+                     account: for an image build, where the login account does
+                     not exist yet because it is created at boot
     --force          Overwrite managed files that already exist
     --skip-fonts     Do not install the Nerd Font (needs network)
     --quiet          Only report problems
@@ -52,8 +55,10 @@ because a package was re-applied is not a repair.
 
 An account is never renamed unless asked for by name. Renaming someone's
 account to match a branding decision is the kind of change that has to be
-someone's explicit instruction, and the image build passes --rename-from
-deliberately rather than inheriting it from a default.
+someone's explicit instruction. The image build does not rename anything: its
+login account is created at boot, under the right name, by live-config, so the
+build stages the layer into /etc/skel (--skel-only) and the new account's home is
+filled from it.
 EOF
 }
 
@@ -78,6 +83,14 @@ apply_dotfiles() {
 
   rsync -a "$DOTFILES_ROOT/" /root/
   log "dotfiles: /root updated"
+
+  # --skel-only: no account yet, so there is no home to complete and nothing to
+  # own. /etc/skel stays root-owned, which is what it is everywhere else; whatever
+  # creates the account later copies it and sets the ownership of the copy.
+  if [ -z "$_account" ]; then
+    log "dotfiles: no account named; /etc/skel and /root only"
+    return 0
+  fi
 
   _home=$(getent passwd "$_account" | cut -d: -f6)
   if [ -z "$_home" ]; then
@@ -296,6 +309,7 @@ cmd_apply() {
   rename_from=""
   force=false
   skip_fonts=false
+  skel_only=false
 
   while [ $# -gt 0 ]; do
     case "$1" in
@@ -307,6 +321,7 @@ cmd_apply() {
         rename_from="${2:?--rename-from needs a name}"
         shift 2
         ;;
+      --skel-only) skel_only=true; shift ;;
       --force) force=true; shift ;;
       --skip-fonts) skip_fonts=true; shift ;;
       --quiet) quiet=true; shift ;;
@@ -318,12 +333,22 @@ cmd_apply() {
     esac
   done
 
+  # Naming or renaming an account contradicts "touch no account"; refuse the
+  # combination rather than quietly pick one.
+  if $skel_only && { [ -n "$account" ] || [ -n "$rename_from" ]; }; then
+    warn "--skel-only touches no account, so it cannot be combined with --account or --rename-from"
+    exit 64
+  fi
+
   if [ -n "$rename_from" ]; then
     rename_account "$rename_from"
   fi
 
-  if ! resolved=$(resolve_account "$account"); then
-    exit 1
+  resolved=""
+  if ! $skel_only; then
+    if ! resolved=$(resolve_account "$account"); then
+      exit 1
+    fi
   fi
 
   if ! apply_dotfiles "$resolved" "$force"; then
@@ -337,7 +362,11 @@ cmd_apply() {
   fi
 
   write_provenance
-  log "applied to account '$resolved'"
+  if $skel_only; then
+    log "applied to /etc/skel and /root (no account)"
+  else
+    log "applied to account '$resolved'"
+  fi
 }
 
 case "${1:-}" in
