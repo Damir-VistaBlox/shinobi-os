@@ -8,4 +8,8 @@ root="$bin_dir/../libexec/shinobi"
 # Packaged, bin/ is /usr/bin and libexec/shinobi/ is /usr/lib/shinobi.
 [[ -d "$root" ]] || root="$bin_dir/../lib/shinobi"
 export PYTHONPATH="$root${PYTHONPATH:+:$PYTHONPATH}"
-exec python3 -m shinobi_control.evidencectl "$@"
+# -P: without it `python3 -m` (and `python3 -`, and `-c`) puts the current directory
+# first on sys.path, so an operator standing in a directory they did not write (a
+# cloned repository, something extracted from a target) would import its json.py
+# in this process. PYTHONPATH, set above, is still honoured. Needs Python 3.11+.
+exec python3 -P -m shinobi_control.evidencectl "$@"

@@ -10,7 +10,11 @@ root="$bin_dir/../libexec/shinobi"
 export PYTHONPATH="$root${PYTHONPATH:+:$PYTHONPATH}"
 action="${1:-check}"
 shift || true
-python3 - "$action" "$@" <<'PY'
+# -P: without it `python3 -m` (and `python3 -`, and `-c`) puts the current directory
+# first on sys.path, so an operator standing in a directory they did not write (a
+# cloned repository, something extracted from a target) would import its json.py
+# in this process. PYTHONPATH, set above, is still honoured. Needs Python 3.11+.
+python3 -P - "$action" "$@" <<'PY'
 import argparse, json, pathlib, sys
 
 parser = argparse.ArgumentParser(prog="shinobi egress", add_help=False)
