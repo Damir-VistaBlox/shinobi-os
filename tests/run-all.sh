@@ -30,6 +30,7 @@ SOURCE_TESTS=(
   tests/test-theme-set.sh
   tests/test-launcher-env.sh
   tests/test-agent-egress.sh
+  tests/test-agent-setup.sh
   tests/test-migrate.sh
   tests/test-build-config.sh
   tests/test-package-layout.sh
