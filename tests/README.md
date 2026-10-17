@@ -80,6 +80,7 @@ on failure. `run-all.sh` runs them in this order and stops at the first failure.
 | `test-doctor.sh` | `shinobi-doctor` really checks what it claims, including setuid/setgid files |
 | `test-hook.sh` | Hook install/run: event validation, secure roots, user-hook confirmation |
 | `test-event-helper.sh` | `shinobi_emit_event` passes `shinobi-event` the payload it was given, with no stray brace, `{}` when there is none, and never fails its caller; and creating an engagement really publishes `engagement.created` through the real `shinobi-event` |
+| `test-theme-set.sh` | `shinobi-theme set` finishes cleanly for every theme that ships: exits 0, says it worked, records the theme, repoints the Hyprland colours, and publishes `theme.changed` through the real `shinobi-event`; unknown and invalid names are still refused rather than crashing |
 | `test-webapp.sh` | The webapp record cannot choose the program or URL that runs, and `.desktop` `Exec=` cannot be used to inject flags |
 | `test-variant-parity.sh` | Both variants install the same integration layer, and the console variant stays console-only |
 | `test-package.sh` | The real `.deb`: control metadata, expected file list, executables still executable, no bytecode residue, and packaged manifests byte-identical to the source and still loading with policy intact |

@@ -11,6 +11,7 @@
 # (~/.config/<app>/colors.{conf,css}); `set` just repoints those symlinks at
 # the chosen theme directory and nudges running apps to pick it up.
 set -euo pipefail
+source "$(dirname -- "$(readlink -f -- "${BASH_SOURCE[0]}")")/_shinobi-common.sh"
 
 THEMES_DIR="${SHINOBI_THEMES_DIR:-/usr/share/shinobi/themes}"
 CURRENT_FILE="$HOME/.config/shinobi/theme"
