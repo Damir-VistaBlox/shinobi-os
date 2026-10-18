@@ -63,7 +63,7 @@ done
 echo "== Checking package database policy =="
 status="$tmp/status"
 unsquashfs -cat "$tmp/filesystem.squashfs" /var/lib/dpkg/status >"$status"
-for package in kali-linux-core hyprland sddm quickshell btop pipewire wireplumber grub-pc-bin grub-efi-amd64-bin dosfstools ntfs-3g; do
+for package in kali-linux-core hyprland sddm quickshell btop pipewire wireplumber grub-pc-bin grub-efi-amd64-bin dosfstools ntfs-3g nmap whatweb; do
   awk -v package="$package" '
     $1 == "Package:" { found = ($2 == package) }
     found && $0 == "Status: install ok installed" { ok = 1 }

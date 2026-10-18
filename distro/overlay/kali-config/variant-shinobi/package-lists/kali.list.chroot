@@ -71,6 +71,13 @@ ntfs-3g
 ## Calamares' bootloader module and Debian's installer both expect to be there.
 efibootmgr
 
+## The recon tools the control plane drives (tools/*.toml): nmap and whatweb. `shinobi
+## doctor` requires nmap and reported "Shinobi OS is missing: nmap" on a freshly
+## installed system, which is also where the first governed run starts; getent, the
+## third, is part of libc-bin.
+nmap
+whatweb
+
 ## Fonts — a Nerd Font is fetched directly from upstream by
 ## hooks/live/0030-fonts.chroot (see that file for why); these are just its
 ## build-time dependencies.
