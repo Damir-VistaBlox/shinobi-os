@@ -350,13 +350,16 @@ distro. Ported so far, all under `bin/shinobi-*`:
   the current directory first on `sys.path`, and an operator working in a directory
   they did not write would import its `json.py` in the process that holds the
   confirmation (the other wrappers that run `python3 -m shinobi_control.*` share
-  that exposure). Known gap: nothing in this repository puts `~/.local/bin`, where
-  Claude's native installer puts its launcher, on PATH. The base image's own shell
-  profile may (Debian's default one does, for a login that starts after the
-  directory exists) but this has not been checked on a built image, and the
-  Hyprland session's environment is a separate question. Until it is, a fresh
-  install can be invisible to `shinobi agent`, which launches by name; the command
-  says so when it finds the binary only there.
+  that exposure). `~/.local/bin`, where Claude's
+  native installer puts its launcher, is on PATH on a built image, though nothing in
+  this repository puts it there: Debian's default `~/.profile` prepends it when the
+  directory exists, the base image's `/etc/skel` ships it empty so it exists from the
+  first login, and `kali-defaults`' `.zprofile` sources `~/.profile` for a zsh login.
+  Checked on a booted ISO: it is on PATH in the live session (bash) and in an
+  installed account's session (zsh), under the Hyprland session. What this does not
+  cover is a launcher installed after the session started: PATH is read at login, so
+  such an install can still be invisible to `shinobi agent`, which launches by name;
+  the command says so when it finds the binary only there.
 - **Menu system** (`shinobi-menu`) — ported from `omarchy-menu`, scoped down:
   Omarchy's menu is a route in a persistent shell-IPC daemon
   (toggle/summon/close against `omarchy-shell`); we don't have that daemon,
