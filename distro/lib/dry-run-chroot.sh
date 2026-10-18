@@ -165,6 +165,29 @@ check "no stray top-level /shinobi-installer from a package that shipped a copy 
 check "the recon server is installed and importable" sh -c 'command -v shinobi-recon >/dev/null && python3 -c "import mcp"'
 check "shinobi-setup reports the layer applied" sh -c '/usr/lib/shinobi/shinobi-setup status --json | grep -q "\"dotfiles\":true"'
 
+section "the live session logs itself in (the real live-config, its component and ours)"
+# live-config runs its components at a live boot, which a container cannot do, so
+# this runs the two that decide the autologin entry by hand, in the order they sort,
+# against the real live-config library, and reads the file they leave behind.
+if apt-get install -y -qq --no-install-recommends live-config >/dev/null 2>&1; then
+  run_autologin() {
+    # run_autologin <kernel command line>: leaves /etc/sddm.conf as a live boot would.
+    rm -f /etc/sddm.conf /var/lib/live/config/sddm /var/lib/live/config/shinobi-autologin
+    mkdir -p /var/lib/live/config
+    LIVE_CONFIG_CMDLINE="$1" LIVE_USERNAME=shinobi sh /usr/lib/live/config/0085-sddm >/dev/null 2>&1
+    LIVE_CONFIG_CMDLINE="$1" LIVE_USERNAME=shinobi sh /usr/lib/live/config/0086-shinobi-autologin >/dev/null 2>&1
+  }
+  run_autologin "boot=live components quiet splash noeject username=shinobi"
+  check "the autologin entry names the Hyprland session (live-config's own leaves it empty)" grep -qx 'Session=hyprland.desktop' /etc/sddm.conf
+  check "and the live account" grep -qx 'User=shinobi' /etc/sddm.conf
+  check "our component sorts after live-config's, so its entry is the one that stays" sh -c '[ "0086-shinobi-autologin" \> "0085-sddm" ]'
+  run_autologin "boot=live components quiet splash noeject username=shinobi noautologin"
+  check "noautologin on the kernel command line still turns autologin off" test ! -e /etc/sddm.conf
+  rm -f /etc/sddm.conf
+else
+  bad "could not install live-config to run its components"
+fi
+
 printf '\n'
 if [ "$fails" -eq 0 ]; then
   echo "dry-run: PASS ($checks checks)"

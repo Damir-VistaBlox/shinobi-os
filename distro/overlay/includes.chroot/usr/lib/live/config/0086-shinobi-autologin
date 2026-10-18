@@ -1,0 +1,87 @@
+#!/bin/sh
+
+. /usr/lib/live/config.sh
+
+## live-config(7) component: log the live session's account in to Hyprland.
+##
+## live-config's own 0085-sddm writes the SDDM autologin entry, but it only knows
+## how to name a session for Plasma and LXQt: for anything else the entry it writes
+## has an empty `Session=`, SDDM cannot autologin into that, and the live system
+## stops at a password prompt. That is wrong for this image for a reason beyond
+## convenience: the "Install Shinobi OS" boot entries work by starting the wizard
+## from the desktop session (shinobi-installer-autostart, run by Hyprland), so with no
+## session there is no wizard, and the entry the menu offers does nothing visible.
+##
+## This runs after 0085-sddm (it sorts after it) and replaces the entry with one that
+## names the session. It is a live-config component, and live-config only ever runs on
+## a live boot: it is not installed on the disk the wizard writes, and the file it
+## writes at boot is not in the image the wizard copies. The installed system never
+## sees it, and shinobi-install-finalise removes any autologin setting regardless.
+## `noautologin` on the kernel command line turns it off, as it does for live-config's.
+
+#set -e
+
+Cmdline ()
+{
+	# Reading kernel command line
+	for _PARAMETER in ${LIVE_CONFIG_CMDLINE}
+	do
+		case "${_PARAMETER}" in
+			live-config.noautologin|noautologin)
+				LIVE_CONFIG_NOAUTOLOGIN="true"
+				;;
+
+			live-config.nox11autologin|nox11autologin)
+				LIVE_CONFIG_NOX11AUTOLOGIN="true"
+				;;
+
+			live-config.username=*|username=*)
+				LIVE_USERNAME="${_PARAMETER#*username=}"
+				;;
+		esac
+	done
+}
+
+Init ()
+{
+	case "${LIVE_CONFIG_NOAUTOLOGIN}" in
+		true)
+			exit 0
+			;;
+	esac
+
+	case "${LIVE_CONFIG_NOX11AUTOLOGIN}" in
+		true)
+			exit 0
+			;;
+	esac
+
+	# Without the session there is nothing to name; leave live-config's entry alone.
+	if ! pkg_is_installed "sddm" || \
+	   [ ! -f /usr/share/wayland-sessions/hyprland.desktop ] || \
+	   component_was_executed "shinobi-autologin"
+	then
+		exit 0
+	fi
+
+	echo -n " shinobi-autologin"
+}
+
+Config ()
+{
+	if [ -n "${LIVE_USERNAME}" ]
+	then
+		cat > /etc/sddm.conf << EOF
+[Autologin]
+User=${LIVE_USERNAME}
+Session=hyprland.desktop
+EOF
+	fi
+
+	# Create state file
+	touch /var/lib/live/config/shinobi-autologin
+}
+
+Cmdline
+Init
+Config
