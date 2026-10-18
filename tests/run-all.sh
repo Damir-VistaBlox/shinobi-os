@@ -37,6 +37,7 @@ SOURCE_TESTS=(
   tests/test-wrapper-cwd.sh
   tests/test-setup.sh
   tests/test-installer.sh
+  tests/test-installer-autostart.sh
   tests/test-branding.sh
   tests/test-docs.sh
   tests/test-fonts-hook.sh
