@@ -27,7 +27,10 @@ echo "== Boot menus carry no unsubstituted placeholder =="
 menus="$(mktemp -d)"
 xorriso -osirrox on -indev "$ISO" -extract /isolinux "$menus/isolinux" >/dev/null 2>&1 || true
 xorriso -osirrox on -indev "$ISO" -extract /boot/grub "$menus/grub" >/dev/null 2>&1 || true
-leftover="$(grep -rnE '@[A-Z][A-Z_]*@' "$menus" --include='*.cfg' 2>/dev/null || true)"
+# Comment lines are skipped: shinobi-installer.cfg explains the bug by naming the
+# placeholders, and a comment is not read by syslinux or GRUB.
+leftover="$(grep -rnE '@[A-Z][A-Z_]*@' "$menus" --include='*.cfg' 2>/dev/null \
+  | grep -vE '^[^:]+:[0-9]+:[[:space:]]*#' || true)"
 rm -rf "$menus"
 if [[ -n "$leftover" ]]; then
   echo "iso-test: a boot menu in the ISO still contains a placeholder:" >&2
