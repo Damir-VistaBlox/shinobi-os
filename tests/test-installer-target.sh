@@ -58,13 +58,23 @@ build_target() {
   mkdir -p "$dest/etc/live/config.conf.d"
   printf 'LIVE_USERNAME="shinobi"\nLIVE_HOSTNAME="shinobi"\n' \
     >"$dest/etc/live/config.conf.d/shinobi.conf"
+  # A real installed system has root and /etc/sudoers.d. Staged package contents
+  # have neither, and without them the fixture was the thing failing: `id -un` in the
+  # chroot printed "unknown ID 0", shinobi-setup found no account to apply the layer
+  # to, and the finalise step "failed" for a reason that is not the wizard's.
+  mkdir -p "$dest/etc/sudoers.d"
+  grep -q '^root:' "$dest/etc/passwd" 2>/dev/null || printf 'root:x:0:0:root:/root:/bin/bash\n' >>"$dest/etc/passwd"
+  grep -q '^root:' "$dest/etc/group" 2>/dev/null || printf 'root:x:0:\n' >>"$dest/etc/group"
   cat >>"$dest/etc/passwd" <<'EOF'
 operator:x:1000:1000:Shinobi Operator:/home/operator:/bin/bash
 shinobi:x:1001:1001::/home/shinobi:/bin/bash
 # An account with a home directory is a real one, and the prep step must leave
 # it alone -- this is the guard, and it is here rather than in a comment because a
-# guard that is never exercised is a guard that does not work.
-builder:x:1002:1002::/home/builder:/bin/bash
+# guard that is never exercised is a guard that does not work. Its shell is nologin
+# so that it is a service account with a home, not a second operator: the finalise step
+# applies the layer to the one login account, and a second one would make "the one"
+# ambiguous for a reason that has nothing to do with the wizard.
+builder:x:1002:1002::/home/builder:/usr/sbin/nologin
 EOF
   cat >>"$dest/etc/group" <<'EOF'
 operator:x:1000:
@@ -115,8 +125,17 @@ check "the live account came across with the image" \
   "$(grep -c '^shinobi:' "$target/etc/passwd" || true)" "1"
 check "and without its home, as unpackfs excludes /home/*" \
   "$([[ -d $target/home/shinobi ]] && echo yes || echo no)" "no"
-check "its passwordless sudo grant came too" \
-  "$([[ -f $target/etc/sudoers.d/live ]] && echo yes || echo no)" "yes"
+# Nothing the wizard runs after the copy removes the live session's sudo grant: it is
+# kept off the disk by unpackfs, which does not copy what its `exclude:` list names. So
+# the fixture applies that list, read from the wizard's own file, to the one path this
+# test is about. Remove the exclusion from unpackfs.conf and the grant survives into
+# the target and the checks below fail. (This used to assert that the wizard steps
+# removed it, and passed anyway: the fixture never managed to create the file.)
+for excluded in $(sed -e 's/[[:space:]]*#.*$//' "$MODULES/unpackfs.conf" | grep -oE '"/etc/sudoers\.d/[^"*]+"' | tr -d '"'); do
+  rm -f "$target$excluded"
+done
+check "its passwordless sudo grant did not come across, because unpackfs excludes it" \
+  "$([[ -f $target/etc/sudoers.d/live ]] && echo yes || echo no)" "no"
 check "and its autologin configuration" \
   "$(grep -c 'Autologin' "$target/etc/sddm.conf.d/zz-live-session.conf" || true)" "1"
 check "the layer is present but not yet applied to the operator's home" \
@@ -163,12 +182,27 @@ def main() -> int:
         path = f"/modules/shellprocess@{name}.conf"
         with open(path) as handle:
             doc = yaml.safe_load(handle)
-        phases.append((name, doc.get("script", [])))
+        phases.append((name, doc.get("script", []), doc.get("dontChroot", False)))
 
     total = failed = 0
-    for name, script in phases:
+    for name, script, dont_chroot in phases:
         for step in script:
-            argv = [step["command"], *step.get("args", [])]
+            # What Calamares' shellprocess does: a script entry is a command string
+            # (a bare string, or {command:, timeout:}) run by /bin/sh, inside the
+            # target's root unless dontChroot is set. Any other key is dropped by
+            # Calamares, so it is an error here: this used to build the vector from
+            # `command` plus `args`, a key shellprocess does not have, and so ran
+            # steps Calamares would never have run.
+            if isinstance(step, str):
+                step = {"command": step}
+            unknown = sorted(set(step) - {"command", "timeout"})
+            if unknown:
+                print(f"  [{name}] FAILED: key(s) {unknown} are not shellprocess keys; Calamares drops them")
+                total += 1
+                failed += 1
+                continue
+            inner = ["/bin/sh", "-c", step["command"]]
+            argv = inner if dont_chroot else ["chroot", "/target", *inner]
             total += 1
             shown = " ".join(a for a in argv if not a.startswith("id shinobi") and "awk -F" not in a)[:110]
             proc = subprocess.run(argv, capture_output=True, text=True)
@@ -294,7 +328,7 @@ check "the live account was removed" \
   "$(grep -c '^shinobi:' "$target/etc/passwd" || true)" "0"
 check "an account with a home directory was left alone" \
   "$(grep -c '^builder:' "$target/etc/passwd" || true)" "1"
-check "its sudoers grant is gone" \
+check "and no step brought it back" \
   "$([[ -f $target/etc/sudoers.d/live ]] && echo yes || echo no)" "no"
 check "no autologin survives, wherever it was configured" \
   "$(grep -rli 'autologin' "$target/etc/sddm.conf.d" 2>/dev/null | wc -l)" "0"
