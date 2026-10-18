@@ -418,6 +418,30 @@ unzip_line=$(grep -n 'unzip -o -q' "$FONT" | cut -d: -f1)
 check "and verifies it before unpacking" \
   "$([[ -n $verify_line && -n $unzip_line && $verify_line -lt $unzip_line ]] && echo yes || echo no)" "yes"
 
+section "the font installer is found beside the engine, as on an installed system"
+# The grep above only shows the engine names the script. On an installed system just
+# the engine is on PATH (/usr/bin/shinobi-setup is a symlink into /usr/lib/shinobi),
+# so a lookup by name finds nothing and the font is silently never installed. This
+# runs the engine from a directory that is not on PATH, with the installer beside it,
+# and from a symlink to it, and checks the installer was actually run.
+mkdir -p "$R/opt/e"
+cp "$ENGINE" "$R/opt/e/shinobi-setup"
+printf '#!/bin/sh\necho called >>/tmp/font-called\n' >"$R/opt/e/install-nerd-font"
+chmod 0755 "$R/opt/e/shinobi-setup" "$R/opt/e/install-nerd-font"
+ln -sf /opt/e/shinobi-setup "$R/usr/local/bin/setup-via-link"
+rm -f "$R/usr/local/bin/install-nerd-font"
+rm -f "$R/tmp/font-called"
+out=$(chroot "$R" env PATH=/bin:/usr/bin /opt/e/shinobi-setup apply --skel-only 2>&1)
+check "run from its own directory: the installer beside it was run" "$(wc -l <"$R/tmp/font-called" 2>/dev/null || echo 0)" "1"
+check "and it did not claim the installer was missing" "$(grep -c 'install-nerd-font is missing' <<<"$out" || true)" "0"
+rm -f "$R/tmp/font-called"
+out=$(chroot "$R" env PATH=/bin:/usr/bin /usr/local/bin/setup-via-link apply --skel-only 2>&1)
+check "run through a symlink, as /usr/bin/shinobi-setup is: the installer is still found" "$(wc -l <"$R/tmp/font-called" 2>/dev/null || echo 0)" "1"
+rm -f "$R/opt/e/install-nerd-font" "$R/tmp/font-called"
+out=$(chroot "$R" env PATH=/bin:/usr/bin /opt/e/shinobi-setup apply --skel-only 2>&1)
+check "with no installer anywhere it says so" "$(grep -c 'install-nerd-font is missing' <<<"$out" || true)" "1"
+check "and still applies the rest of the layer" "$(grep -c 'applied to /etc/skel' <<<"$out" || true)" "1"
+
 printf '\n'
 if ((failures > 0)); then
   printf 'setup-test: FAIL (%d of %d checks failed)\n' "$failures" "$checks"

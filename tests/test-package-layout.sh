@@ -90,6 +90,22 @@ for installer in "${installers[@]}"; do
     "$(grep -Eq 'pip install.*shinobi-recon|pipx install|ln -sf.*shinobi-recon' "$installer" && echo yes || echo no)" "no"
 done
 
+echo "== a package skeleton does not contain a copy of itself =="
+# packaging/shinobi-installer/shinobi-installer/ was a stale snapshot of the package
+# nested inside it. build-deb.sh copies the skeleton wholesale, so the copy shipped as
+# payload: most of the installer package's entries were a second, older tree under
+# /shinobi-installer, including its own DEBIAN directory.
+for skeleton in "$ROOT"/packaging/shinobi-*/; do
+  name="$(basename "$skeleton")"
+  [[ -f "$skeleton/DEBIAN/control" ]] || continue
+  if [[ -e "$skeleton/$name" ]]; then
+    echo "  FAIL $name contains a directory named $name"
+    failures=$((failures + 1))
+  else
+    echo "  ok   $name does not contain a copy of itself"
+  fi
+done
+
 echo "== no bytecode residue =="
 check "no __pycache__ directories" \
   "$(find "$stage" -type d -name __pycache__ | wc -l)" "0"

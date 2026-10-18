@@ -232,11 +232,24 @@ resolve_account() {
 # ---------------------------------------------------------------------------
 
 install_font() {
-  if ! command -v install-nerd-font >/dev/null 2>&1; then
+  # The font installer ships beside this engine (/usr/lib/shinobi in the package,
+  # libexec/shinobi in a checkout). Only the engine itself is linked onto PATH, so
+  # asking for the installer by name found nothing on an installed system: the font
+  # was never installed, and the step reported that as a warning that the build and
+  # the installer both carry on past. Look beside the engine first, following the
+  # symlink /usr/bin/shinobi-setup is reached through, and PATH second.
+  _dir=$(cd -- "$(dirname -- "$(readlink -f -- "$0" 2>/dev/null || echo "$0")")" 2>/dev/null && pwd) || _dir=""
+  _font=""
+  if [ -n "$_dir" ] && [ -x "$_dir/install-nerd-font" ]; then
+    _font="$_dir/install-nerd-font"
+  elif command -v install-nerd-font >/dev/null 2>&1; then
+    _font=$(command -v install-nerd-font)
+  fi
+  if [ -z "$_font" ]; then
     warn "install-nerd-font is missing from this install; icon glyphs will be missing"
     return 1
   fi
-  install-nerd-font
+  "$_font"
 }
 
 # ---------------------------------------------------------------------------
