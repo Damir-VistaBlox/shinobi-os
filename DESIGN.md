@@ -481,11 +481,18 @@ system, each handled explicitly in `shellprocess@prep` and `@finish`:
   if it has no home directory, which is the signature of a copied live account.
 - Its home and `/root` are excluded from the copy. The operator's home is built
   from `/etc/skel` instead, where the layer's dotfiles live.
-- Its autologin configuration, if a future image ever grows one, would come
-  across with it. A pentest distribution whose installed system logs itself in
-  is a serious defect and is invisible until somebody boots the disk on a train,
-  so the step that removes it is checked twice: once in what is excluded, once in
-  what is deleted.
+- Its autologin must not come across. The live session logs itself in (live-config
+  writes the SDDM entry at boot, and `0086-shinobi-autologin` names the Hyprland
+  session in it, because live-config only knows Plasma and LXQt; without a session
+  the "Install Shinobi OS" entries, which start the wizard from the desktop, show
+  a password prompt and do nothing). That entry is written to the running system at
+  boot, so it is not in the image the wizard copies, and live-config is not
+  installed on the disk. A pentest distribution whose installed system logs itself
+  in is a serious defect and is invisible until somebody boots the disk on a train,
+  so the step that removes any such setting is still checked twice: once in what is
+  excluded, once in what is deleted. The live account's password is live-config's
+  default (`live`) and it has passwordless sudo, as on any Kali live image; the
+  installed system gets neither (`unpackfs` excludes the sudoers grant).
 
 ### The live account is created, not renamed
 

@@ -18,6 +18,24 @@ grep -Eqi 'El Torito|Boot catalog|boot image' "$report" || {
   exit 1
 }
 
+echo "== Boot menus carry no unsubstituted placeholder =="
+# live-build fills @LINUX@, @INITRD@, @APPEND_LIVE@ and friends into the boot menu
+# files it generates from its templates, and only those. A placeholder in an overlay
+# file that is not one of them ships literally. For the BIOS "Install Shinobi OS"
+# entries that meant `linux @LINUX@`, a kernel syslinux cannot find, and an entry that
+# silently returned to the menu: found by booting the image, not by any test.
+menus="$(mktemp -d)"
+xorriso -osirrox on -indev "$ISO" -extract /isolinux "$menus/isolinux" >/dev/null 2>&1 || true
+xorriso -osirrox on -indev "$ISO" -extract /boot/grub "$menus/grub" >/dev/null 2>&1 || true
+leftover="$(grep -rnE '@[A-Z][A-Z_]*@' "$menus" --include='*.cfg' 2>/dev/null || true)"
+rm -rf "$menus"
+if [[ -n "$leftover" ]]; then
+  echo "iso-test: a boot menu in the ISO still contains a placeholder:" >&2
+  printf '%s\n' "$leftover" | sed 's/^/  /' >&2
+  exit 1
+fi
+echo "no placeholder left in the BIOS or UEFI menus"
+
 echo "== ISO boot files =="
 listing="$(mktemp)"
 # `-print` is not a portable xorriso find action. `lsdl` is supported by the

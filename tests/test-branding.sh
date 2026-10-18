@@ -166,6 +166,22 @@ check "the ISO hook stages the layer without an account" \
 check "and renames nothing" \
   "$(grep -v '^[[:space:]]*#' "$hook" | grep -cE 'rename-from|usermod' || true)" "0"
 
+section "the BIOS install entries can actually boot"
+# These entries read `linux @LINUX@` and `initrd @INITRD@`, which live-build does not
+# substitute in this file, so they shipped literally and the entries did nothing.
+check "the BIOS install entries name the kernel by path" \
+  "$(grep -cE '^[[:space:]]+linux /live/vmlinuz$' "$syslinux" || true)" "2"
+check "and the initrd" "$(grep -cE '^[[:space:]]+initrd /live/initrd.img$' "$syslinux" || true)" "2"
+check "no live-build placeholder other than @APPEND_LIVE@ is left in the file" \
+  "$(grep -vE '^[[:space:]]*#' "$syslinux" | grep -oE '@[A-Z][A-Z_]*@' | grep -vc '^@APPEND_LIVE@$' || true)" "0"
+
+section "the live session logs itself in to Hyprland"
+autologin="$ROOT/distro/overlay/includes.chroot/usr/lib/live/config/0086-shinobi-autologin"
+check "the live-config component is shipped, executable, and sorts after live-config's own sddm component" \
+  "$([[ -x $autologin ]] && [[ 0086-shinobi-autologin > 0085-sddm ]] && echo yes || echo no)" "yes"
+check "it names the Hyprland session" "$(grep -c '^Session=hyprland.desktop$' "$autologin" || true)" "1"
+check "it honours noautologin" "$(grep -c 'live-config.noautologin|noautologin)' "$autologin" || true)" "1"
+
 section "the wizard is launched from a marker nothing else sets"
 # Once per boot entry, counted on the entries themselves: the explanatory comment
 # names the marker a third time and is not an entry.
