@@ -33,6 +33,7 @@ SOURCE_TESTS=(
   tests/test-agent-setup.sh
   tests/test-migrate.sh
   tests/test-build-config.sh
+  tests/test-hooks-dryrun.sh
   tests/test-package-layout.sh
   tests/test-wrapper-cwd.sh
   tests/test-setup.sh

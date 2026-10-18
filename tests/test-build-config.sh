@@ -135,6 +135,21 @@ for path in bin libexec mcp-servers providers themes tools packaging; do
     "$(grep -qF "$needle" "$ROOT/distro/build.sh" && echo yes || echo no)" "yes"
 done
 
+# The ISO hook has to install every package the layer ships. The hook installs them
+# with a loop, and a package missing from the loop is simply absent from the image:
+# shinobi-installer was, so the boot-menu entries that start the installation wizard
+# started nothing. The list is read from packaging/, not written here, so adding a
+# package without adding it to the hook fails this test.
+hook="$ROOT/distro/overlay/kali-config/variant-shinobi/hooks/live/0010-install-layer.chroot"
+hook_loop="$(grep -E '^for pkg in ' "$hook" || true)"
+for control in "$ROOT"/packaging/shinobi-*/DEBIAN/control; do
+  [[ -f "$control" ]] || continue
+  name="$(basename "$(dirname "$(dirname "$control")")")"
+  name="${name#shinobi-}"
+  check "the ISO hook installs shinobi-$name" \
+    "$(grep -qE "(^| )$name( |;|$)" <<<"$hook_loop" && echo yes || echo no)" "yes"
+done
+
 echo
 if (( failures > 0 )); then
   printf 'build-config-test: FAIL (%d of %d checks failed)\n' "$failures" "$checks"
