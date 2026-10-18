@@ -25,13 +25,17 @@ marker="shinobi.installer"
 
 # /proc/cmdline is the only channel that survives from the boot menu to a
 # logged-in desktop session. Anything written to disk would outlive the medium.
-if [ ! -r /proc/cmdline ]; then
+# SHINOBI_CMDLINE_FILE exists so a test can stand in for it; nothing sets it in a
+# session, and what it could do (start a wizard the operator can start by hand
+# from the menu) is nothing they could not already do.
+cmdline="${SHINOBI_CMDLINE_FILE:-/proc/cmdline}"
+if [ ! -r "$cmdline" ]; then
   exit 0
 fi
 
-case " $(cat /proc/cmdline) " in
+case " $(cat "$cmdline") " in
   *" $marker "*) ;;
-  *" $marker="*) ;;
+  *" $marker=1 "*) ;;
   *)
     # Not an install session. Nothing to do, and this is the common case: every
     # boot of an installed system.
@@ -47,10 +51,20 @@ fi
 # Wait for the desktop to be usable before putting a full-screen window on it.
 # Starting immediately would race the panel and the notification daemon, and the
 # result is a wizard window behind a desktop that has not finished appearing.
+#
+# "Usable" is Hyprland answering on its IPC socket. This used to ask KWin over
+# D-Bus, which was copied from a KDE session and can never succeed here: this
+# desktop has no KWin, so every boot waited the full thirty seconds and then
+# reported that the desktop "did not report ready". hyprctl inherits the instance
+# signature from the session this runs in.
+desktop_ready() {
+  [ -n "${WAYLAND_DISPLAY:-}${DISPLAY:-}" ] || return 1
+  command -v hyprctl >/dev/null 2>&1 || return 1
+  hyprctl monitors >/dev/null 2>&1
+}
+
 attempt=0
-until [ -n "${WAYLAND_DISPLAY:-}${DISPLAY:-}" ] && \
-      command -v qdbus >/dev/null 2>&1 && \
-      qdbus org.kde.KWin /KWin supportInformation >/dev/null 2>&1; do
+until desktop_ready; do
   attempt=$((attempt + 1))
   if [ "$attempt" -ge 60 ]; then
     # Thirty seconds. Rather than never starting, start anyway and let the
@@ -61,4 +75,7 @@ until [ -n "${WAYLAND_DISPLAY:-}${DISPLAY:-}" ] && \
   sleep 0.5
 done
 
-exec calamares
+# Through the launcher that gives it root. Calamares will not get past its first page
+# without it, and it does not ask for it.
+self=$(cd -- "$(dirname -- "$0")" && pwd)
+exec "$self/shinobi-installer-run"

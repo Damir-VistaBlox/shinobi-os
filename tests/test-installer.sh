@@ -57,12 +57,14 @@ if stage="$(mktemp -d)"; then
     "etc/calamares/modules/shellprocess@prep.conf" \
     "etc/calamares/modules/shellprocess@finish.conf" \
     usr/lib/shinobi/shinobi-installer-check \
+    usr/lib/shinobi/shinobi-installer-run \
     usr/share/applications/shinobi-installer.desktop
   do
     check "ships $f" "$([[ -s "$stage/$f" ]] && echo yes || echo no)" "yes"
   done
-  check "the launcher starts the same binary the package depends on" \
-    "$(grep -c '^Exec=calamares$' "$stage/usr/share/applications/shinobi-installer.desktop" || true)" "1"
+  check "the menu entry starts the wizard through the launcher that gives it root" \
+    "$(grep -c '^Exec=/usr/lib/shinobi/shinobi-installer-run$' "$stage/usr/share/applications/shinobi-installer.desktop" || true)" "1"
+  check "the launcher is shipped executable" "$([[ -x "$stage/usr/lib/shinobi/shinobi-installer-run" ]] && echo yes || echo no)" "yes"
   check "it is marked executable in the session" \
     "$(grep -c 'Terminal=false' "$stage/usr/share/applications/shinobi-installer.desktop" || true)" "1"
 fi

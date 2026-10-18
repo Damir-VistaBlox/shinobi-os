@@ -4,11 +4,12 @@ Version=1.0
 Name=Shinobi Installation Wizard
 GenericName=Install Shinobi OS
 Comment=Install Shinobi OS from this computer onto a disk
-# Deliberately the same command, not a wrapper: an installed system can run the
-# wizard too, which is how a machine is reinstalled or given a second disk
-# without going back to the ISO. Calamares is in the same package as this
-# launcher, so the entry point cannot outlive its dependencies.
-Exec=calamares
+# An installed system can run the wizard too, which is how a machine is reinstalled
+# or given a second disk without going back to the ISO. It goes through the
+# package's launcher and not `calamares` directly, because Calamares will not get
+# past its first page without root and does not ask for it. The launcher is in this
+# package, so the entry point cannot outlive its dependencies.
+Exec=/usr/lib/shinobi/shinobi-installer-run
 Icon=shinobi-os
 Terminal=false
 Categories=System;

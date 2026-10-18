@@ -1,0 +1,38 @@
+#!/bin/sh
+# Start the installation wizard with the privileges it requires.
+#
+# Calamares refuses to proceed without root: the welcome page of this wizard lists
+# `root` as a required check (modules/welcome.conf), and Calamares does not elevate
+# itself. Upstream's own launcher is `sh -c "pkexec calamares"` for that reason. A
+# plain `calamares` started by the live session's account therefore opens the wizard
+# on a first page whose Next button is disabled, and nothing in the wizard says what
+# to do about it.
+#
+# Three ways to get there, in order of preference:
+#   - already root: start it.
+#   - passwordless sudo, which the live image's account has (live-config's
+#     sudoers.d/live grant; the wizard deliberately does not copy it to the target):
+#     sudo -E, so the Wayland socket and runtime directory of the session the wizard
+#     is shown in come along. No prompt, which matters because the boot menu starts
+#     this unattended.
+#   - polkit, through the action Calamares ships for exactly this
+#     (io.calamares.calamares.pkexec.run). This is what an installed system, where
+#     sudo wants a password, falls back to; hyprpolkitagent shows the prompt.
+#     pkexec drops most of the environment, so whether a Wayland session can show
+#     the wizard this way has not been checked on a real desktop.
+set -eu
+
+if [ "$(id -u)" = 0 ]; then
+  exec calamares "$@"
+fi
+
+if command -v sudo >/dev/null 2>&1 && sudo -n true >/dev/null 2>&1; then
+  exec sudo -E calamares "$@"
+fi
+
+if command -v pkexec >/dev/null 2>&1; then
+  exec pkexec calamares "$@"
+fi
+
+echo "shinobi-installer-run: the wizard needs root, and neither passwordless sudo nor pkexec is available here." >&2
+exit 1

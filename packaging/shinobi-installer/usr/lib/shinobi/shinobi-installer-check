@@ -110,6 +110,15 @@ grep -q '/root/\*' "$unpackfs" ||
 grep -q 'sudoers.d/live' "$unpackfs" ||
   fail "unpackfs does not exclude the live sudoers grant; an installed system could carry passwordless sudo for a recreated account"
 
+# The launcher gives Calamares the root its welcome page requires; without it the
+# first page's Next button is disabled and nothing says why. The menu entry and the
+# boot-time autostart both start the wizard through it.
+run="$root/usr/lib/shinobi/shinobi-installer-run"
+[ -x "$run" ] || fail "$run is missing or not executable; the wizard would start without root and stop on its first page"
+desktop="$root/usr/share/applications/shinobi-installer.desktop"
+grep -q '^Exec=/usr/lib/shinobi/shinobi-installer-run' "$desktop" 2>/dev/null ||
+  fail "the menu entry does not start the wizard through shinobi-installer-run"
+
 prep="$root/usr/lib/shinobi/shinobi-install-prep"
 [ -s "$prep" ] || fail "$prep is missing; the live session's account would survive onto the disk"
 grep -q 'userdel' "$prep" ||
