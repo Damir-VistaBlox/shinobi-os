@@ -35,7 +35,7 @@ fi
 
 case " $(cat "$cmdline") " in
   *" $marker "*) ;;
-  *" $marker="*) ;;
+  *" $marker=1 "*) ;;
   *)
     # Not an install session. Nothing to do, and this is the common case: every
     # boot of an installed system.
@@ -75,4 +75,7 @@ until desktop_ready; do
   sleep 0.5
 done
 
-exec calamares
+# Through the launcher that gives it root. Calamares will not get past its first page
+# without it, and it does not ask for it.
+self=$(cd -- "$(dirname -- "$0")" && pwd)
+exec "$self/shinobi-installer-run"
