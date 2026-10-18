@@ -61,6 +61,25 @@ if [ ! -s "$root/usr/share/plymouth/themes/shinobi/shinobi.plymouth" ]; then
   fail "the Plymouth theme is missing, so the boot splash falls back to Kali's"
 fi
 
+# The login screen. SDDM falls back to its own built-in theme, silently, when a theme is
+# missing or does not load, so the operator would simply be shown a login screen that is
+# not Shinobi's and nothing says why. The theme is checked for the files the greeter
+# reads, and the drop-in that selects it for the theme's name.
+sddm_theme="$root/usr/share/sddm/themes/shinobi"
+for required in Main.qml metadata.desktop theme.conf background.jpg logo.png; do
+  if [ ! -s "$sddm_theme/$required" ]; then
+    fail "the SDDM login theme is incomplete: $sddm_theme/$required is missing or empty, so the login screen falls back to SDDM's built-in theme"
+  fi
+done
+if ! grep -q '^Current=shinobi$' "$root/usr/lib/sddm/sddm.conf.d/90-shinobi-theme.conf" 2>/dev/null; then
+  fail "nothing selects the Shinobi login theme (usr/lib/sddm/sddm.conf.d/90-shinobi-theme.conf with Current=shinobi)"
+fi
+# Without this SDDM starts at the same moment as Plymouth, takes tty2 because plymouth
+# still holds tty1, and the screen stays on a white tty1 until a key combination is pressed.
+if ! grep -q '^After=plymouth-quit\.service$' "$root/usr/lib/systemd/system/sddm.service.d/10-shinobi-plymouth.conf" 2>/dev/null; then
+  fail "sddm is not ordered after plymouth-quit (usr/lib/systemd/system/sddm.service.d/10-shinobi-plymouth.conf), so a first boot can sit on a blank splash screen"
+fi
+
 if [ ! -s "$root/etc/xdg/xdg-desktop-portal/hyprland-portals.conf" ]; then
   fail "the Hyprland portal selection is missing; file pickers will not work"
 fi

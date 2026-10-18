@@ -103,11 +103,10 @@ same login session. Portal routing is explicit: GTK provides general dialogs
 such as file selection, while Hyprland owns screen capture and global
 shortcuts.
 
-The SDDM hook configures the Shinobi wallpaper through Kali Breeze's
-supported `theme.conf.user` image-background override; the active theme and
-that image-path setting were verified in a graphical live boot. **Not done**:
-Plymouth boot-splash theming — authoring one is script-based and needs its
-own live-boot validation.
+The login screen is an SDDM theme of its own, shipped by `shinobi-desktop`
+(`/usr/share/sddm/themes/shinobi`, selected from SDDM's vendor layer,
+`/usr/lib/sddm/sddm.conf.d/90-shinobi-theme.conf`); see DESIGN.md. The boot splash is a
+Plymouth theme of its own (`/usr/share/plymouth/themes/shinobi`).
 
 ## Building
 

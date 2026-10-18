@@ -378,6 +378,13 @@ for f in \
   usr/share/shinobi-dotfiles/etc/skel/.config/wofi/config \
   usr/share/backgrounds/shinobi-os/shinobi-night.png \
   usr/share/plymouth/themes/shinobi/shinobi.plymouth \
+  usr/share/sddm/themes/shinobi/Main.qml \
+  usr/share/sddm/themes/shinobi/metadata.desktop \
+  usr/share/sddm/themes/shinobi/theme.conf \
+  usr/share/sddm/themes/shinobi/background.jpg \
+  usr/share/sddm/themes/shinobi/logo.png \
+  usr/lib/sddm/sddm.conf.d/90-shinobi-theme.conf \
+  usr/lib/systemd/system/sddm.service.d/10-shinobi-plymouth.conf \
   etc/xdg/xdg-desktop-portal/hyprland-portals.conf \
   usr/lib/shinobi/shinobi-desktop-check
 do

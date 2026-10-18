@@ -388,10 +388,25 @@ distro. Ported so far, all under `bin/shinobi-*`:
   `fonts-jetbrains-mono` package is the *unpatched* font with no icon glyphs
   — Quickshell/wofi icons were silently relying on a font that was never
   actually installed until this.
-- **Login theming** — Kali's active Breeze SDDM theme was verified in a real
-  graphical live boot: its `theme.conf.user` `background=` setting accepts an
-  image path. The image hook now replaces that setting with the Shinobi
-  wallpaper; the next full-image build will validate the rendered override.
+- **Login screen** — an SDDM theme of its own (`shinobi-desktop` ships
+  `/usr/share/sddm/themes/shinobi` and selects it from SDDM's vendor layer,
+  `/usr/lib/sddm/sddm.conf.d/90-shinobi-theme.conf`, so an operator's own
+  `/etc/sddm.conf.d` always wins and an upgrade never overwrites it): the wallpaper, the mark, a clock, the
+  account and one password field, in the lock screen's palette so that locking and
+  logging in look like the same place. Plain QtQuick only (no Controls, no effects
+  module: the greeter runs as an unprivileged user on a minimal image and a theme that
+  needs an optional Qt module shows nothing at all), with the wallpaper pre-darkened
+  rather than blurred at runtime. The same file turns off SDDM's built-in on-screen
+  keyboard, which the image has installed and which otherwise covers the password
+  field. A second drop-in orders `sddm.service` after `plymouth-quit.service`: Debian's
+  unit does not, so SDDM and Plymouth start together, SDDM takes tty2 because Plymouth
+  still holds tty1, and the switch to tty2 is lost, leaving a blank screen until
+  Ctrl-Alt-F2 is pressed (seen on a BIOS install in QEMU; the ordering is what upstream
+  SDDM's own unit has). This replaced a hook that edited Kali's Breeze theme through a
+  `theme.conf.user` that the installed system's Debian Breeze theme does not have, so
+  the login screen was never Shinobi's. `tests/test-sddm-theme.sh` renders every state
+  offscreen against mock SDDM objects and checks the pixels; the real greeter was
+  checked on a booted install.
 
 ### Not ports: rebuilt around the threat model
 

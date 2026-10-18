@@ -44,6 +44,9 @@ for path in \
   /usr/bin/quickshell \
   /usr/bin/btop \
   /usr/local/bin/top \
+  /usr/share/sddm/themes/shinobi/Main.qml \
+  /usr/lib/sddm/sddm.conf.d/90-shinobi-theme.conf \
+  /usr/lib/systemd/system/sddm.service.d/10-shinobi-plymouth.conf \
   /usr/lib/shinobi/shinobi-migrate \
   /usr/lib/systemd/user/shinobi-migrate.service \
   /usr/lib/systemd/user/shinobi-desktop.target \
