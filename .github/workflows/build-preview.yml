@@ -75,7 +75,9 @@ jobs:
         run: |
           set -euo pipefail
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends python3-venv
+          # libxkbcommon0 and xkb-data: tests/test-keyboard.sh reads key presses through
+          # the real xkb library and fails, rather than skips, without it.
+          sudo apt-get install -y --no-install-recommends python3-venv libxkbcommon0 xkb-data
           venv="${RUNNER_TEMP}/shinobi-deps"
           python3 -m venv "$venv"
           "$venv/bin/pip" install --quiet --upgrade pip

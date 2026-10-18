@@ -56,6 +56,17 @@ jobs:
             -r ./packaging/control-plane-requirements.txt
           python -c 'import yaml, mcp, mcp.server.fastmcp'
 
+      - name: Install the xkb library the keyboard suite reads key presses through
+        # tests/test-keyboard.sh decodes a password's key presses through the real
+        # libxkbcommon and the real xkb-data, to show that the wizard, the login screen,
+        # the session and the lock screen read them the same way. It fails without them
+        # rather than skipping, because a skipped check passes. Both are normally on a
+        # hosted runner already (the browsers need them); naming them here means the suite
+        # does not depend on that staying true.
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libxkbcommon0 xkb-data
+
       - name: Check that every test script is executable
         # A test committed without the executable bit exits 126 and silently
         # takes the rest of the suite with it. That shipped once.

@@ -107,6 +107,11 @@ Source-level suites need Bash and `python3`. `test-mcp-e2e.sh` needs the `mcp`
 package and reports `SKIPPED` without it rather than failing, because a missing
 client library is not a broken server.
 
+`test-keyboard.sh` needs the real xkb library (`libxkbcommon0` and `xkb-data`) and
+*fails* without it, the opposite choice: its whole claim is that key presses read
+through the layouts involved give the same password, and a run that quietly skipped
+that would pass without having checked it. Both workflows install the two packages.
+
 `test-package.sh` builds and inspects the real `.deb`, so it needs `dpkg-deb` and
 therefore Debian-family tooling. That is the target platform rather than an
 inconvenience: Kali is Debian-based and the hosted PR runners are Ubuntu, so it
