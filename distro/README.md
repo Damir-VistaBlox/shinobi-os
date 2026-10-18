@@ -156,3 +156,23 @@ The package list in `overlay/kali-config/variant-shinobi/package-lists/kali.list
 has been validated by a successful full-image build. Rebuild on a real Kali
 box/VM after dependency updates: package availability in `kali-rolling` can
 change over time.
+
+## Check the hooks without a build
+
+A full build takes hours on the dedicated builder, and the chroot hooks in
+`overlay/kali-config/variant-*/hooks/live/` only ever run inside it, so a hook that
+cannot work used to show up as a build that died partway. To find that in minutes:
+
+```bash
+distro/dry-run-hooks.sh
+```
+
+It stages the sources the way `build.sh` does, installs the variant's package list
+in a throwaway `kali-rolling` container, runs the hooks in order (stopping at the
+first failure, as live-build does) and then checks the result against
+`tests/test-image-content.sh`'s expectations plus the ones installing depends on.
+It needs docker and a network (a few hundred MB of packages, cached in the
+`shinobi-dryrun-apt` volume), and writes nothing to the checkout. It has no Kali
+hooks, no kernel and no systemd, so a pass is not a proof that the ISO builds; a
+failure is one the build would very likely hit too. `tests/test-hooks-dryrun.sh`
+runs it when `SHINOBI_DRYRUN=1`, and the preview build workflow sets that.

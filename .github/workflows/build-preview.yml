@@ -87,6 +87,11 @@ jobs:
         # Source-level tests plus the package validation, which needs dpkg-deb
         # and so is skipped elsewhere. Runs before the build so a regression
         # fails in minutes instead of after a multi-hour ISO build.
+        env:
+          # Also dry-run the image's chroot hooks in a Kali container when this host
+          # has docker (tests/test-hooks-dryrun.sh), so a hook that cannot work fails
+          # here and not hours into the build. Skips, harmlessly, without docker.
+          SHINOBI_DRYRUN: "1"
         run: ./tests/run-all.sh
 
       - name: Build the live ISO

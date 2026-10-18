@@ -20,7 +20,13 @@ fi
 # would unpack the files, fail, and leave the packages unconfigured with their
 # dependencies missing -- and each postinst's self-check, the thing that keeps a
 # broken install from looking complete, would never get to run.
-for pkg in core desktop; do
+#
+# All three packages, the installer included. It is the Shinobi Installation Wizard:
+# the boot-menu entries start it (shinobi.installer=1) and nothing else puts
+# shinobi-installer on the image, so with only core and desktop the wizard the menu
+# offers was not there. The package list installs calamares; this installs the
+# configuration, branding and steps that make it Shinobi's.
+for pkg in core desktop installer; do
   deb="/tmp/shinobi-$pkg.deb"
   /opt/shinobi/packaging/build-deb.sh "$pkg" "$deb" >/dev/null
   apt-get install -y --no-install-recommends "$deb" >/dev/null
