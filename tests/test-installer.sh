@@ -184,6 +184,19 @@ for excluded in '/home/*' '/root/*' 'sudoers.d/live'; do
   check "every unpack source excludes $excluded" \
     "$occurrences" "$unpack_sources"
 done
+check "the partition table type is left to Calamares (msdos on BIOS, GPT on UEFI): forcing GPT left GRUB nowhere to embed on BIOS" \
+  "$(sed -e 's/[[:space:]]*#.*$//' "$CONF/modules/partition.conf" | grep -cE '^defaultPartitionTableType:' || true)" "0"
+check "encryption is offered only if the image can do it (the package list names cryptsetup-bin or the wizard has it off)" \
+  "$(if sed -e 's/[[:space:]]*#.*$//' "$CONF/modules/partition.conf" | grep -qE '^enableLuksAutomatedPartitioning:[[:space:]]*false' ||
+        grep -qE '^cryptsetup-bin$' "$ROOT/distro/overlay/kali-config/variant-shinobi/package-lists/kali.list.chroot"; then echo ok; else echo "offered but not installable"; fi)" "ok"
+check "the EFI fallback path is written, so a UEFI install boots without the firmware's NVRAM entry" \
+  "$(sed -e 's/[[:space:]]*#.*$//' "$CONF/modules/bootloader.conf" | grep -cE '^installEFIFallback:[[:space:]]*true' || true)" "1"
+check "the bootloader needs its modules in the image: the package list names grub-pc-bin and grub-efi-amd64-bin" \
+  "$(grep -cE '^(grub-pc-bin|grub-efi-amd64-bin)$' "$ROOT/distro/overlay/kali-config/variant-shinobi/package-lists/kali.list.chroot" || true)" "2"
+check "grubcfg runs before the bootloader, and has a configuration" \
+  "$(awk '/^[[:space:]]*-[[:space:]]*grubcfg[[:space:]]*$/ {g=NR} /^[[:space:]]*-[[:space:]]*bootloader[[:space:]]*$/ {b=NR} END {print (g && b && g < b) ? "yes" : "no"}' "$SETTINGS")|$([[ -s $CONF/modules/grubcfg.conf ]] && echo yes || echo no)" "yes|yes"
+check "finalise releases the live image's kernel holds, or the installed system can never update its kernel" \
+  "$(sed -e 's/[[:space:]]*#.*$//' "$PKG/usr/lib/shinobi/shinobi-install-finalise" | grep -c 'apt-mark unhold' || true)" "1"
 prep_cmds() { sed -e 's/[[:space:]]*#.*$//' -e '/^[[:space:]]*$/d' "$prep"; }
 finish_cmds() { sed -e 's/[[:space:]]*#.*$//' -e '/^[[:space:]]*$/d' "$finish"; }
 check "prep removes the live account" \

@@ -49,6 +49,28 @@ network-manager
 ## carry a graphical installer it will never run.
 calamares
 
+## What an unpackfs install needs that the live session does not. The installed system
+## is a byte copy of this image's squashfs, so the bootloader's modules and the
+## filesystem tools have to be in the image. (The ISO's own boot loaders are installed
+## by live-build after the squashfs is made and are not in it, and Kali's ISO uses the
+## Debian installer, so nothing here ever needed these.) Found by running the wizard:
+## `grub-install` failed with "/usr/lib/grub/i386-pc/modinfo.sh doesn't exist".
+##
+## grub-pc-bin and grub-efi-amd64-bin, not grub-pc / grub-efi-amd64: the metapackages
+## Conflict with each other and own /etc/default/grub through their postinst scripts,
+## and Calamares runs grub-install itself. The cost is that GRUB's boot code is not
+## refreshed by upgrades; the installed system keeps the core image it was installed
+## with.
+grub-pc-bin
+grub-efi-amd64-bin
+## FAT32 for the EFI System Partition: the wizard formats a new one with mkfs.fat.
+dosfstools
+## The wizard's "install alongside" flow can only shrink an NTFS partition with these.
+ntfs-3g
+## grub-install registers the boot entry itself in current GRUB, but efibootmgr is what
+## Calamares' bootloader module and Debian's installer both expect to be there.
+efibootmgr
+
 ## Fonts — a Nerd Font is fetched directly from upstream by
 ## hooks/live/0030-fonts.chroot (see that file for why); these are just its
 ## build-time dependencies.

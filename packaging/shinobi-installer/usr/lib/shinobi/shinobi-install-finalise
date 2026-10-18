@@ -79,10 +79,24 @@ if command -v shinobi-repo >/dev/null 2>&1; then
 fi
 
 # --- the installed system has to be able to boot -----------------------------
+# Kali's live build holds every kernel package (`apt-mark hold linux-image-*`) so a
+# live session never changes kernel. Holds live in dpkg's status file, which unpackfs
+# copies, so without this the installed system could never take a kernel update.
+# `--get-selections` reads dpkg's own database, so this works offline.
+if command -v dpkg >/dev/null 2>&1 && command -v apt-mark >/dev/null 2>&1; then
+  held=$(dpkg --get-selections 2>/dev/null | awk '$2 == "hold" { print $1 }')
+  if [ -n "$held" ]; then
+    # shellcheck disable=SC2086
+    apt-mark unhold $held >/dev/null 2>&1 &&
+      echo "install-finalise: released the live image's holds on: $(echo $held | tr '\n' ' ')"
+  fi
+fi
+
 # The initramfs was built in a chroot that was not this target's. It usually
-# works; "usually" is not a property to install a bootloader behind.
+# works; "usually" is not a property to install a bootloader behind. Its output is
+# kept: it used to go to /dev/null, which made a failure here unreadable.
 if command -v update-initramfs >/dev/null 2>&1; then
-  update-initramfs -u -k all >/dev/null 2>&1 ||
+  update-initramfs -u -k all ||
     echo "install-finalise: the initramfs could not be rebuilt here; it must be rebuilt on first boot" >&2
 fi
 
