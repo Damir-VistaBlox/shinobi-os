@@ -57,6 +57,18 @@ do
   }
 done
 
+echo "== Checking live-config components =="
+# live-config runs these at boot, in name order, only if they are executable. A file
+# that is present but not executable is skipped without a message, and the symptom
+# is a login screen (0086) or an account with no groups (0032) on a live boot.
+for component in 0032-shinobi-user-setup 0086-shinobi-autologin; do
+  component_line="$(grep -F "squashfs-root/usr/lib/live/config/$component" "$listing" | head -1)"
+  [[ "$component_line" == -rwx* ]] || {
+    echo "image-test: live-config component missing or not executable: $component" >&2
+    exit 1
+  }
+done
+
 echo "== Checking package database policy =="
 status="$tmp/status"
 unsquashfs -cat "$tmp/filesystem.squashfs" /var/lib/dpkg/status >"$status"

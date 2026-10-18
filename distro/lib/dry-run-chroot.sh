@@ -184,6 +184,49 @@ if apt-get install -y -qq --no-install-recommends live-config >/dev/null 2>&1; t
   run_autologin "boot=live components quiet splash noeject username=shinobi noautologin"
   check "noautologin on the kernel command line still turns autologin off" test ! -e /etc/sddm.conf
   rm -f /etc/sddm.conf
+
+  section "the live account gets Kali's groups and shell (Kali's own component only knows \`kali\`)"
+  # 0031-kali-user-setup hard-codes the account name; ours is shinobi, so 0031 finds no
+  # such user. 0032 does the same for the account the image actually creates. This runs
+  # the real live-config driver with the real 0030-user-setup, which creates the account
+  # from the repo's own config.conf.d/shinobi.conf, and then our component, so what is
+  # checked is what a live boot would leave. (0031 itself lives in Kali's live-build
+  # tree, not here, and is not run: it creates the empty groups kaboxer and wireshark,
+  # which this section therefore does not see.)
+  apt-get install -y -qq --no-install-recommends user-setup adduser >/dev/null 2>&1 || true
+  run_usersetup() {
+    # run_usersetup [extra kernel command line words]: a fresh live account, as a boot makes it.
+    userdel -r shinobi >/dev/null 2>&1 || true
+    rm -f /var/lib/live/config/user-setup /var/lib/live/config/shinobi-user-setup
+    mkdir -p /var/lib/live/config
+    LIVE_CONFIG_CMDLINE="boot=live components=user-setup,shinobi-user-setup quiet splash noeject $*" \
+      /usr/bin/live-config >/dev/null 2>&1
+  }
+  run_usersetup
+  check "live-config created the account named in the repo's config.conf.d" getent passwd shinobi
+  check "the account is in adm (read /var/log)" sh -c 'id -nG shinobi | tr " " "\n" | grep -qx adm'
+  check "and dialout (serial adapters)" sh -c 'id -nG shinobi | tr " " "\n" | grep -qx dialout'
+  check "and still in the groups live-config's own component gives it (audio)" sh -c 'id -nG shinobi | tr " " "\n" | grep -qx audio'
+  if [ -x /usr/bin/zsh ]; then
+    check "the shell is zsh" sh -c 'test "$(getent passwd shinobi | cut -d: -f7)" = /usr/bin/zsh'
+    run_usersetup nozsh
+    check "nozsh on the kernel command line keeps bash" sh -c 'test "$(getent passwd shinobi | cut -d: -f7)" = /bin/bash'
+    check "and the groups are still added" sh -c 'id -nG shinobi | tr " " "\n" | grep -qx adm'
+  else
+    bad "zsh is not in the image, so the shell part of the component could not be checked"
+  fi
+  check "the component sorts after the one that creates the account and before sudo's" \
+    sh -c "ls /usr/lib/live/config | sed -n '/^0030-user-setup\$/,/^0040-sudo\$/p' | grep -qx 0032-shinobi-user-setup"
+  # Root is never configured, as in 0031 and 0040-sudo: live-config accepts username=root.
+  root_shell_before=$(getent passwd root | cut -d: -f7)
+  rm -f /var/lib/live/config/shinobi-user-setup
+  LIVE_CONFIG_CMDLINE="boot=live username=root" LIVE_USERNAME=root sh /usr/lib/live/config/0032-shinobi-user-setup >/dev/null 2>&1
+  check "root's shell is left alone" sh -c "test \"\$(getent passwd root | cut -d: -f7)\" = '$root_shell_before'"
+  check "and root is not recorded as configured" test ! -e /var/lib/live/config/shinobi-user-setup
+  userdel -r shinobi >/dev/null 2>&1 || true
+  rm -f /var/lib/live/config/shinobi-user-setup
+  LIVE_CONFIG_CMDLINE="boot=live" LIVE_USERNAME=ghost sh /usr/lib/live/config/0032-shinobi-user-setup >/dev/null 2>&1
+  check "an account that does not exist is skipped, and not recorded as done" test ! -e /var/lib/live/config/shinobi-user-setup
 else
   bad "could not install live-config to run its components"
 fi

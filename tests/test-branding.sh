@@ -182,6 +182,37 @@ check "the live-config component is shipped, executable, and sorts after live-co
 check "it names the Hyprland session" "$(grep -c '^Session=hyprland.desktop$' "$autologin" || true)" "1"
 check "it honours noautologin" "$(grep -c 'live-config.noautologin|noautologin)' "$autologin" || true)" "1"
 
+section "the live account gets Kali's groups and shell"
+# The sort position is read from the file's own name (a literal compared with a
+# literal cannot fail). live-config runs components in name order: the account must
+# exist before this runs, and sudo's component must run after it.
+usersetup_dir="$ROOT/distro/overlay/includes.chroot/usr/lib/live/config"
+usersetup="$(ls "$usersetup_dir"/*-shinobi-user-setup 2>/dev/null | head -1)"
+usersetup_name="$(basename "${usersetup:-none}")"
+check "the live-config component is shipped and executable" \
+  "$([[ -x ${usersetup:-/nonexistent} ]] && echo yes || echo no)" "yes"
+check "it sorts after the component that creates the account" \
+  "$([[ $usersetup_name > 0030-user-setup ]] && echo yes || echo no)" "yes"
+check "and before sudo's, which names the account it configured" \
+  "$([[ $usersetup_name < 0040-sudo ]] && echo yes || echo no)" "yes"
+check "it adds the account to adm and dialout, among the groups that exist" \
+  "$(grep -cE 'for _GROUP in .*adm dialout' "$usersetup" || true)" "1"
+check "it honours nozsh" "$(grep -c 'live-config.nozsh|nozsh)' "$usersetup" || true)" "1"
+check "and leaves root alone, as 0031 and 0040 do" "$(grep -cE '^[[:space:]]*""[|]root\)' "$usersetup" || true)" "1"
+
+users_conf="$ROOT/packaging/shinobi-installer/etc/calamares/modules/users.conf"
+# Executable lines only, and the shell read from under the `user:` map, because that
+# is the structure Calamares 3.4.2 reads: a top-level `userShell:` is ignored there and
+# this test used to pass on exactly that dead key.
+conf_lines() { sed -e 's/[[:space:]]*#.*$//' -e '/^[[:space:]]*$/d' "$users_conf"; }
+check "the installed account is in adm" "$(conf_lines | grep -cE '^[[:space:]]+- adm$' || true)" "1"
+check "and dialout" "$(conf_lines | grep -cE '^[[:space:]]+- dialout$' || true)" "1"
+check "and vboxsf, which the live account is in too" "$(conf_lines | grep -cE '^[[:space:]]+- vboxsf$' || true)" "1"
+check "its shell is set under the user: map, the only place Calamares 3.4.2 reads it" \
+  "$(conf_lines | awk '/^user:/ {u=1; next} /^[^[:space:]]/ {u=0} u && /^[[:space:]]+shell:[[:space:]]+\/usr\/bin\/zsh$/ {n++} END {print n+0}')" "1"
+check "and no top-level userShell key is left, which Calamares ignores" \
+  "$(conf_lines | grep -cE '^userShell:' || true)" "0"
+
 section "the wizard is launched from a marker nothing else sets"
 # Once per boot entry, counted on the entries themselves: the explanatory comment
 # names the marker a third time and is not an entry.

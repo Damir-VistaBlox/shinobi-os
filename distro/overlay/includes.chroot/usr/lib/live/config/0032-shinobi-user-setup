@@ -1,0 +1,90 @@
+#!/bin/sh
+
+. /usr/lib/live/config.sh
+
+## live-config(7) component: give the live session's account what a Kali user has.
+##
+## Kali's own 0031-kali-user-setup adds the account to adm, dialout, kaboxer, vboxsf
+## and wireshark and makes zsh its shell, but it hard-codes the account name `kali`.
+## This image creates the account as `shinobi` (config.conf.d/shinobi.conf), so that
+## component finds no such user and quietly does nothing for it: the live operator
+## could not read /var/log (adm), could not open a serial adapter (dialout), and got
+## bash in a terminal where every Kali tutorial assumes zsh.
+##
+## This runs after 0030-user-setup (which creates the account) and before 0040-sudo.
+## It does what 0031 would have done for the account that exists, with the same
+## guards: groups that do not exist are skipped, root is left alone, and `nozsh` on
+## the kernel command line keeps bash.
+##
+## One thing to know when reading `id` on the live session: 0031 still runs, finds no
+## `kali` user, and creates the groups kaboxer and wireshark anyway, so they exist by
+## the time this runs and the account joins them. Both are empty, because the packages
+## that would use them are not on the image. The installed system's account does not
+## get them (users.conf): a group ahead of its package is not the package's group.
+##
+## The installed system's account gets its groups and shell from the wizard
+## (users.conf), not from here: live-config only ever runs on a live boot.
+
+#set -e
+
+Cmdline ()
+{
+	# Reading kernel command line
+	for _PARAMETER in ${LIVE_CONFIG_CMDLINE}
+	do
+		case "${_PARAMETER}" in
+			live-config.nozsh|nozsh)
+				LIVE_CONFIG_NOZSH="true"
+				;;
+
+			live-config.username=*|username=*)
+				LIVE_USERNAME="${_PARAMETER#*username=}"
+				;;
+		esac
+	done
+}
+
+Init ()
+{
+	# Avoid configuring multiple times in case persistence is enabled
+	if component_was_executed "shinobi-user-setup"
+	then
+		exit 0
+	fi
+
+	# Nothing to configure: no account (do not record that this ran, so a later boot
+	# can try again), or root, which 0040-sudo and 0031 also leave alone.
+	case "${LIVE_USERNAME}" in
+		""|root)
+			exit 0
+			;;
+	esac
+
+	if ! getent passwd "${LIVE_USERNAME}" > /dev/null
+	then
+		exit 0
+	fi
+
+	echo -n " shinobi-user-setup"
+}
+
+Config ()
+{
+	for _GROUP in adm dialout kaboxer vboxsf wireshark
+	do
+		getent group "${_GROUP}" > /dev/null || continue
+		usermod -a -G "${_GROUP}" "${LIVE_USERNAME}" || true
+	done
+
+	if [ "${LIVE_CONFIG_NOZSH}" != "true" ] && [ -x /usr/bin/zsh ]
+	then
+		usermod -s /usr/bin/zsh "${LIVE_USERNAME}" || true
+	fi
+
+	# Create state file
+	touch /var/lib/live/config/shinobi-user-setup
+}
+
+Cmdline
+Init
+Config
