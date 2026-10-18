@@ -1,8 +1,8 @@
 #!/bin/sh
 # Install the Shinobi layer as Debian packages, then apply it.
 #
-# This hook is now only the wiring: it installs shinobi-core and
-# shinobi-desktop from the sources distro/build.sh staged into /opt/shinobi,
+# This hook is now only the wiring: it installs shinobi-core, shinobi-desktop
+# and shinobi-installer from the sources distro/build.sh staged into /opt/shinobi,
 # and hands off to /usr/lib/shinobi/shinobi-setup. The application logic lives
 # in the engine because install.sh and the installation wizard run the same
 # thing -- when the ISO built the desktop and nothing did when you installed to

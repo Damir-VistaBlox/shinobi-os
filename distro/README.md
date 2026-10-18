@@ -12,8 +12,9 @@ tooling, not a from-scratch respin.
   official images). Untouched upstream — don't edit inside it, it gets
   overwritten by `git submodule update`.
 - `overlay/` — our customization, layered onto the submodule at build time:
-  - `kali-config/variant-shinobi/` — the new variant: package list (Hyprland
-    stack + `kali-linux-default`) and build-time hooks.
+  - `kali-config/variant-shinobi/` — the new variant: package list (the Hyprland
+    stack on `kali-linux-core`; `kali-linux-default` is deliberately absent) and
+    build-time hooks.
   - `includes.chroot/` — static files copied onto the image: Hyprland,
     Quickshell, wofi, and kitty dotfiles (`usr/share/shinobi-dotfiles/`,
     defaulted to the `kali-dark` theme), the default Shinobi wallpaper
@@ -49,10 +50,14 @@ comparison, use a separate clean clone of `kali-live` for that, not this one.
 `bin/`, `mcp-servers/shinobi-recon`, and `themes/` at the repo root are the
 single source of truth. `distro/build.sh` copies them into
 `overlay/includes.chroot/opt/shinobi/` at build time (gitignored — it's a
-generated staging copy, not a second copy to keep in sync). A build hook
-(`variant-shinobi/hooks/live/0020-shinobi-tooling.chroot`) then installs
-`shinobi-recon` into a venv, symlinks every `bin/shinobi*` script onto `$PATH`,
-and installs `themes/` to `/usr/share/shinobi/themes`.
+generated staging copy, not a second copy to keep in sync). In the desktop
+variant, the hook `variant-shinobi/hooks/live/0010-install-layer.chroot` then builds
+and installs the three packages (`shinobi-core`, `shinobi-desktop`,
+`shinobi-installer`) from it and applies the layer with
+`shinobi-setup apply --skel-only`. The console-only `variant-shinobi-min` still uses
+`hooks/live/0020-shinobi-tooling.chroot`, which installs `shinobi-recon` into a venv,
+symlinks every `bin/shinobi*` script onto `$PATH`, and installs `themes/` to
+`/usr/share/shinobi/themes`.
 
 ## Desktop commands on the built image
 
@@ -173,6 +178,8 @@ first failure, as live-build does) and then checks the result against
 `tests/test-image-content.sh`'s expectations plus the ones installing depends on.
 It needs docker and a network (a few hundred MB of packages, cached in the
 `shinobi-dryrun-apt` volume), and writes nothing to the checkout. It has no Kali
-hooks, no kernel and no systemd, so a pass is not a proof that the ISO builds; a
-failure is one the build would very likely hit too. `tests/test-hooks-dryrun.sh`
+hooks, no Kali common package lists, no kernel and no systemd, and by default it
+installs without Recommends where live-build installs them (`--with-recommends`
+matches that). A pass is therefore not a proof that the ISO builds; a failure is one
+the build would very likely hit too. `tests/test-hooks-dryrun.sh`
 runs it when `SHINOBI_DRYRUN=1`, and the preview build workflow sets that.

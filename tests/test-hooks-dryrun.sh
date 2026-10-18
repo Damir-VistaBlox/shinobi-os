@@ -14,7 +14,14 @@ if [[ "${SHINOBI_DRYRUN:-}" != 1 ]]; then
   exit 0
 fi
 if ! command -v docker >/dev/null 2>&1 || ! docker info >/dev/null 2>&1; then
+  # It was asked for (SHINOBI_DRYRUN=1) and cannot run. A quiet SKIP would let a
+  # build workflow that sets the variable believe the hooks had been checked, so
+  # this says so where a person reading the log, or the Actions summary, sees it.
   echo "hooks-dryrun-test: SKIP (docker is not available here)"
+  echo "hooks-dryrun-test: WARNING: the hook dry run was requested but NOT RUN; the ISO hooks are unchecked"
+  if [[ "${GITHUB_ACTIONS:-}" == true ]]; then
+    echo "::warning title=ISO hook dry run not run::SHINOBI_DRYRUN=1 was set but docker is not available on this runner, so the chroot hooks were not checked before the build."
+  fi
   exit 0
 fi
 
