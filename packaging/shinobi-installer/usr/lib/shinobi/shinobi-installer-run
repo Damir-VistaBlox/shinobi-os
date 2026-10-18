@@ -19,15 +19,30 @@
 #     (io.calamares.calamares.pkexec.run). This is what an installed system, where
 #     sudo wants a password, falls back to; hyprpolkitagent shows the prompt.
 #     pkexec drops most of the environment, so whether a Wayland session can show
-#     the wizard this way has not been checked on a real desktop.
+#     the wizard this way has not been checked on a real desktop. It also cannot be given
+#     the PATH above (the polkit action is for `calamares` itself, and `pkexec env` would
+#     ask for more), so a wizard started this way does not carry a layout chosen on its
+#     keyboard page into the live session. The live image never gets here: it has sudo.
 set -eu
 
+# The wizard's PATH is fixed here rather than inherited, for two reasons. `sudo -E` keeps
+# the environment but not PATH (sudoers' secure_path replaces it), so a PATH prepended
+# before sudo is gone by the time Calamares starts; it has to be set on the far side of
+# it. And a PATH inherited from the live session would put the operator's own
+# directories (~/.local/bin) in front of a root process that runs `chroot`, `mount` and
+# `sudo` by name, which is exactly what secure_path exists to prevent. It is secure_path's
+# value, with one directory in front: installer-shims/ holds a `setxkbmap` that lets the
+# layout chosen on the keyboard page reach the live session (see it for why that does
+# not happen on its own). It is in front of the wizard's PATH and nobody else's.
+self=$(cd -- "$(dirname -- "$0")" && pwd)
+wizard_path="$self/installer-shims:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+
 if [ "$(id -u)" = 0 ]; then
-  exec calamares "$@"
+  exec env "PATH=$wizard_path" calamares "$@"
 fi
 
 if command -v sudo >/dev/null 2>&1 && sudo -n true >/dev/null 2>&1; then
-  exec sudo -E calamares "$@"
+  exec sudo -E env "PATH=$wizard_path" calamares "$@"
 fi
 
 if command -v pkexec >/dev/null 2>&1; then

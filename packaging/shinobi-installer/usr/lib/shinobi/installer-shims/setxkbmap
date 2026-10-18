@@ -1,0 +1,98 @@
+#!/bin/sh
+# setxkbmap, for the one process it matters to: the installation wizard.
+#
+# Calamares applies the layout chosen on its keyboard page to the *live* system so
+# that the operator types the rest of the wizard on it -- the password on the Users
+# page included -- and it does that by running `setxkbmap`. On X11 that works. The
+# wizard is not an X11 client here: it runs as a Wayland client of Hyprland (the
+# platform plugin it picks decides whether it also calls systemd-localed, and on the
+# image it did, and was refused). `setxkbmap` reaches X servers only, so the layout
+# stayed `us` in the live session while the page said German, and the password was
+# typed as an American string that the installed login screen then read as German.
+#
+# shinobi-installer-run puts this directory first on the wizard's PATH, and only the
+# wizard's. It does two things with each call. If the call sets a layout, it passes it
+# to shinobi-keyboard, which makes the live session type it; then it runs the real
+# setxkbmap with the arguments it was given, so X clients (XWayland ones included)
+# still follow, and so `-query` and `-print`, which Calamares also uses, are answered
+# by the real thing. Anything it does not recognise is only passed on.
+#
+# It runs as root, because the wizard does, and so it drops to the account that owns
+# the session before touching anything of theirs: the layout is recorded in that
+# account's runtime directory and applied through that account's Hyprland, not by a
+# root process writing into the operator's home. A failure here must never get in the
+# wizard's way, so nothing below is allowed to stop the real setxkbmap from running.
+set -u
+
+self=$(cd -- "$(dirname -- "$0")" && pwd)
+helper="$self/../shinobi-keyboard"
+
+# The real setxkbmap: the first one on PATH that is not this directory.
+real=""
+oldifs=$IFS
+IFS=:
+for dir in $PATH; do
+  [ -n "$dir" ] || continue
+  [ "$(cd -- "$dir" 2>/dev/null && pwd)" = "$self" ] && continue
+  if [ -x "$dir/setxkbmap" ]; then
+    real="$dir/setxkbmap"
+    break
+  fi
+done
+IFS=$oldifs
+
+# The arguments Calamares builds are `-model M -layout L [-variant V] [-option O]`
+# (src/modules/keyboard/Config.cpp, applyXkb). Anything else is not a layout change.
+model=""
+layout=""
+variant=""
+options=""
+have_layout=0
+recognised=1
+want=""
+for arg in "$@"; do
+  if [ -n "$want" ]; then
+    case "$want" in
+      -model) model=$arg ;;
+      -layout) layout=$arg; have_layout=1 ;;
+      -variant) variant=$arg ;;
+      -option) [ -z "$arg" ] || options="${options:+$options,}$arg" ;;
+    esac
+    want=""
+    continue
+  fi
+  case "$arg" in
+    -model | -layout | -variant | -option) want=$arg ;;
+    *) recognised=0 ;;
+  esac
+done
+[ -z "$want" ] || recognised=0
+
+if [ "$recognised" = 1 ] && [ "$have_layout" = 1 ] && [ -x "$helper" ]; then
+  if [ "$(id -u)" = 0 ]; then
+    runtime=${XDG_RUNTIME_DIR:-}
+    uid=""
+    case "$runtime" in
+      /*) [ -d "$runtime" ] && uid=$(stat -c %u -- "$runtime" 2>/dev/null) ;;
+    esac
+    if [ -z "$uid" ]; then
+      :  # no session to apply it to
+    elif [ "$uid" = 0 ]; then
+      "$helper" set --model "$model" --layout "$layout" --variant "$variant" --options "$options" || true
+    elif command -v setpriv >/dev/null 2>&1; then
+      gid=$(id -g "$uid" 2>/dev/null || echo "$uid")
+      home=$(getent passwd "$uid" 2>/dev/null | cut -d: -f6)
+      env "HOME=${home:-/nonexistent}" setpriv --reuid="$uid" --regid="$gid" --init-groups \
+        "$helper" set --model "$model" --layout "$layout" --variant "$variant" --options "$options" || true
+    else
+      echo "setxkbmap shim: setpriv is not installed; the live session keeps its layout" >&2
+    fi
+  else
+    "$helper" set --model "$model" --layout "$layout" --variant "$variant" --options "$options" || true
+  fi
+fi
+
+if [ -n "$real" ]; then
+  exec "$real" "$@"
+fi
+exit 0

@@ -379,6 +379,8 @@ for f in \
   usr/share/backgrounds/shinobi-os/shinobi-night.png \
   usr/share/plymouth/themes/shinobi/shinobi.plymouth \
   etc/xdg/xdg-desktop-portal/hyprland-portals.conf \
+  usr/share/shinobi-dotfiles/etc/skel/.config/hypr/input.conf \
+  usr/lib/shinobi/shinobi-keyboard \
   usr/lib/shinobi/shinobi-desktop-check
 do
   check "shinobi-desktop ships $f" \

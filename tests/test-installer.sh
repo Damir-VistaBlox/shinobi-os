@@ -260,6 +260,9 @@ if ! command -v docker >/dev/null 2>&1; then
 else
   smoke_root="$(mktemp -d)"
   "$ROOT/packaging/build-deb.sh" installer --stage "$smoke_root" 2>/dev/null
+  # The desktop package too: the wizard's setxkbmap stand-in calls shinobi-keyboard, which
+  # lives there, and on a disk the two are unpacked onto one filesystem.
+  "$ROOT/packaging/build-deb.sh" desktop --stage "$smoke_root" 2>/dev/null
 
   # The image to boot Calamares in. Kali is the one this is written against, and
   # Debian is the fallback: it carries the same framework and the same modules,
@@ -296,7 +299,13 @@ else
       command -v calamares >/dev/null 2>&1 && command -v xvfb-run >/dev/null 2>&1 || {
         echo "SMOKE-UNAVAILABLE: calamares or xvfb-run did not install"; exit 0; }
       mkdir -p /etc/calamares && cp -r /inst/etc/calamares/. /etc/calamares/
-      timeout 120 xvfb-run -a calamares -d 2>&1' 2>&1)"
+      # The wizard'"'"'s PATH, as shinobi-installer-run builds it, and a session to change.
+      export HOME=/root XDG_RUNTIME_DIR=/tmp/rt
+      mkdir -p -m 700 "$XDG_RUNTIME_DIR"
+      export PATH=/inst/usr/lib/shinobi/installer-shims:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+      timeout 120 xvfb-run -a calamares -d 2>&1
+      echo "SMOKE-OVERRIDE"; cat "$XDG_RUNTIME_DIR/shinobi/keyboard" 2>&1
+      echo "SMOKE-INPUT"; cat "$HOME/.config/hypr/input.conf" 2>&1' 2>&1)"
   fi
   chmod -R u+rwX "$smoke_root" 2>/dev/null
   rm -rf "$smoke_root"
@@ -340,6 +349,20 @@ else
 
     check "the run produced no fatal error" \
       "$(grep -ciE 'ASSERT|FATAL' <<<"$log" || true)" "0"
+
+    # The keyboard page applies its layout by running `setxkbmap`, and that is the one
+    # place a layout chosen in the wizard can be picked up (the wizard is a Wayland
+    # client of the live session; nothing else it does reaches the compositor). So the
+    # shim in installer-shims/ is only worth anything while Calamares still calls it by
+    # name, in the shape tests/calamares-keyboard.py says. Here is the real Calamares
+    # doing it, with the real shim and the real shinobi-keyboard, on a layout nobody chose
+    # (the page applies its default as it loads).
+    check "Calamares applied a layout by running setxkbmap" \
+      "$([[ $(grep -c 'xkbmap selection changed' <<<"$log" || true) -ge 1 ]] && echo yes || echo no)" "yes"
+    check "the wizard's setxkbmap took it from the arguments Calamares gave it" \
+      "$(sed -n '/^SMOKE-OVERRIDE/,/^SMOKE-INPUT/p' <<<"$log" | grep -c '^XKBLAYOUT="[a-z,]*"$' || true)" "1"
+    check "and gave it to the session, in the file Hyprland reads" \
+      "$(sed -n '/^SMOKE-INPUT/,$p' <<<"$log" | grep -c '^  kb_layout = [a-z,]*$' || true)" "1"
   fi
 fi
 

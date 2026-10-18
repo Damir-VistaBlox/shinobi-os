@@ -100,6 +100,12 @@ UUID=deadbeef-0000-0000-0000-000000000000 /live/medium iso9660 loop,ro 0 0
 UUID=11111111-2222-3333-4444-555555555555 / ext4 defaults 0 1
 EOF
 
+  # What the wizard's keyboard job has written by this step, for Russian (phonetic): the
+  # choice that exposes how Calamares builds these files (tests/calamares-keyboard.py).
+  mkdir -p "$dest/etc/default" "$dest/etc/X11/xorg.conf.d"
+  python3 "$ROOT/tests/calamares-keyboard.py" default ru phonetic >"$dest/etc/default/keyboard"
+  python3 "$ROOT/tests/calamares-keyboard.py" x11 ru phonetic >"$dest/etc/X11/xorg.conf.d/00-keyboard.conf"
+
   printf '0.1.0-test\n' >"$dest/usr/share/shinobi/version"
   printf 'ID=kali\nVERSION_ID="2026.7"\n' >"$dest/etc/os-release"
   mkdir -p "$dest/usr/local/bin" "$dest/var/lib/shinobi"
@@ -312,6 +318,15 @@ check "the build's apt lists were cleared" \
   "$(find "$target/var/lib/apt/lists" -type f | wc -l | tr -d ' ')" "0"
 check "the live session's runtime state is gone" \
   "$([[ -d $target/run/live ]] && echo yes || echo no)" "no"
+# Calamares writes the variant of a layout with `us` in front one entry short, and xkb then
+# rejects the whole layout (Hyprland falls back to plain us without a word). The installer
+# puts the entry back, in both files the login screen and the session read.
+check "the keyboard variant was put back in line with its layouts, for the session" \
+  "$(grep -c '^XKBVARIANT=",phonetic"$' "$target/etc/default/keyboard" || true)" "1"
+check "and for the login screen" \
+  "$(grep -c 'XkbVariant" ",phonetic"' "$target/etc/X11/xorg.conf.d/00-keyboard.conf" || true)" "1"
+check "without touching the layout or the switch" \
+  "$(grep -c -E '^XKBLAYOUT="us,ru"$|^XKBOPTIONS="grp:alt_shift_toggle"$' "$target/etc/default/keyboard" || true)" "2"
 
 printf '\n'
 if ((failures > 0)); then

@@ -515,6 +515,77 @@ It was not a close call. `usermod -l` on somebody who administers a machine is
 not a decision a build script should make for them, which is why `shinobi-setup`
 never renames an account unless asked for by name.
 
+### The keyboard layout: one choice, four readers
+
+Four things read a keyboard layout between the wizard and the first week of use, and
+until they were made to agree, they did not. Calamares writes the operator's choice to
+the installed system as `/etc/default/keyboard` and `/etc/X11/xorg.conf.d/00-keyboard.conf`.
+The login screen is an X11 greeter and reads the second. The Hyprland session and the
+lock screen (hyprlock takes whatever layout the compositor has) read neither:
+`hyprland.conf` said `kb_layout = us`. Someone who chose German therefore got a German
+login screen and an American session, and a password that is the same key presses read
+two ways. On a booted installed system the key presses that logged in at the login
+screen were refused by the lock screen, which is how this was found.
+
+The wizard has the same fault one step earlier, and it is the worse one, because it
+decides what the password *is*. It runs as a Wayland client of the live Hyprland
+session (the Qt platform plugin mapped in the process is `libqwayland`), and a layout
+chosen on its keyboard page reaches the compositor by no route. Calamares 3.4.2
+(`src/modules/keyboard/Config.cpp`) applies a choice with `setxkbmap`, which only X
+clients hear, and, because it is not an X11 client, through `systemd-localed`
+(`org.freedesktop.locale1`), which refused the call on the image (D-Bus
+`AccessDenied`) and which Hyprland does not read when it works. Observed on a booted
+image: pick German, and `hyprctl devices` still says `English (US)`, `localectl`
+still says `us`, and the Users page types an American password that the installed
+login screen then reads as German.
+
+What reaches the session now:
+
+- **In the wizard**, `shinobi-installer-run` starts Calamares with a fixed system PATH
+  (`secure_path`'s value, with `installer-shims/` in front, set on the far side of
+  `sudo`, which replaces PATH itself). `installer-shims/setxkbmap` passes a call that
+  sets a layout to `shinobi-keyboard set`, as the account that owns the session, and
+  then runs the real `setxkbmap` with the arguments it was given, so X clients still
+  follow and `-query` and `-print` are answered by the real thing. It is the one place
+  the choice can be picked up, so a test runs the real Calamares in a container and
+  checks that it still calls `setxkbmap` by name.
+- **In the session**, `shinobi-keyboard apply` runs at login, works out the layout
+  (the installer's choice for this session, in `$XDG_RUNTIME_DIR`; else
+  `/etc/default/keyboard`; else `us`) and writes `~/.config/hypr/input.conf`, which
+  `hyprland.conf` sources above its own `input { }` block, so a layout the operator
+  writes there still wins. Hyprland is reloaded only if the file changed. It is a
+  file and not a `hyprctl keyword` because `hyprctl` cannot set an empty value, so
+  going from French azerty to German could not clear the variant, and because a
+  keyword is lost on every reload (the theme switch at login reloads; so does
+  Super+Shift+R). `/etc/default/keyboard` is parsed, never sourced, and every value must
+  be a plain xkb name before it reaches a file.
+- **On the installed system**, the installer's last step runs `shinobi-keyboard repair`.
+  For a layout that cannot type ASCII (Russian, Ukrainian and about forty others)
+  Calamares adds `us` in front and writes the variant by dropping every empty entry,
+  so Russian (phonetic) becomes `XKBLAYOUT="us,ru"` with `XKBVARIANT="phonetic"`.
+  xkb pairs variants with layouts by position, asks for `us(phonetic)`, and the keymap
+  does not compile; Hyprland answers with plain `us` and no message (xkbcommon's
+  own error: `Couldn't process include statement for 'us(phonetic)'`). The empty
+  entry is put back in both files (`,phonetic`).
+
+Two corrections to what an earlier revision of this file said. The wizard's keyboard
+page offers every layout in xkb's `base.lst`, not the eleven in `keyboard.conf`:
+that module reads six settings and none of them is a list of layouts or a default,
+so `keyboardLayout`, `layouts:` and the rest were never read and are gone. And the
+polkit fallback in `shinobi-installer-run` cannot be given the PATH, so a wizard
+started that way does not carry its layout into the live session; the live image
+always has `sudo` and never takes that path.
+
+`tests/test-keyboard.sh` checks the chain with the real xkb library: a password typed
+on the layout chosen in the wizard is read as the same password by the login screen
+and the session, for each layout in a spread of them, and is a different password on
+the `us` that both used to have.
+
+Not covered: an account whose home was populated before this existed has a
+`hyprland.conf` without the `source` line, and `shinobi-setup` does not overwrite an
+operator's files without `--force`; and the login screen's own theme has no layout
+indicator, which would matter to someone with a two-layout system (`us,ru`).
+
 ### What "installable" costs the other paths
 
 An install must *coexist* rather than own, which is a stricter discipline than

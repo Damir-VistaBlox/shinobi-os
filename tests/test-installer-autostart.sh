@@ -64,6 +64,14 @@ if [ "$1" = -n ]; then exit "${FAKE_SUDO_N_RC:-0}"; fi
 [ "$1" = -E ] && shift
 exec "$@"
 EOF
+# Records the environment the wizard is given and then starts it, without applying it: the
+# PATH it is told to use is the real system's, which has none of these fakes on it.
+cat >"$fake/env" <<'EOF'
+#!/bin/sh
+echo "$*" >>"$FAKE_LOG/env"
+while [ $# -gt 0 ]; do case "$1" in *=*) shift ;; *) break ;; esac; done
+exec "$@"
+EOF
 cat >"$fake/pkexec" <<'EOF'
 #!/bin/sh
 echo "$*" >>"$FAKE_LOG/pkexec"
@@ -149,15 +157,23 @@ check "with no display at all the desktop is not ready, whatever hyprctl says" "
 check "KWin is never asked, in any of the above" "$(count qdbus)" "0"
 
 echo "== the wizard is started with the root it requires =="
+# The PATH the wizard gets is fixed, with the directory holding the layout-following
+# setxkbmap in front, and is set on the far side of sudo (which replaces PATH itself).
+wizard_path="$(dirname "$RUN")/installer-shims:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 # FAKE_UID=1000 is the live session's account.
 run "shinobi.installer=1" WAYLAND_DISPLAY=wayland-1 FAKE_UID=0
 check "already root: started directly, with no sudo and no pkexec" "$(count calamares)|$(count sudo)|$(count pkexec)" "1|0|0"
+check "with the wizard's PATH, and not the session's" "$(cat "$log/env")" "PATH=$wizard_path calamares"
 run "shinobi.installer=1" WAYLAND_DISPLAY=wayland-1 FAKE_UID=1000
 check "the live account, with passwordless sudo: the boot path starts the wizard through sudo -E" \
-  "$rc|$(count calamares)|$(tr '\n' '|' <"$log/sudo")|$(count pkexec)" "0|1|-n true|-E calamares||0"
+  "$rc|$(count calamares)|$(tr '\n' '|' <"$log/sudo")|$(count pkexec)" \
+  "0|1|-n true|-E env PATH=$wizard_path calamares||0"
+check "and the PATH is set by env, after sudo has done its own" "$(cat "$log/env")" "PATH=$wizard_path calamares"
 run "shinobi.installer=1" WAYLAND_DISPLAY=wayland-1 FAKE_UID=1000 FAKE_SUDO_N_RC=1
 check "sudo that wants a password: it falls back to pkexec, and does not run sudo for the wizard" \
   "$rc|$(count calamares)|$(tr '\n' '|' <"$log/sudo")|$(tr '\n' '|' <"$log/pkexec")" "0|1|-n true||calamares|"
+check "pkexec is given the program it has a policy for, not env: the wizard keeps the PATH it has" \
+  "$(count env)" "0"
 mv "$fake/sudo" "$work/sudo.away"
 run "shinobi.installer=1" WAYLAND_DISPLAY=wayland-1 FAKE_UID=1000
 check "no sudo at all: pkexec" "$rc|$(count calamares)|$(count pkexec)" "0|1|1"

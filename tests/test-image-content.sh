@@ -45,11 +45,14 @@ for path in \
   /usr/bin/btop \
   /usr/local/bin/top \
   /usr/lib/shinobi/shinobi-migrate \
+  /usr/lib/shinobi/shinobi-keyboard \
+  /usr/lib/shinobi/installer-shims/setxkbmap \
   /usr/lib/systemd/user/shinobi-migrate.service \
   /usr/lib/systemd/user/shinobi-desktop.target \
   /usr/lib/systemd/user/shinobi-shell.service \
   /usr/share/plymouth/themes/shinobi/shinobi.script \
-  /usr/share/shinobi-dotfiles/etc/skel/.config/hypr/colors.conf
+  /usr/share/shinobi-dotfiles/etc/skel/.config/hypr/colors.conf \
+  /usr/share/shinobi-dotfiles/etc/skel/.config/hypr/input.conf
 do
   grep -Fq "squashfs-root$path" "$listing" || {
     echo "image-test: missing image path: $path" >&2

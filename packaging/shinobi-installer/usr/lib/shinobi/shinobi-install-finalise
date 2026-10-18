@@ -32,6 +32,18 @@ else
   exit 1
 fi
 
+# --- the layout that was chosen has to be the layout that was written --------
+# The wizard's keyboard job runs before this step and writes /etc/default/keyboard (what
+# the desktop session follows) and the X11 keyboard file (what the login screen reads). For
+# a layout that cannot type ASCII it writes the variant one entry short, which makes xkb
+# reject the whole layout; shinobi-keyboard puts the entry back. It is in shinobi-desktop,
+# which a console install does not have and does not need it for: no desktop, no session
+# to disagree with.
+if [ -x /usr/lib/shinobi/shinobi-keyboard ]; then
+  /usr/lib/shinobi/shinobi-keyboard repair || \
+    echo "install-finalise: the keyboard files could not be checked; a layout with a variant may not load" >&2
+fi
+
 # --- nothing about this session should survive onto the disk ----------------
 # The one that would matter most.
 #
