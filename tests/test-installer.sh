@@ -176,6 +176,10 @@ check "and finish likewise" \
   "$(sed -e 's/[[:space:]]*#.*$//' "$CONF/modules/shellprocess@finish.conf" | grep -cE '^[[:space:]]*-[[:space:]]+command:[[:space:]]*"/usr/lib/shinobi/shinobi-install-finalise"[[:space:]]*$' || true)" "1"
 check "neither configuration uses a key shellprocess does not have" \
   "$(cat "$CONF/modules/shellprocess@prep.conf" "$CONF/modules/shellprocess@finish.conf" | sed -e 's/[[:space:]]*#.*$//' | grep -cE '^[[:space:]]+(args|arguments):' || true)" "0"
+check "the finish step has time to rebuild an initramfs (Calamares' default of 30 s kills it)" \
+  "$(sed -e 's/[[:space:]]*#.*$//' "$CONF/modules/shellprocess@finish.conf" | awk '/^timeout:/ {print ($2 >= 600) ? "yes" : "no"}')" "yes"
+check "umount runs after a failed job, or a failed install leaves the target mounted" \
+  "$(sed -e 's/[[:space:]]*#.*$//' "$CONF/modules/umount.conf" | grep -cE '^emergency:[[:space:]]*true' || true)" "1"
 check "and neither wraps the script in a chroot of its own, which would run inside the one Calamares enters" \
   "$(cat "$CONF/modules/shellprocess@prep.conf" "$CONF/modules/shellprocess@finish.conf" | sed -e 's/[[:space:]]*#.*$//' | grep -cE 'command:[[:space:]]*"?chroot' || true)" "0"
 check "both stay in the target (dontChroot is false, which is what makes Calamares enter it)" \
