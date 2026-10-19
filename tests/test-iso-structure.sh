@@ -65,9 +65,11 @@ if [[ ! -s $entries/live.cfg ]]; then
   rm -rf "$entries"
   exit 1
 fi
-if grep -qiE 'username=kali|hostname=kali|kali\.org' "$entries/live.cfg"; then
+# Comment lines are skipped: the file explains the problem by naming it, and syslinux does not
+# read a comment.
+if grep -vE '^[[:space:]]*#' "$entries/live.cfg" | grep -qiE 'username=kali|hostname=kali|kali\.org'; then
   echo "iso-test: a BIOS live entry still names Kali:" >&2
-  grep -niE 'username=kali|hostname=kali|kali\.org' "$entries/live.cfg" | sed 's/^/  /' >&2
+  grep -vE '^[[:space:]]*#' "$entries/live.cfg" | grep -niE 'username=kali|hostname=kali|kali\.org' | sed 's/^/  /' >&2
   rm -rf "$entries"
   exit 1
 fi
