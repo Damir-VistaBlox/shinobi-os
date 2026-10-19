@@ -18,6 +18,16 @@ grep -Eqi 'El Torito|Boot catalog|boot image' "$report" || {
   exit 1
 }
 
+echo "== The medium is labelled as Shinobi =="
+# `Volume id` is what a file manager and blkid show for the stick, and Kali's build
+# configuration names it "Kali Live".
+volume_id="$(grep -E '^Volume id' "$report" | sed -e "s/^[^']*'//" -e "s/'.*$//")"
+if [[ -z "$volume_id" || "$volume_id" == *[Kk]ali* ]]; then
+  echo "iso-test: the ISO's volume id is '${volume_id}', not Shinobi's" >&2
+  exit 1
+fi
+echo "volume id: $volume_id"
+
 echo "== Boot menus carry no unsubstituted placeholder =="
 # live-build fills @LINUX@, @INITRD@, @APPEND_LIVE@ and friends into the boot menu
 # files it generates from its templates, and only those. A placeholder in an overlay

@@ -118,6 +118,15 @@ if ! grep -q '^[[:space:]]*--chroot-squashfs-compression-type ' "$AUTO_CONFIG"; 
   mv "$AUTO_CONFIG.shinobi" "$AUTO_CONFIG"
 fi
 
+# The medium's identity. Kali's auto/config names the ISO "Kali Live" (volume id), "Kali
+# Linux" (application) and "Kali" (publisher); the volume id is what a file manager and
+# `blkid` show for the stick. Idempotent, like the compression patch above.
+sed -i \
+  -e 's|--iso-volume "Kali Live"|--iso-volume "Shinobi OS"|' \
+  -e 's|--iso-application "Kali Linux"|--iso-application "Shinobi OS"|' \
+  -e 's|--iso-publisher "Kali"|--iso-publisher "Shinobi OS, built on Kali Linux"|' \
+  "$AUTO_CONFIG"
+
 echo "== Building (variant $SHINOBI_VARIANT; SquashFS $SHINOBI_SQUASHFS_COMPRESSION level $SHINOBI_SQUASHFS_LEVEL) =="
 cd "$SUBMODULE"
 exec ./build.sh --variant "$SHINOBI_VARIANT" "$@"
