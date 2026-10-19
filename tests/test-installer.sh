@@ -135,8 +135,8 @@ check "the instance declarations are maps, not bare names" \
 check "each config file exists" \
   "$([[ -s "$CONF/modules/shellprocess@prep.conf" && -s "$CONF/modules/shellprocess@finish.conf" ]] && echo yes || echo no)" "yes"
 
-prep_scripts=$(grep -c -- '- command: chroot' "$CONF/modules/shellprocess@prep.conf" || true)
-finish_scripts=$(grep -c -- '- command: chroot' "$CONF/modules/shellprocess@finish.conf" || true)
+prep_scripts=$(grep -cE '^[[:space:]]*-[[:space:]]+command:' "$CONF/modules/shellprocess@prep.conf" || true)
+finish_scripts=$(grep -cE '^[[:space:]]*-[[:space:]]+command:' "$CONF/modules/shellprocess@finish.conf" || true)
 check "prep runs commands" "$([[ $prep_scripts -ge 1 ]] && echo yes || echo no)" "yes"
 check "finish runs commands" "$([[ $finish_scripts -ge 1 ]] && echo yes || echo no)" "yes"
 
@@ -164,18 +164,39 @@ finish="$PKG/usr/lib/shinobi/shinobi-install-finalise"
 check "both scripts ship" \
   "$([[ -x $prep && -x $finish ]] && echo yes || echo no)" "yes"
 prep_args() { sed -e 's/[[:space:]]*#.*$//' -e '/^[[:space:]]*$/d' "$CONF/modules/shellprocess@prep.conf"; }
-# command: and args: are separate YAML keys, so this asserts the two halves
-# rather than a joined command line that never appears in the file.
-check "the wizard runs prep inside a chroot" \
-  "$(prep_args | grep -c 'command: chroot' || true)" "1"
-check "calling the shipped script" \
-  "$(prep_args | grep -c 'args:.*shinobi-install-prep' || true)" "1"
+# Calamares' shellprocess has no `args:` key: a script entry is a command string
+# (and an optional timeout), and anything else is silently dropped. A config with
+# `command: chroot` and `args: [ /target, <script> ]` therefore ran a bare `chroot`,
+# failed the install at "chroot: missing operand", and passed every check that read
+# the file. With `dontChroot: false` Calamares enters the target itself, so the
+# command is the script and nothing else.
+check "the wizard runs prep as its own command" \
+  "$(prep_args | grep -cE '^[[:space:]]*-[[:space:]]+command:[[:space:]]*"/usr/lib/shinobi/shinobi-install-prep"[[:space:]]*$' || true)" "1"
 check "and finish likewise" \
-  "$(sed -e 's/[[:space:]]*#.*$//' "$CONF/modules/shellprocess@finish.conf" | grep -c 'args:.*shinobi-install-finalise' || true)" "1"
-check "with no shell string left in the configuration to quote wrongly" \
-  "$(cat "$CONF/modules/shellprocess@prep.conf" "$CONF/modules/shellprocess@finish.conf" | grep -c 'args:.*-c' || true)" "0"
+  "$(sed -e 's/[[:space:]]*#.*$//' "$CONF/modules/shellprocess@finish.conf" | grep -cE '^[[:space:]]*-[[:space:]]+command:[[:space:]]*"/usr/lib/shinobi/shinobi-install-finalise"[[:space:]]*$' || true)" "1"
+check "neither configuration uses a key shellprocess does not have" \
+  "$(cat "$CONF/modules/shellprocess@prep.conf" "$CONF/modules/shellprocess@finish.conf" | sed -e 's/[[:space:]]*#.*$//' | grep -cE '^[[:space:]]+(args|arguments):' || true)" "0"
+check "the finish step has time to rebuild an initramfs (Calamares' default of 30 s kills it)" \
+  "$(sed -e 's/[[:space:]]*#.*$//' "$CONF/modules/shellprocess@finish.conf" | awk '/^timeout:/ {print ($2 >= 600) ? "yes" : "no"}')" "yes"
+check "umount runs after a failed job, or a failed install leaves the target mounted" \
+  "$(sed -e 's/[[:space:]]*#.*$//' "$CONF/modules/umount.conf" | grep -cE '^emergency:[[:space:]]*true' || true)" "1"
+check "and neither wraps the script in a chroot of its own, which would run inside the one Calamares enters" \
+  "$(cat "$CONF/modules/shellprocess@prep.conf" "$CONF/modules/shellprocess@finish.conf" | sed -e 's/[[:space:]]*#.*$//' | grep -cE 'command:[[:space:]]*"?chroot' || true)" "0"
+check "both stay in the target (dontChroot is false, which is what makes Calamares enter it)" \
+  "$(cat "$CONF/modules/shellprocess@prep.conf" "$CONF/modules/shellprocess@finish.conf" | sed -e 's/[[:space:]]*#.*$//' | grep -cE '^dontChroot:[[:space:]]*false' || true)" "2"
 
 unpack_sources=$(grep -cE '^[[:space:]]*-[[:space:]]+source:' "$CONF/modules/unpackfs.conf" || true)
+# Calamares validates every entry before it copies anything, so one entry it cannot
+# use fails the install even if an earlier one would have worked: a fallback source
+# with `sourcefs: "directory"` shipped, and the first boot of an image that had it
+# stopped at "Bad unpackfs configuration". "squashfs" is the one value this image
+# uses, so it is the one value the test allows.
+check "the image has at least one unpack source" \
+  "$([[ $unpack_sources -ge 1 ]] && echo yes || echo no)" "yes"
+check "every unpack source is a squashfs, the one filesystem type the image ships" \
+  "$(grep -cE '^[[:space:]]*sourcefs:[[:space:]]*"squashfs"[[:space:]]*$' "$CONF/modules/unpackfs.conf" || true)" "$unpack_sources"
+check "no source names a filesystem type Calamares does not know" \
+  "$(grep -E '^[[:space:]]*sourcefs:' "$CONF/modules/unpackfs.conf" | grep -vcE '"squashfs"' || true)" "0"
 for excluded in '/home/*' '/root/*' 'sudoers.d/live'; do
   occurrences=$(grep -cF -- "$excluded" "$CONF/modules/unpackfs.conf" || true)
   # Once per source. An exclusion on the first source only leaves the fallback
