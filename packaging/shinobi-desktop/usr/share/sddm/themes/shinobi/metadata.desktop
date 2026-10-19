@@ -1,0 +1,12 @@
+[SddmGreeterTheme]
+Name=Shinobi OS
+Description=A dark, quiet login screen that matches the Shinobi OS lock screen
+Author=Shinobi OS
+Version=1.0
+Type=sddm-theme
+QtVersion=6
+MainScript=Main.qml
+ConfigFile=theme.conf
+Preview=preview.jpg
+Theme-Id=shinobi
+Theme-API=2.0
