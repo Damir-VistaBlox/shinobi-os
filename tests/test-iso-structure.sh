@@ -39,6 +39,41 @@ if [[ -n "$leftover" ]]; then
 fi
 echo "no placeholder left in the BIOS or UEFI menus"
 
+echo "== The image names itself, in the places it is read =="
+# The volume id is what a file manager calls the medium; it said "Kali Live". It sits in the
+# ISO 9660 primary volume descriptor, 40 bytes into the sector at 0x8000, 32 bytes wide.
+volume_id="$(python3 -I - "$ISO" <<'PYIN'
+import sys
+with open(sys.argv[1], "rb") as iso:
+    iso.seek(0x8000)
+    descriptor = iso.read(2048)
+print(descriptor[40:72].decode("ascii", "replace").strip() if descriptor[1:6] == b"CD001" else "(no volume descriptor)")
+PYIN
+)"
+if [[ $volume_id == "Shinobi OS Live" ]]; then
+  echo "volume id: $volume_id"
+else
+  echo "iso-test: the volume id is '$volume_id', not 'Shinobi OS Live'" >&2
+  exit 1
+fi
+# The BIOS live entries come from Kali's template unless an overlay replaces it; two of its
+# entries named the account `kali` on the command line, which beats the image's own setting.
+entries="$(mktemp -d)"
+xorriso -osirrox on -indev "$ISO" -extract /isolinux/live.cfg "$entries/live.cfg" >/dev/null 2>&1 || true
+if [[ ! -s $entries/live.cfg ]]; then
+  echo "iso-test: could not read /isolinux/live.cfg out of the ISO" >&2
+  rm -rf "$entries"
+  exit 1
+fi
+if grep -qiE 'username=kali|hostname=kali|kali\.org' "$entries/live.cfg"; then
+  echo "iso-test: a BIOS live entry still names Kali:" >&2
+  grep -niE 'username=kali|hostname=kali|kali\.org' "$entries/live.cfg" | sed 's/^/  /' >&2
+  rm -rf "$entries"
+  exit 1
+fi
+rm -rf "$entries"
+echo "no BIOS live entry names Kali"
+
 echo "== ISO boot files =="
 listing="$(mktemp)"
 # `-print` is not a portable xorriso find action. `lsdl` is supported by the

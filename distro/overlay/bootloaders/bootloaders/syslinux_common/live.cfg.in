@@ -1,0 +1,44 @@
+# The BIOS live entries, in Shinobi's names.
+#
+# Kali's own live.cfg.in is the template live-build turns into live.cfg, and its forensic,
+# persistence and encrypted-persistence entries name the live account and the hostname
+# `kali` on the kernel command line -- which beats /etc/live/config.conf.d, so choosing one
+# of them gave a live session whose account was `kali` on an image that is otherwise
+# Shinobi from the login prompt down. The persistence entry also sent the reader to
+# kali.org. This file replaces that one (the overlay is merged over kali-config/common,
+# which is how menu.cfg is replaced too) with the same entries under the live account's
+# real name, and nothing else changed: same kernel parameters, same order, same default.
+#
+# The GRUB menu (grub-pc/grub.cfg) already names the account `shinobi` on its entries.
+# @FLAVOUR@, @LINUX@, @INITRD@ and the @APPEND_LIVE*@ strings are live-build's, substituted
+# in this template and in no other file.
+label live-@FLAVOUR@
+        menu label ^Live system (@FLAVOUR@)
+        menu default
+        linux @LINUX@
+        initrd @INITRD@
+        append @APPEND_LIVE@
+
+label live-@FLAVOUR@-failsafe
+        menu label Live system (@FLAVOUR@ fail-safe mode)
+        linux @LINUX@
+        initrd @INITRD@
+        append @APPEND_LIVE_FAILSAFE@
+
+label live-forensic
+        menu label Live system (@FLAVOUR@ ^forensic mode)
+        linux @LINUX@
+        initrd @INITRD@
+        append boot=live username=shinobi hostname=shinobi systemd.swap=no noautomount
+
+label live-persistence
+        menu label Live system with ^USB persistence
+        linux @LINUX@
+        initrd @INITRD@
+        append boot=live username=shinobi hostname=shinobi persistence
+
+label live-encrypted-persistence
+        menu label Live system with USB ^Encrypted persistence
+        linux @LINUX@
+        initrd @INITRD@
+        append boot=live persistent=cryptsetup persistence-encryption=luks username=shinobi hostname=shinobi persistence

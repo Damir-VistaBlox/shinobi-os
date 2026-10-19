@@ -118,6 +118,24 @@ if ! grep -q '^[[:space:]]*--chroot-squashfs-compression-type ' "$AUTO_CONFIG"; 
   mv "$AUTO_CONFIG.shinobi" "$AUTO_CONFIG"
 fi
 
+# The ISO's own labels. The volume id is what a file manager shows for the medium and what
+# `lsblk -o LABEL` prints; it said "Kali Live" on an image that is Shinobi everywhere else.
+# Nothing finds the medium by it (live-boot looks for /live/filesystem.squashfs, GRUB for a
+# file), so it is a label and not a handle. Applied by exact match, and checked after, so a
+# kali-live that spells these differently fails the build here and does not quietly ship the
+# old names. Idempotent: the staged checkout is reused.
+sed -i \
+  -e 's|--iso-application "Kali Linux"|--iso-application "Shinobi OS"|' \
+  -e 's|--iso-publisher "Kali"|--iso-publisher "Shinobi OS"|' \
+  -e 's|--iso-volume "Kali Live"|--iso-volume "Shinobi OS Live"|' \
+  "$AUTO_CONFIG"
+for label in 'application "Shinobi OS"' 'publisher "Shinobi OS"' 'volume "Shinobi OS Live"'; do
+  grep -q -- "--iso-$label" "$AUTO_CONFIG" || {
+    echo "shinobi: $AUTO_CONFIG has no --iso-$label after relabelling the ISO; kali-live changed how it names these" >&2
+    exit 1
+  }
+done
+
 echo "== Building (variant $SHINOBI_VARIANT; SquashFS $SHINOBI_SQUASHFS_COMPRESSION level $SHINOBI_SQUASHFS_LEVEL) =="
 cd "$SUBMODULE"
 exec ./build.sh --variant "$SHINOBI_VARIANT" "$@"

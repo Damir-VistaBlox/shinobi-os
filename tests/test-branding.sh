@@ -76,7 +76,7 @@ allowlist() {
 # label, a hostname, an account name or a package description.
 strip_comments() {
   case "$1" in
-    *.cfg | *grub.cfg | *.conf | *.desc | *.desktop)
+    *.cfg | *.cfg.in | *grub.cfg | *.conf | *.desc | *.desktop)
       # Whole-line comments first, then trailing ones: a boot menu and a QML
       # file are mostly comments, and requiring whitespace before the marker
       # misses every one of them.
@@ -97,6 +97,10 @@ allowed_mentions=(
   'menuentry "Kali installer'
   # The same, named on the speech-synthesis entry.
   'menuentry "Kali installer with speech synthesis'
+  # The BIOS menu's way of saying the same thing: live-build generates Kali's installer
+  # entries (install.cfg), and they go in a submenu that says what they install.
+  'menu label ^Kali installer (installs Kali, not Shinobi OS)'
+  'menu title Kali installer: installs Kali, not Shinobi OS'
 )
 
 section "no operator-visible text presents Kali as the product"
@@ -139,6 +143,29 @@ check "the syslinux installer entry is labelled as Shinobi's" \
   "$(grep -c 'menu label \^Install Shinobi OS' "$syslinux" || true)" "1"
 check "the GRUB menu keeps the live entry" \
   "$(grep -c 'menuentry "Live system (@FLAVOUR_LIVE@ forensic mode)"' "$grub" || true)" "1"
+
+section "the BIOS live entries and the ISO's own labels are Shinobi's too"
+# live-build builds the BIOS live menu from Kali's template, whose forensic and persistence
+# entries put username=kali hostname=kali on the command line (which beats the image's own
+# configuration) and send the reader of one of them to kali.org.
+live_in="$ROOT/distro/overlay/bootloaders/bootloaders/syslinux_common/live.cfg.in"
+check "an overlay replaces Kali's live.cfg.in" "$([[ -f $live_in ]] && echo yes || echo no)" "yes"
+check "no BIOS live entry names the account or the host after Kali" \
+  "$(grep -vE '^[[:space:]]*#' "$live_in" | grep -ciE 'username=kali|hostname=kali' || true)" "0"
+check "the forensic, persistence and encrypted-persistence entries name them shinobi" \
+  "$(grep -vE '^[[:space:]]*#' "$live_in" | grep -c 'username=shinobi hostname=shinobi' || true)" "3"
+check "none sends the operator to Kali's site" \
+  "$(grep -vE '^[[:space:]]*#' "$live_in" | grep -ci 'kali\.org' || true)" "0"
+check "the template's own placeholders are all still there (live-build fills them)" \
+  "$(grep -vE '^[[:space:]]*#' "$live_in" | grep -oE '@(FLAVOUR|LINUX|INITRD|APPEND_LIVE|APPEND_LIVE_FAILSAFE)@' | sort -u | wc -l | tr -d ' ')" "5"
+check "Kali's own installer is behind a submenu that says what it installs" \
+  "$(awk '/menu begin kali-installer/{open=1} open && /@OPTIONAL_INSTALLER_INCLUDE@/{print "yes"; exit} /^menu end/{open=0}' "$menu")" "yes"
+check "and the placeholder appears nowhere else in the menu" \
+  "$(grep -vE '^[[:space:]]*#' "$menu" | grep -c '@OPTIONAL_INSTALLER_INCLUDE@' || true)" "1"
+check "build.sh relabels the ISO's volume, application and publisher" \
+  "$(grep -c -E "^[[:space:]]+-e 's\|--iso-(volume \"Kali Live\"\|--iso-volume \"Shinobi OS Live\"|application \"Kali Linux\"\|--iso-application \"Shinobi OS\"|publisher \"Kali\"\|--iso-publisher \"Shinobi OS\")\|' " "$ROOT/distro/build.sh" || true)" "3"
+check "and fails the build if kali-live spelled them differently, instead of shipping the old names" \
+  "$(grep -c -- 'after relabelling the ISO' "$ROOT/distro/build.sh" || true)" "1"
 
 section "the live session is named, not renamed"
 # The account is created as shinobi. Kali's live entries pass `username=kali` on
