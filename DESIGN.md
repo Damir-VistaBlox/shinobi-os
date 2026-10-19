@@ -396,10 +396,15 @@ distro. Ported so far, all under `bin/shinobi-*`:
   `/usr/lib/sddm/sddm.conf.d/90-shinobi-theme.conf`, so an operator's own
   `/etc/sddm.conf.d` always wins and an upgrade never overwrites it): the wallpaper, the mark, a clock, the
   account and one password field, in the lock screen's palette so that locking and
-  logging in look like the same place. Plain QtQuick only (no Controls, no effects
-  module: the greeter runs as an unprivileged user on a minimal image and a theme that
-  needs an optional Qt module shows nothing at all), with the wallpaper pre-darkened
-  rather than blurred at runtime. The same file turns off SDDM's built-in on-screen
+  logging in look like the same place. On a system with more than one keyboard layout
+  (`us,ru`) a small chip beside the field names the layout the password is being typed
+  in and a click moves to the next; it is hidden with one layout and binds no key of its
+  own, since the keymap's Alt+Shift already switches and the chip follows it. It shows
+  the layout the greeter's keymap (`00-keyboard.conf`) provides: a visibility aid, not
+  what makes the session and the lock screen type the same layout. Plain QtQuick only
+  (no Controls, no effects module: the greeter runs as an unprivileged user on a minimal
+  image and a theme that needs an optional Qt module shows nothing at all), with the
+  wallpaper pre-darkened rather than blurred at runtime. The same file turns off SDDM's built-in on-screen
   keyboard, which the image has installed and which otherwise covers the password
   field. A second drop-in orders `sddm.service` after `plymouth-quit.service`: Debian's
   unit does not, so SDDM and Plymouth start together, SDDM takes tty2 because Plymouth

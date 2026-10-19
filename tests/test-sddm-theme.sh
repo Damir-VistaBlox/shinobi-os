@@ -77,6 +77,8 @@ check "and is not offered to predictive text" \
   "$(qml_code | grep -cE 'ImhNoPredictiveText' || true)" "1"
 check "login goes through SDDM, with the chosen account and session" \
   "$(qml_code | grep -cE 'sddm\.login\(currentLogin, password\.text, sessionModel\.lastIndex\)' || true)" "1"
+check "the keyboard layout chip switches layouts the way SDDM offers (by writing keyboard.currentLayout), and binds no key of its own (the keymap's Alt+Shift already toggles, and a second toggle would cancel it)" \
+  "$(qml_code | grep -cE 'keyboard\.currentLayout = ' || true)/$(qml_code | grep -cE 'Keys\.on(Tab|Shift|Alt|Control|F[0-9]+)Pressed' || true)" "1/0"
 check "the image sizes are sensible (the wallpaper is a JPEG, not the 1.5 MiB PNG)" \
   "$([[ $(file -b "$THEME/background.jpg") == JPEG* && $(stat -c %s "$THEME/background.jpg") -lt 400000 ]] && echo yes || echo no)" "yes"
 check "the mark has a transparent background" \
