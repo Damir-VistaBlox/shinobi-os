@@ -281,11 +281,17 @@ helper set --layout de
 check "nor in the runtime directory" "$(ls -A "$run/shinobi")" "keyboard"
 
 section "the variant Calamares drops from the files is put back"
-# Real xkbcommon, because "this variant is wrong" is the claim.
+# Real xkbcommon, because "this variant is wrong" is the claim. What a library does with a
+# variant that does not exist for its layout depends on its version: xkbcommon 1.13 (Kali)
+# refuses to compile the keymap ("Couldn't process include statement for 'us(phonetic)'"),
+# and Hyprland then falls back to plain `us`; an older one, as on a hosted runner, compiles
+# it with the variant dropped, so Russian is the plain layout and not the phonetic one. Either
+# way the layout the operator chose is not what the files give, which is the claim.
 if [[ $have_xkb == yes ]]; then
-  broken_rc=0
-  xkb type privet us,ru phonetic >/dev/null 2>&1 || broken_rc=$?
-  check "the files for Russian (phonetic), as Calamares writes them, are not a keymap xkb compiles" "$broken_rc" "1"
+  cyr_phonetic="$(xkb type 'привет' us,ru ,phonetic grp:alt_shift_toggle pc105 1)"
+  as_written="$(xkb decode "$cyr_phonetic" us,ru phonetic grp:alt_shift_toggle pc105 1 2>/dev/null || true)"
+  check "the files for Russian (phonetic), as Calamares writes them, do not give the layout that was chosen" \
+    "$([[ $as_written == "привет" ]] && echo gives-it || echo does-not)" "does-not"
 fi
 fresh
 python3 -I "$CALAMARES" default ru phonetic >"$sysfile"

@@ -563,10 +563,12 @@ What reaches the session now:
   For a layout that cannot type ASCII (Russian, Ukrainian and about forty others)
   Calamares adds `us` in front and writes the variant by dropping every empty entry,
   so Russian (phonetic) becomes `XKBLAYOUT="us,ru"` with `XKBVARIANT="phonetic"`.
-  xkb pairs variants with layouts by position, asks for `us(phonetic)`, and the keymap
-  does not compile; Hyprland answers with plain `us` and no message (xkbcommon's
-  own error: `Couldn't process include statement for 'us(phonetic)'`). The empty
-  entry is put back in both files (`,phonetic`).
+  xkb pairs variants with layouts by position and asks for `us(phonetic)`. With
+  xkbcommon 1.13 (Kali's) the keymap does not compile (`Couldn't process include
+  statement for 'us(phonetic)'`) and Hyprland answers with plain `us` and no message;
+  an older xkbcommon compiles it with the variant dropped, so Russian is not the
+  phonetic layout. Either way it is not what was chosen. The empty entry is put back
+  in both files (`,phonetic`).
 
 Two corrections to what an earlier revision of this file said. The wizard's keyboard
 page offers every layout in xkb's `base.lst`, not the eleven in `keyboard.conf`:
