@@ -83,6 +83,29 @@ Rectangle {
         failed = false
     }
 
+    // The keyboard layouts SDDM knows (`keyboard.layouts`, one object per XKB group, from
+    // the greeter's X keymap: `us,ru` on a two-layout system) and the one that is active.
+    // Read off `keyboard` with a guard, as the Caps Lock line is: a greeter without a
+    // keyboard backend hands over an empty list, and a missing object must not blank the
+    // screen.
+    readonly property int layoutCount: (keyboard && keyboard.layouts) ? keyboard.layouts.length : 0
+    readonly property string layoutName: {
+        if (layoutCount < 2)
+            return ""
+        var layout = keyboard.layouts[keyboard.currentLayout]
+        return (layout && layout.shortName) ? String(layout.shortName).toUpperCase() : "?"
+    }
+
+    // Writing `currentLayout` is how a theme switches the group. There is deliberately no
+    // key for it in this file: the XKB toggle in the keymap (Alt+Shift) already switches
+    // the group, SDDM reports that through the same property, and the chip follows. A
+    // second binding here would toggle again and cancel it out.
+    function nextLayout() {
+        if (layoutCount < 2)
+            return
+        keyboard.currentLayout = (keyboard.currentLayout + 1) % layoutCount
+    }
+
     function submit() {
         if (busy || password.text.length === 0)
             return
@@ -385,6 +408,47 @@ Rectangle {
                 NumberAnimation { target: field; property: "shift"; to: -8 * root.u; duration: 70 }
                 NumberAnimation { target: field; property: "shift"; to: 8 * root.u; duration: 60 }
                 NumberAnimation { target: field; property: "shift"; to: 0; duration: 50 }
+            }
+
+            // Which layout the password is being typed in, beside the field. Shown only
+            // when there is a choice, so a one-layout system sees nothing new; a click
+            // moves to the next layout. It hangs off the field rather than the box, so
+            // it does not shake with a failed login, and it takes no room in the column,
+            // so the form stays centred.
+            Rectangle {
+                objectName: "layoutChip"
+                visible: root.layoutCount > 1
+                anchors.left: parent.right
+                anchors.leftMargin: 12 * root.u
+                anchors.verticalCenter: parent.verticalCenter
+                width: Math.max(44 * root.u, layoutLabel.width + 20 * root.u)
+                height: 30 * root.u
+                radius: 6 * root.u
+                color: Qt.rgba(0.118, 0.118, 0.180, 0.86)
+                border.width: 1
+                border.color: layoutArea.containsMouse ? root.accent : root.line
+
+                Behavior on border.color { ColorAnimation { duration: 140 } }
+
+                Text {
+                    id: layoutLabel
+                    anchors.centerIn: parent
+                    text: root.layoutName
+                    color: layoutArea.containsMouse ? root.accent : root.text
+                    font.family: root.mono
+                    font.pixelSize: 13 * root.u
+                    font.letterSpacing: 2 * root.u
+                    elide: Text.ElideRight
+                    width: Math.min(implicitWidth, 72 * root.u)
+                }
+                MouseArea {
+                    id: layoutArea
+                    objectName: "layoutChipArea"
+                    anchors.fill: parent
+                    hoverEnabled: true
+                    cursorShape: Qt.PointingHandCursor
+                    onClicked: root.nextLayout()
+                }
             }
         }
 
