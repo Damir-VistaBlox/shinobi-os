@@ -82,12 +82,19 @@ class Monitor:
         self._drain()
 
     def _drain(self):
+        # Read what the monitor has said, and stop as soon as it has said it: a blocking read
+        # that waits out the socket's timeout costs that long for every key pressed (five
+        # seconds each, once), which is slow, and worse, slower than a list widget's
+        # type-ahead (about 400 ms), so "german" typed into the layout list arrived as "n".
+        self.sock.settimeout(0.05)
         try:
             while True:
                 if not self.sock.recv(65536):
                     break
         except OSError:
             pass
+        finally:
+            self.sock.settimeout(5)
 
     def command(self, line, pause=0.1):
         self.sock.sendall(line.encode() + b"\n")

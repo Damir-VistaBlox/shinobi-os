@@ -112,7 +112,15 @@ check "keys sends one sendkey per key, expanding NAME*COUNT" \
   "$(grep -c '^sendkey' <(head -4 "$work/mon.log") || true)|$(sed -n '1,4p' "$work/mon.log" | tr '\n' ',')" \
   "4|sendkey a,sendkey b,sendkey b,sendkey ret,"
 check "type sends the keys of the layout, and Enter" \
-  "$(sed -n '5,7p' "$work/mon.log" | tr '\n' ',')" "sendkey y,sendkey z,sendkey ret,"
+  "$(sed -n "5,7p" "$work/mon.log" | tr '\n' ',')" "sendkey y,sendkey z,sendkey ret,"
+# A list widget's type-ahead forgets what was typed after about 400 ms, so typing must not be
+# slower than that between keys. It used to take five seconds a key, because reading the
+# monitor's reply waited for the socket to time out, and "german" arrived as "n".
+started=$(date +%s.%N)
+drive --monitor "$work/mon.sock" type --gap 0 'abcdefghijklmnopqrstuvwxyz0123'
+elapsed=$(python3 -I -c "print(round($(date +%s.%N) - $started, 1))")
+check "thirty keys are typed in well under a second each, so type-ahead sees one word" \
+  "$(python3 -I -c "print('fast' if $elapsed < 4 else 'slow')")" "fast"
 check "shot asks for a screendump" "$(grep -c '^screendump ' "$work/mon.log" || true)" "1"
 check "and writes a PNG of the screen's size" \
   "$(python3 -I - "$work/shot.png" <<'PY'
