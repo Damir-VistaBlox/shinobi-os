@@ -40,6 +40,7 @@ SOURCE_TESTS=(
   tests/test-installer.sh
   tests/test-installer-autostart.sh
   tests/test-keyboard.sh
+  tests/test-vm-harness.sh
   tests/test-branding.sh
   tests/test-sddm-theme.sh
   tests/test-docs.sh

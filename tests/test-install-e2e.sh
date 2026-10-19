@@ -1,28 +1,55 @@
 #!/usr/bin/env bash
-# End-to-end: boot the image, install with the Shinobi Installation Wizard, boot
-# what was installed, and check it.
+# End to end: boot the image, install it with the Shinobi Installation Wizard the way a
+# person would, boot what was installed, log in at the login screen, and check it.
 #
-# Every other suite in this repository checks that the tree is coherent. This one
-# checks that the product works, and it is the only place three of the claimed
-# fixes are actually exercised: the account rename, the RuntimeDirectory fix, and
-# the wizard at all. Each of those shipped into a package or a config that
-# passes every local check and cannot start without a boot.
+# Every other suite checks that the tree is coherent. This one checks that the product
+# works, and it is the only place a good deal of the claims are exercised: the wizard
+# installs at all, the account it creates can log in, the layer arrived, and -- the
+# thing that was wrong for a long time -- the password typed in the wizard is the
+# password the login screen and the lock screen read.
 #
-# It needs an image, and building one needs the runner. Without
-# SHINOBI_E2E_ISO it skips with an explanation rather than passing quietly,
-# because a suite that skips is easy to mistake for a suite that ran.
+# How it drives a guest that has no serial login and no ssh:
+#   - keys go in through QEMU's monitor, as presses of physical keys (tests/vm-drive.py),
+#     translated for the layout under test with the real xkb library, so it types like a
+#     person with that keyboard: `SHINOBI_E2E_LAYOUT=de` presses the keys a German keyboard
+#     has a Z and a Y on, and the guest reads them through whatever layout it is really on;
+#   - commands run in the guest through a small agent over QEMU's network
+#     (tests/vm-agent.py on the host, tests/fixtures/guest-agent.sh in the guest), started
+#     once by typing a single line into a terminal.
+# The wizard's pages are driven from the keyboard, with Alt+N and friends. Pointer input
+# does not reach this desktop under QEMU, and xdotool does not work on Wayland, which is
+# what an earlier version of this file used.
 #
-#   SHINOBI_E2E_ISO=~/shinobi-iso-dl/shinobi-os-amd64.iso ./tests/test-install-e2e.sh
+# The assertions that need no guest are in test-vm-harness.sh, which is in run-all.sh. This
+# needs an image and KVM and takes about 20 minutes, so it is not; without
+# SHINOBI_E2E_ISO it skips with an explanation, because a suite that skips is easy to
+# mistake for a suite that ran.
 #
-# Requirements: qemu-system-x86_64, KVM, and ~25 minutes of wall clock.
+#   SHINOBI_E2E_ISO=distro/kali-live/images/shinobi.iso ./tests/test-install-e2e.sh
+#   SHINOBI_E2E_LAYOUT=de SHINOBI_E2E_ISO=... ./tests/test-install-e2e.sh
+#
+# Settings:
+#   SHINOBI_E2E_LAYOUT       us (default), de, fr, es, it, pt, nl, se, gb, ru or ua
+#   SHINOBI_E2E_WORK         where the run's disk and logs go (default ~/.cache/shinobi-e2e;
+#                            not /tmp, which is often a RAM disk with a quota: a 20 GB disk
+#                            filled one and made the installer fail with a missing directory)
+#   SHINOBI_E2E_KEEP=1       keep the work directory (kept anyway on a failure)
+#   SHINOBI_E2E_MENU_DOWN    how many entries to move down the BIOS boot menu to reach
+#                            "Install Shinobi OS" (default 5)
+#
+# Requirements: qemu-system-x86_64, KVM, python3, libxkbcommon0 and xkb-data, curl.
 set -uo pipefail
 
 ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 ISO="${SHINOBI_E2E_ISO:-}"
-WORK="${SHINOBI_E2E_WORK:-$(mktemp -d)}"
+LAYOUT="${SHINOBI_E2E_LAYOUT:-us}"
 KEEP="${SHINOBI_E2E_KEEP:-0}"
-BOOT_TIMEOUT="${SHINOBI_E2E_BOOT_TIMEOUT:-900}"
-INSTALL_TIMEOUT="${SHINOBI_E2E_INSTALL_TIMEOUT:-3600}"
+MENU_DOWN="${SHINOBI_E2E_MENU_DOWN:-5}"
+DRIVE="$ROOT/tests/vm-drive.py"
+SELFTEST="$ROOT/tests/fixtures/shinobi-selftest"
+# A throwaway password for a throwaway machine. It is typed as this string on whatever
+# keyboard the layout under test has, and has letters (y and z) that move between layouts.
+PASSWORD="y7z2q9k4y1z8"
 
 failures=0
 checks=0
@@ -37,14 +64,6 @@ check() {
 }
 section() { printf '\n== %s ==\n' "$1"; }
 
-cleanup() {
-  if [[ $KEEP == 0 ]]; then
-    rm -rf "$WORK"
-  else
-    echo "e2e: kept $WORK"
-  fi
-}
-
 if [[ -z $ISO ]]; then
   echo "e2e: SKIP (no image. Set SHINOBI_E2E_ISO, or build one with distro/build.sh)"
   echo "e2e:       This suite is the only thing that boots the product; a green"
@@ -52,33 +71,30 @@ if [[ -z $ISO ]]; then
   exit 0
 fi
 
-printf 'e2e: the assertions this suite makes are checked here first, without an\n'
-printf 'e2e: image, because a harness that cannot say what it is looking for is a\n'
-printf 'e2e: harness that cannot tell a failure from a hang.\n\n'
-
-section "the self-test the harness will read from the installed system"
-# These are the same assertions the guest makes, checked here against the source
-# so that a typo in the fixture is caught without a 25-minute build.
-selftest="$ROOT/tests/fixtures/shinobi-selftest"
-sh -n "$selftest"
-check "the self-test is valid shell" "ok" "ok"
-selftest_checks=$(grep -c '^check "' "$selftest" || true)
-check "it asserts something" "$([[ $selftest_checks -ge 15 ]] && echo yes || echo no)" "yes"
-check "it refuses a live-session account" \
-  "$(grep -q 'it is not the live session' "$selftest" && echo yes || echo no)" "yes"
-check "it refuses an inherited autologin" \
-  "$(grep -q 'no autologin is configured' "$selftest" && echo yes || echo no)" "yes"
-check "it checks the home's ownership" \
-  "$(grep -q "the home belongs to the account" "$selftest" && echo yes || echo no)" "yes"
-check "it checks that the medium is not in fstab" \
-  "$(grep -q "the medium is not in fstab" "$selftest" && echo yes || echo no)" "yes"
+# What the wizard's keyboard page calls the layout, to find it in the list by typing, and
+# what Hyprland is told for it: the layouts that cannot type ASCII come with us in front.
+case "$LAYOUT" in
+  us) wizard_name="" ;;
+  de) wizard_name="german" ;;
+  fr) wizard_name="french" ;;
+  es) wizard_name="spanish" ;;
+  it) wizard_name="italian" ;;
+  pt) wizard_name="portuguese" ;;
+  nl) wizard_name="dutch" ;;
+  se) wizard_name="swedish" ;;
+  gb) wizard_name="english (uk)" ;;
+  ru) wizard_name="russian" ;;
+  ua) wizard_name="ukrainian" ;;
+  *) echo "e2e: FAIL (no wizard name known for layout '$LAYOUT')"; exit 1 ;;
+esac
+expected_layout="$LAYOUT"
+[[ $LAYOUT == ru || $LAYOUT == ua ]] && expected_layout="us,$LAYOUT"
 
 section "the harness can run here"
-if ! command -v qemu-system-x86_64 >/dev/null 2>&1; then
-  echo "e2e: SKIP (no qemu-system-x86_64)"
-  exit 0
-fi
-if [[ ! -e /dev/kvm ]] || [[ ! -r /dev/kvm ]]; then
+for need in qemu-system-x86_64 curl python3; do
+  command -v "$need" >/dev/null 2>&1 || { echo "e2e: SKIP (no $need)"; exit 0; }
+done
+if [[ ! -e /dev/kvm || ! -r /dev/kvm || ! -w /dev/kvm ]]; then
   echo "e2e: SKIP (/dev/kvm unavailable; this needs hardware virtualisation)"
   exit 0
 fi
@@ -86,157 +102,242 @@ if [[ ! -f $ISO ]]; then
   echo "e2e: FAIL (SHINOBI_E2E_ISO=$ISO does not exist)"
   exit 1
 fi
+sh -n "$SELFTEST" || { echo "e2e: FAIL (the self-test is not valid shell)"; exit 1; }
+if ! python3 -I "$DRIVE" translate --layout "$LAYOUT" "$PASSWORD" >/dev/null 2>&1; then
+  echo "e2e: FAIL (cannot type the test password on layout '$LAYOUT': $(python3 -I "$DRIVE" translate --layout "$LAYOUT" "$PASSWORD" 2>&1 | tail -1))"
+  exit 1
+fi
+check "the harness can run here" "yes" "yes"
 
-mkdir -p "$WORK"
+WORK="${SHINOBI_E2E_WORK:-${XDG_CACHE_HOME:-$HOME/.cache}/shinobi-e2e}/run-$$"
+mkdir -p "$WORK/serve/live" "$WORK/serve/installed"
+cp "$ROOT/tests/fixtures/guest-agent.sh" "$WORK/serve/agent.sh"
+cp "$SELFTEST" "$WORK/serve/selftest"
+mon_sock="$WORK/mon.sock"
+disk="$WORK/target.qcow2"
+qemu-img create -f qcow2 "$disk" 24G >/dev/null
+qemu_pid=""
+server_pid=""
+
+stop_qemu() {
+  if [[ -n $qemu_pid ]]; then
+    kill "$qemu_pid" 2>/dev/null
+    wait "$qemu_pid" 2>/dev/null
+    qemu_pid=""
+  fi
+}
+cleanup() {
+  stop_qemu
+  [[ -n $server_pid ]] && kill "$server_pid" 2>/dev/null
+  if [[ $KEEP == 0 && $failures == 0 ]]; then
+    rm -rf "$WORK"
+  else
+    echo "e2e: kept $WORK (screenshots and the agent's output are there)"
+  fi
+}
 trap cleanup EXIT
 
-# A second disk, blank. Installing onto it is the whole point, and the wizard's
-# partition page cannot be driven without somewhere to install to.
-target="$WORK/target.qcow2"
-qemu-img create -f qcow2 "$target" 20G >/dev/null
+python3 -I "$ROOT/tests/vm-agent.py" "$WORK/serve" >"$WORK/server.out" 2>&1 &
+server_pid=$!
+for _ in $(seq 1 50); do grep -q '^PORT ' "$WORK/server.out" 2>/dev/null && break; sleep 0.1; done
+port="$(sed -n 's/^PORT //p' "$WORK/server.out")"
+[[ -n $port ]] || { echo "e2e: FAIL (the agent server did not start)"; exit 1; }
+host_port="10.0.2.2:$port"
 
-install_log="$WORK/install.log"
-installed_log="$WORK/installed.log"
+mon() { python3 -I "$DRIVE" --monitor "$mon_sock" "$@"; }
+press() { mon keys --gap 0.4 "$@"; }
+# typed <layout> <text>: press the keys that type <text> on that layout.
+typed() { mon type --layout "$1" --gap 0.08 "$2"; }
+shot() { mon shot "$WORK/$1.png" 2>/dev/null; }
+die() {
+  shot "failed-$1" || true
+  printf 'e2e: FAIL at %s\n' "$2"
+  check "$2" "no" "yes"
+  printf '\ne2e-test: FAIL (%d of %d checks failed)\n' "$failures" "$checks"
+  exit 1
+}
 
-section "installing from the image"
-# The live session's serial console carries the wizard's progress; the wizard
-# itself is graphical, so this drives it with xdotool inside the guest. Driving
-# the real UI rather than a test profile is deliberate: a profile that skips the
-# partitioning page does not test the page, and every way of testing an installer
-# without driving it tests the harness instead.
-cat >"$WORK/drive-installer.sh" <<'DRIVER'
-#!/bin/bash
-# Runs inside the live session. Starts the wizard, then clicks it.
-set -u
-log=/tmp/e2e-drive.log
-exec >>"$log" 2>&1
-echo "driver started $(date)"
+start_qemu() {
+  # start_qemu <log> <extra qemu args...>
+  local log="$1"
+  shift
+  rm -f "$mon_sock"
+  qemu-system-x86_64 -enable-kvm -cpu host -m 4096 -smp 4 -vga std -display none -no-reboot \
+    -monitor "unix:$mon_sock,server,nowait" \
+    -netdev user,id=n0 -device virtio-net-pci,netdev=n0 "$@" >"$WORK/$log" 2>&1 &
+  qemu_pid=$!
+  for _ in $(seq 1 50); do [[ -S $mon_sock ]] && break; sleep 0.1; done
+}
 
-# The autostart launcher starts the wizard when the boot menu entry carries the
-# marker; if it is not up within two minutes, start it ourselves.
-for _ in $(seq 1 24); do
-  pgrep -x calamares >/dev/null && break
-  sleep 5
-done
-if ! pgrep -x calamares >/dev/null; then
-  echo "autostart did not launch the wizard; starting it directly"
-  calamares &
-fi
-
-click() { xdotool mousemove "$1" "$2" click 1; sleep "${3:-1}"; }
-key()   { xdotool key --clearmodifiers "$1"; sleep "${2:-1}"; }
-type()  { xdotool type --clearmodifiers "$1"; sleep 1; }
-
-# Page-by-page from the bottom-right of a 800x600 window: Next is always last,
-# so the coordinates do not depend on how many fields a page has.
-next_button() { click 760 560 3; }
-
-for page in 1 2 3 4 5 6 7 8; do
-  echo "--- page $page ---"
-  # Partition page: the operator has to pick a disk, and the wizard says which.
-  # The target is the only ~20G virtio disk with nothing on it.
-  if pgrep -x calamares >/dev/null; then
-    xdotool search --class calamares windowactivate --sync key Return 2>/dev/null || true
-  fi
-  sleep 2
-  next_button
-done
-echo "driver finished $(date)"
-DRIVER
-chmod +x "$WORK/drive-installer.sh"
-
-timeout "$INSTALL_TIMEOUT" qemu-system-x86_64 \
-  -enable-kvm -m 4096 -smp 2 \
-  -drive "file=$ISO,if=virtio,media=cdrom,readonly=on" \
-  -drive "file=$target,if=virtio,format=qcow2" \
-  -netdev user,id=net0 -device virtio-net-pci,netdev=net0 \
-  -display none -serial "file:$install_log" \
-  -monitor unix:"$WORK/mon.sock",server,nowait \
-  ${SHINOBI_E2E_EXTRA:-} &
-qemu_pid=$!
-
-wait_for() {
-  local pattern="$1" timeout="$2" waited=0
-  while ((waited < timeout)); do
-    grep -qE "$pattern" "$install_log" 2>/dev/null && return 0
-    sleep 5
-    waited=$((waited + 5))
+agent_n=0
+# agent <session> <command> [timeout]: run a command in the guest; prints its output, sets
+# agent_rc. The command is queued once; waiting is only for its output to arrive.
+agent_session=""
+agent() {
+  agent_session="$1"
+  agent_n=$((agent_n + 1))
+  agent_current="$agent_n"
+  printf '%s\n' "$2" >"$WORK/serve/$1/cmd.$agent_n.sh"
+  agent_wait "$1" "$agent_n" "${3:-60}"
+}
+agent_wait() {
+  local waited=0
+  while ((waited < $3)); do
+    if [[ -f $WORK/serve/$1/out.$2 ]]; then
+      agent_out="$(sed '$d' "$WORK/serve/$1/out.$2")"
+      agent_rc="$(sed -n 's/^rc=//p' "$WORK/serve/$1/out.$2" | tail -1)"
+      return 0
+    fi
+    sleep 1
+    waited=$((waited + 1))
   done
+  agent_out=""
+  agent_rc=""
   return 1
 }
 
-section "the live session comes up"
-if wait_for 'SELFTEST|Reached target|Booting' "$BOOT_TIMEOUT"; then
-  check "the image booted" "yes" "yes"
-else
-  check "the image booted" "no" "yes"
-  echo "e2e: the serial log tail is the only evidence available here:"
-  tail -40 "$install_log" 2>/dev/null
-  kill "$qemu_pid" 2>/dev/null
-  exit 1
+# Start the agent by typing one line into a terminal, in the layout the session is on.
+# Returns 0 when it answers. The first command queued is the answer it is waited for.
+start_agent() {
+  local session="$1" layout="$2" timeout="$3"
+  agent_n=0
+  printf 'echo alive\n' >"$WORK/serve/$session/cmd.1.sh"
+  agent_n=1
+  press meta_l-ret
+  sleep 5
+  typed "$layout" "curl -s -o a $host_port/agent.sh; sh a $host_port $session &"
+  press ret
+  agent_wait "$session" 1 "$timeout"
+}
+
+section "installing from the image, as a person would"
+start_qemu live.log -cdrom "$ISO" -boot d -drive "file=$disk,if=virtio,format=qcow2"
+sleep 15
+shot menu
+press "down*$MENU_DOWN" ret
+# Boot, log in (the live session does that itself), start the wizard from the desktop.
+sleep 100
+if ! start_agent live us 60; then
+  press ctrl-c ctrl-c
+  start_agent live us 40 || die live-agent "the live session answers an agent started from a terminal"
 fi
+check "the live session came up, and answers an agent" "$agent_out" "alive"
 
-section "the wizard installs"
-# The wizard announces its own completion on the serial console through the
-# guest's own reporting, so this waits for the machine to reboot rather than
-# clicking through every page blind. The driver script above is what drives the
-# UI; this is what notices when it is finished.
-if wait_for 'Finished|reboot|SELFTEST' "$INSTALL_TIMEOUT"; then
-  check "the wizard reported completion" "yes" "yes"
-else
-  check "the wizard reported completion" "no" "yes"
+agent live 'pkill hypridle; hyprctl dispatch focuswindow class:io.calamares.calamares; pgrep -x calamares >/dev/null && echo wizard-running' 30
+check "the wizard started by itself, as root" "$(grep -c 'wizard-running' <<<"$agent_out" || true)" "1"
+agent live 'hyprctl devices | grep -m1 rules' 30
+check "and Hyprland is on the layout the image was built with" "$(grep -c 'l "us"' <<<"$agent_out" || true)" "1"
+
+section "the keyboard page: the layout chosen reaches the live session"
+press alt-n
+sleep 5
+if [[ -n $wizard_name ]]; then
+  press tab tab
+  typed us "$wizard_name"
+  sleep 4
 fi
+agent live 'hyprctl devices | grep -m1 rules; hyprctl configerrors' 30
+shot keyboard
+check "Hyprland, which the wizard runs on, is now on the layout that was chosen ($LAYOUT)" \
+  "$(grep -c "l \"$expected_layout\"" <<<"$agent_out" || true)" "1"
+check "and has no config error" "$(grep -c -i 'error' <<<"$agent_out" || true)" "0"
 
-kill "$qemu_pid" 2>/dev/null
-wait "$qemu_pid" 2>/dev/null
+section "the rest of the wizard, typed on that layout"
+press alt-n
+sleep 8
+press tab tab tab spc
+sleep 3
+press alt-n
+sleep 5
+typed "$LAYOUT" "e2e test"
+press tab tab tab
+typed "$LAYOUT" "$PASSWORD"
+press tab
+typed "$LAYOUT" "$PASSWORD"
+sleep 2
+shot users
+press alt-n
+sleep 5
+press alt-i
+sleep 3
+press ret
+sleep 10
+shot installing
 
-section "what was installed boots and describes itself"
-# The installed disk, not the image. A test that boots the image again proves
-# nothing about the install, which is the mistake the previous boot suite made.
-timeout 900 qemu-system-x86_64 \
-  -enable-kvm -m 4096 -smp 2 \
-  -drive "file=$target,if=virtio,format=qcow2" \
-  -netdev user,id=net0 -device virtio-net-pci,netdev=net0 \
-  -display none -serial "file:$installed_log" \
-  ${SHINOBI_E2E_EXTRA:-} &
-qemu_pid=$!
+section "the install runs to the end"
+waited=0
+state=RUNNING
+while ((waited < ${SHINOBI_E2E_INSTALL_TIMEOUT:-1500})); do
+  sleep 20
+  waited=$((waited + 20))
+  agent live 'f=$(find /home/shinobi/.cache -name session.log 2>/dev/null | head -1); if grep -q "Installation failed" "$f"; then echo FAILED; grep -m3 -E "ERROR|WARNING.*(grub|unpackfs)" "$f"; elif grep -q "Starting job \"umount\"" "$f" && ! mount | grep -q calamares-root; then echo DONE; else echo RUNNING; fi' 30
+  state="$(head -1 <<<"$agent_out")"
+  [[ $state == DONE || $state == FAILED ]] && break
+done
+shot installed-page
+check "the wizard installed, with no failure" "$state" "DONE"
+[[ $state == DONE ]] || { tail -4 <<<"$agent_out"; die install "the install finished"; }
 
-if wait_for 'SELFTEST (PASS|FAIL)|selftest completed' 600; then
-  check "the installed system booted and reported" "yes" "yes"
+# Power off from inside: the agent does not come back from this, so it is not waited on.
+agent_n=$((agent_n + 1))
+printf 'sudo poweroff\n' >"$WORK/serve/live/cmd.$agent_n.sh"
+for _ in $(seq 1 60); do kill -0 "$qemu_pid" 2>/dev/null || break; sleep 1; done
+stop_qemu
+
+section "what was installed: the login screen takes the password typed in the wizard"
+start_qemu installed.log -drive "file=$disk,if=virtio,format=qcow2"
+sleep 75
+shot greeter
+typed "$LAYOUT" "$PASSWORD"
+press ret
+sleep 60
+shot session
+# Which layout is the session on? The line that starts the agent is typed for one layout,
+# and it only works if the session reads those key presses the way the typist meant them.
+# The layout chosen in the wizard comes first; if only plain us works, the session did not
+# follow the system's layout, and that is the bug.
+session_on=""
+if start_agent installed "$LAYOUT" 40; then
+  session_on="$LAYOUT"
 else
-  check "the installed system booted and reported" "no" "yes"
-  tail -60 "$installed_log" 2>/dev/null
-  kill "$qemu_pid" 2>/dev/null
-  exit 1
+  press ctrl-c ctrl-c
+  if start_agent installed us 40; then session_on="us"; fi
 fi
-
-kill "$qemu_pid" 2>/dev/null
-wait "$qemu_pid" 2>/dev/null
+[[ -n $session_on ]] || die session-agent "the login screen accepted the password and the session answers an agent"
+check "the login screen accepted the password typed in the wizard (the session started)" "yes" "yes"
+check "and the session reads key presses on the layout that was chosen, not on us" "$session_on" "$LAYOUT"
 
 section "the installed system is what was claimed"
-selftest_passed=$(grep -c 'SELFTEST PASS' "$installed_log" 2>/dev/null || true)
-selftest_failed=$(grep -c 'SELFTEST FAIL' "$installed_log" 2>/dev/null || true)
-check "no assertion failed inside the installed system" "$selftest_failed" "0"
-check "the self-test passed" \
-  "$(grep -oE 'SELFTEST [0-9]+ checks, [0-9]+ failures' "$installed_log" | tail -1 | grep -q ', 0 failures' && echo yes || echo no)" "yes"
+agent installed 'hyprctl devices | grep -m1 rules; grep XKBLAYOUT /etc/default/keyboard' 30
+check "Hyprland is on the system's layout" "$(grep -c "l \"$expected_layout\"" <<<"$agent_out" || true)" "1"
+check "which is what the wizard wrote for the login screen" \
+  "$(grep -c "XKBLAYOUT=\"$expected_layout\"" <<<"$agent_out" || true)" "1"
 
-# The individual claims, asserted here as well so that a failure names itself
-# rather than arriving as one aggregate number.
-for claim in \
-  'it is not the live session' \
-  'sudo works for it' \
-  'the dotfiles were applied' \
-  'the home belongs to the account' \
-  'no autologin is configured' \
-  'the medium is not in fstab'; do
-  check "$claim" "$(grep -c "SELFTEST FAIL $claim" "$installed_log" 2>/dev/null || true)" "0"
-done
+agent installed "curl -sf -o /tmp/selftest http://$host_port/selftest && sh /tmp/selftest" 120
+selftest_summary="$(grep -E '^SELFTEST [0-9]+ checks' <<<"$agent_out" | tail -1)"
+check "the self-test ran inside the installed system" "$([[ -n $selftest_summary ]] && echo yes || echo no)" "yes"
+check "and no assertion in it failed" "$(grep -c '^SELFTEST FAIL' <<<"$agent_out" || true)" "0"
+grep '^SELFTEST FAIL' <<<"$agent_out" | sed 's/^/    /'
+
+section "the lock screen takes it too"
+agent installed 'nohup hyprlock >/tmp/hyprlock.log 2>&1 & sleep 4; pgrep -x hyprlock >/dev/null && echo LOCKED || echo NOT-LOCKED' 30
+check "the screen locks" "$(head -1 <<<"$agent_out")" "LOCKED"
+typed "$LAYOUT" "$PASSWORD"
+press ret
+sleep 5
+agent installed 'pgrep -x hyprlock >/dev/null && echo STILL-LOCKED || echo UNLOCKED' 30
+shot lock
+check "and the same key presses that logged in unlock it" "$(head -1 <<<"$agent_out")" "UNLOCKED"
+agent installed 'pkill -USR1 hyprlock; true' 15
+
+agent_n=$((agent_n + 1))
+printf 'sudo poweroff\n' >"$WORK/serve/installed/cmd.$agent_n.sh"
+for _ in $(seq 1 60); do kill -0 "$qemu_pid" 2>/dev/null || break; sleep 1; done
+stop_qemu
 
 printf '\n'
 if ((failures > 0)); then
   printf 'e2e-test: FAIL (%d of %d checks failed)\n' "$failures" "$checks"
-  printf 'e2e-test: serial logs kept in %s\n' "$WORK"
-  KEEP=1
   exit 1
 fi
-printf '%d/%d checks passed\ne2e-test: PASS\n' "$checks" "$checks"
+printf '%d/%d checks passed\ne2e-test: PASS (layout %s)\n' "$checks" "$checks" "$LAYOUT"

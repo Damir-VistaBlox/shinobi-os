@@ -35,10 +35,14 @@ exists() { [ -e "$1" ] && echo yes || echo no; }
 user_count=$(awk -F: '$3>=1000 && $3<65534 && $7 !~ /(nologin|false)$/ {print $1}' /etc/passwd | wc -l)
 check "exactly one login account" "$user_count" "1"
 account=$(awk -F: '$3>=1000 && $3<65534 && $7 !~ /(nologin|false)$/ {print $1}' /etc/passwd | head -1)
+# The live session's account is created as `shinobi` (live-config reads it from
+# /etc/live/config.conf.d/shinobi.conf); it used to be Kali's `kali`.
 check "it is not the live session's" \
-  "$([ "$account" != kali ] && echo yes || echo no)" "yes"
+  "$([ "$account" != shinobi ] && [ "$account" != kali ] && echo yes || echo no)" "yes"
+# Calamares' users module makes the account a member of the sudo group; a sudoers.d file
+# for it is the other way and either is a working sudo.
 check "sudo works for it" \
-  "$([ -r "/etc/sudoers.d/$account" ] && echo yes || echo no)" "yes"
+  "$([ -r "/etc/sudoers.d/$account" ] || id -nG "$account" 2>/dev/null | tr ' ' '\n' | grep -qx sudo && echo yes || echo no)" "yes"
 
 # --- the layer arrived --------------------------------------------------------
 check "the CLI is installed" "$(command -v shinobi >/dev/null 2>&1 && echo yes || echo no)" "yes"

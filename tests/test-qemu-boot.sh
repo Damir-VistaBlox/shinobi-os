@@ -12,7 +12,12 @@ command -v qemu-system-x86_64 >/dev/null 2>&1 || { echo "qemu-test: qemu-system-
 case "$MODE" in
   bios) firmware=() ;;
   uefi)
-    for code in /usr/share/OVMF/OVMF_CODE_4M.fd /usr/share/OVMF/OVMF_CODE.fd /usr/share/edk2/x64/OVMF_CODE.fd; do
+    # Debian and Ubuntu name it OVMF_CODE_4M.fd (or OVMF_CODE.fd, older), Arch and Fedora
+    # OVMF_CODE.4m.fd under edk2/x64. The VARS file beside it is found by swapping CODE for
+    # VARS, which holds for every one of these spellings.
+    for code in /usr/share/OVMF/OVMF_CODE_4M.fd /usr/share/OVMF/OVMF_CODE.fd \
+      /usr/share/edk2/x64/OVMF_CODE.4m.fd /usr/share/edk2/x64/OVMF_CODE.fd \
+      /usr/share/edk2-ovmf/x64/OVMF_CODE.4m.fd /usr/share/edk2-ovmf/x64/OVMF_CODE.fd; do
       if [[ -f "$code" ]]; then
         vars="$(mktemp --suffix=.fd)"
         cp "${code/_CODE/_VARS}" "$vars" 2>/dev/null || truncate -s "$(stat -c %s "$code")" "$vars"
