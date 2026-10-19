@@ -145,4 +145,18 @@ echo "== Checking top-to-btop compatibility wrapper =="
 unsquashfs -cat "$tmp/filesystem.squashfs" /usr/local/bin/top | grep -Fq '/usr/bin/btop' \
   || { echo "image-test: top wrapper does not target btop" >&2; exit 1; }
 
+# Kept apart from the list above, which the chroot dry run reads its expectations from (and
+# reads only the first loop of); distro/lib/dry-run-chroot.sh checks these three itself.
+echo "== Checking the keyboard layout chain =="
+for path in \
+  /usr/lib/shinobi/shinobi-keyboard \
+  /usr/lib/shinobi/installer-shims/setxkbmap \
+  /usr/share/shinobi-dotfiles/etc/skel/.config/hypr/input.conf
+do
+  grep -Fq "squashfs-root$path" "$listing" || {
+    echo "image-test: missing image path: $path" >&2
+    exit 1
+  }
+done
+
 echo "image-content-test: PASS"

@@ -158,6 +158,9 @@ done
 check "the session offers only Hyprland (hook 0005)" sh -c 'test "$(ls /usr/share/wayland-sessions | tr "\n" " ")" = "hyprland.desktop "'
 check "the layer is staged in /etc/skel for the account created at boot" test -f /etc/skel/.config/hypr/hyprland.conf
 check "the provenance file is written" test -s /usr/share/shinobi/provenance
+check "the session can follow the system's keyboard layout (shinobi-keyboard is installed and runs)" sh -c 'test -x /usr/lib/shinobi/shinobi-keyboard && /usr/lib/shinobi/shinobi-keyboard --help >/dev/null'
+check "and the skeleton carries the input.conf that hyprland.conf sources" test -f /etc/skel/.config/hypr/input.conf
+check "the wizard's setxkbmap stand-in, which carries a chosen layout to the session, is installed" test -x /usr/lib/shinobi/installer-shims/setxkbmap
 check "live-config will create the account as shinobi" grep -q '^LIVE_USERNAME="shinobi"' /etc/live/config.conf.d/shinobi.conf
 check "Plymouth defaults to the Shinobi theme (hook 0050)" sh -c 'test "$(plymouth-set-default-theme 2>/dev/null)" = shinobi'
 check "a Nerd Font is installed (the bar's icons need one; needs network at hook time)" sh -c 'fc-list 2>/dev/null | grep -qi "nerd"'

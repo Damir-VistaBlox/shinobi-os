@@ -1,0 +1,343 @@
+#!/bin/sh
+# Make the Hyprland session type the layout the system was configured with.
+#
+# Three things read a keyboard layout on this system, and they used to read three
+# different ones. The login screen is an X11 greeter and takes its layout from
+# /etc/X11/xorg.conf.d/00-keyboard.conf. The wizard's keyboard page writes that
+# file, and /etc/default/keyboard beside it, on the installed system. The Hyprland
+# session and the lock screen (hyprlock follows whatever layout the compositor has)
+# read neither: hyprland.conf said `kb_layout = us` and nothing replaced it. An
+# operator who chose German in the wizard therefore had a German login screen and
+# an American session, and a password that is the same keystrokes read two ways.
+#
+# The wizard has the same problem one step earlier, and it is the worse one. It
+# runs as a Wayland client of the live session, and a layout chosen on its keyboard
+# page reaches the compositor by no route at all: Calamares applies it with
+# setxkbmap (which only X clients can hear) and through systemd-localed (which
+# refused the call on the image, and which Hyprland does not read when it works). So
+# the password typed on the Users page is typed on the live session's American
+# layout, and the installed login screen decodes the same keystrokes as German.
+# `shinobi-keyboard set` is how the wizard's choice reaches the session; the
+# `setxkbmap` in installer-shims/ is what calls it.
+#
+#   shinobi-keyboard apply   work out the layout, write ~/.config/hypr/input.conf,
+#                            and ask Hyprland to reload if that changed it
+#   shinobi-keyboard set --layout L [--model M] [--variant V] [--options O]
+#                            record a layout chosen in the installer for this
+#                            session, then apply it
+#   shinobi-keyboard show    print what `apply` would use and where it came from
+#   shinobi-keyboard repair  (root, in the installer) make the variant in the system's
+#                            keyboard files line up with its layouts; see below
+#
+# The layout comes from, in order:
+#   1. the installer's choice for this session, in $XDG_RUNTIME_DIR/shinobi/keyboard
+#      (tmpfs, so it ends with the session and never reaches an installed system);
+#   2. /etc/default/keyboard, which is what the wizard writes to the installed system
+#      and what live-config writes from `keyboard-layouts=` on the live one;
+#   3. `us`.
+#
+# The result is a file Hyprland sources, not a `hyprctl keyword`. A keyword cannot set
+# an empty value (hyprctl rejects the argument), so clearing a variant when the
+# operator moves from French azerty to German is not expressible, and a keyword is
+# lost on every reload (the theme switch at login reloads; so does Super+Shift+R). A
+# file is read at every reload, can be empty, and sits above the operator's own
+# `input { }` block in hyprland.conf, so a layout the operator writes there still wins.
+#
+# `repair` exists because of how Calamares writes those files. For a layout that cannot
+# type ASCII (Russian, Ukrainian and about forty others) it adds `us` in front, and it
+# builds XKBVARIANT from the selected variant alone, dropping the empty one that belongs
+# to `us`: Russian (phonetic) is written as XKBLAYOUT="us,ru" with XKBVARIANT="phonetic".
+# xkb pairs variants with layouts by position, so that asks for us(phonetic), which does
+# not exist, and the keymap does not compile. Hyprland answers that with the plain `us`
+# layout and no error at all (observed on 0.56.2), so the operator who chose Russian has
+# no Russian, in the session and, by the same arithmetic, on the login screen. The
+# installer runs `repair` once on the target's files, putting the empty entries back
+# (",phonetic"), so that all three read what was chosen.
+#
+# /etc/default/keyboard is read, never sourced: it is parsed as KEY=value lines, the
+# last assignment winning, and each value must be a plain xkb name before it goes
+# anywhere. A value that is not one is ignored with a warning, and the next source is
+# tried.
+set -eu
+export LC_ALL=C
+
+usage() {
+  cat <<'USAGE'
+Usage: shinobi-keyboard apply
+       shinobi-keyboard set --layout LAYOUT [--model MODEL] [--variant VARIANT] [--options OPTIONS]
+       shinobi-keyboard show
+       shinobi-keyboard repair
+
+  apply   Set the session's layout from the installer's choice, else /etc/default/keyboard,
+          else us, by writing ~/.config/hypr/input.conf and reloading Hyprland if it changed
+  set     Record a layout chosen in the installer (xkb names, as setxkbmap takes them:
+          --layout us,ru --variant , --options grp:alt_shift_toggle), then apply it
+  show    Print the layout `apply` would use, and where it came from
+  repair  Pad XKBVARIANT in /etc/default/keyboard and the X11 keyboard file so each variant
+          sits at the position of its layout (the installer runs this on the new system)
+USAGE
+}
+
+system_file="${SHINOBI_KEYBOARD_SYSTEM_FILE:-/etc/default/keyboard}"
+x11_file="${SHINOBI_KEYBOARD_X11_FILE:-/etc/X11/xorg.conf.d/00-keyboard.conf}"
+
+warn() {
+  echo "shinobi-keyboard: $*" >&2
+}
+
+# --- validation -------------------------------------------------------------
+# What may reach a config file or an argument vector: xkb names, and nothing a
+# shell, hyprlang or a line break could give a second meaning to.
+
+valid_model() {
+  case "$1" in
+    *[!A-Za-z0-9_.-]*) return 1 ;;
+  esac
+  return 0
+}
+
+valid_layouts() {
+  case "$1" in
+    '' | *[!A-Za-z0-9_,-]* | ,* | *, | *,,*) return 1 ;;
+  esac
+  return 0
+}
+
+# Variants are positional (the second one belongs to the second layout), so an empty
+# entry is meaningful, and there can be no more of them than there are layouts.
+valid_variants() {
+  case "$1" in
+    *[!A-Za-z0-9_.,-]*) return 1 ;;
+  esac
+  [ "$(count_items "$1")" -le "$(count_items "$k_layout")" ]
+}
+
+valid_options() {
+  case "$1" in
+    *[!A-Za-z0-9_:.,-]* | ,* | *, | *,,*) return 1 ;;
+  esac
+  return 0
+}
+
+# Number of comma-separated entries; an empty string is one empty entry.
+count_items() {
+  commas=$(printf '%s' "$1" | tr -cd ',' | wc -c)
+  echo $((commas + 1))
+}
+
+valid_current() {
+  valid_model "$k_model" && valid_layouts "$k_layout" && valid_variants "$k_variant" \
+    && valid_options "$k_options"
+}
+
+# --- reading ----------------------------------------------------------------
+
+# A file in the keyboard(5) format into k_model, k_layout, k_variant, k_options.
+# Returns 1 when there is no readable file. Nothing in it is ever executed.
+read_xkb_file() {
+  k_model="" k_layout="" k_variant="" k_options=""
+  [ -f "$1" ] && [ -r "$1" ] || return 1
+  while IFS= read -r line || [ -n "$line" ]; do
+    line=${line#"${line%%[![:space:]]*}"}
+    case "$line" in
+      XKBMODEL=* | XKBLAYOUT=* | XKBVARIANT=* | XKBOPTIONS=*) ;;
+      *) continue ;;
+    esac
+    key=${line%%=*}
+    val=${line#*=}
+    case "$val" in
+      \"*) val=${val#\"}; val=${val%%\"*} ;;
+      \'*) val=${val#\'}; val=${val%%\'*} ;;
+      *) val=${val%%[[:space:]]*} ;;
+    esac
+    case "$key" in
+      XKBMODEL) k_model=$val ;;
+      XKBLAYOUT) k_layout=$val ;;
+      XKBVARIANT) k_variant=$val ;;
+      XKBOPTIONS) k_options=$val ;;
+    esac
+  done <"$1"
+  return 0
+}
+
+override_file=""
+if [ -n "${XDG_RUNTIME_DIR:-}" ]; then
+  override_file="$XDG_RUNTIME_DIR/shinobi/keyboard"
+fi
+
+# Sets k_* and layout_source. Always succeeds: the end of the chain is `us`.
+resolve() {
+  if [ -n "$override_file" ] && [ -f "$override_file" ] && [ ! -L "$override_file" ] \
+    && [ -O "$override_file" ]; then
+    if read_xkb_file "$override_file" && valid_current; then
+      layout_source="the installer's choice ($override_file)"
+      return 0
+    fi
+    warn "ignoring $override_file: not a layout it can use"
+  fi
+
+  if read_xkb_file "$system_file"; then
+    if [ -z "$k_layout" ]; then
+      : # configured with no layout at all, which xkb reads as the default: us
+    elif valid_current; then
+      layout_source="$system_file"
+      return 0
+    else
+      warn "ignoring $system_file: not a layout it can use"
+    fi
+  fi
+
+  # pc105 is what the wizard and Debian both write for a layout nobody picked, and
+  # what xkb assumes for no model at all, so this is the same keyboard as before.
+  k_model="pc105" k_layout="us" k_variant="" k_options=""
+  layout_source="the default"
+  return 0
+}
+
+# --- writing ----------------------------------------------------------------
+
+render() {
+  cat <<EOF
+# Written by shinobi-keyboard, which keeps it in step with the system's keyboard
+# layout (/etc/default/keyboard) at every login. Edits here are overwritten.
+#
+# To use a layout of your own, set kb_layout in an input { } block in hyprland.conf
+# below the line that sources this file. The later setting wins.
+input {
+  kb_model = $k_model
+  kb_layout = $k_layout
+  kb_variant = $k_variant
+  kb_options = $k_options
+}
+EOF
+}
+
+# Atomic, because Hyprland may read the file at any moment: a reload that lands
+# between a truncate and a write would load a config with no layout in it.
+write_input_conf() {
+  config_dir="$HOME/.config/hypr"
+  input_conf="$config_dir/input.conf"
+  new=$(render)
+  if [ -f "$input_conf" ] && [ "$(cat "$input_conf")" = "$new" ]; then
+    return 1
+  fi
+  mkdir -p "$config_dir"
+  tmp="$config_dir/.input.conf.$$"
+  printf '%s\n' "$new" >"$tmp"
+  chmod 0644 "$tmp"
+  mv -f "$tmp" "$input_conf"
+  return 0
+}
+
+reload_hyprland() {
+  [ -n "${HYPRLAND_INSTANCE_SIGNATURE:-}" ] || return 0
+  if ! command -v hyprctl >/dev/null 2>&1; then
+    warn "hyprctl not found; the layout applies at the next login"
+    return 1
+  fi
+  reply=$(hyprctl reload 2>&1) || reply="exit status $?"
+  case "$reply" in
+    ok*) return 0 ;;
+  esac
+  warn "Hyprland did not reload: $reply"
+  return 1
+}
+
+do_apply() {
+  resolve
+  if write_input_conf; then
+    reload_hyprland
+  fi
+}
+
+do_set() {
+  k_model="" k_layout="" k_variant="" k_options=""
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --model | --layout | --variant | --options)
+        [ $# -ge 2 ] || { warn "$1 needs a value"; exit 2; }
+        case "$1" in
+          --model) k_model=$2 ;;
+          --layout) k_layout=$2 ;;
+          --variant) k_variant=$2 ;;
+          --options) k_options=$2 ;;
+        esac
+        shift 2
+        ;;
+      *)
+        usage >&2
+        exit 2
+        ;;
+    esac
+  done
+  if ! valid_current; then
+    warn "not an xkb layout it can use: layout='$k_layout' model='$k_model' variant='$k_variant' options='$k_options'"
+    exit 2
+  fi
+  if [ -z "$override_file" ] || [ ! -d "$XDG_RUNTIME_DIR" ] || [ ! -O "$XDG_RUNTIME_DIR" ]; then
+    warn "no runtime directory of this account to record the layout in"
+    exit 1
+  fi
+  override_dir="$XDG_RUNTIME_DIR/shinobi"
+  # Not through an existing symlink: this is the one path here a different account
+  # could have planted something in, were the runtime directory ever shared.
+  if [ -L "$override_dir" ] || [ -L "$override_file" ]; then
+    warn "$override_dir has a symbolic link in it; not writing through it"
+    exit 1
+  fi
+  (umask 077 && mkdir -p "$override_dir")
+  tmp="$override_dir/.keyboard.$$"
+  (
+    umask 077
+    printf 'XKBMODEL="%s"\nXKBLAYOUT="%s"\nXKBVARIANT="%s"\nXKBOPTIONS="%s"\n' \
+      "$k_model" "$k_layout" "$k_variant" "$k_options" >"$tmp"
+  )
+  mv -f "$tmp" "$override_file"
+  do_apply
+}
+
+# Calamares drops the empty variant of the `us` it adds in front of a non-ASCII layout,
+# so the variant it writes is one entry short and sits in the wrong place. The entry that
+# is missing is always at the front: the added layout comes first and never has a variant.
+do_repair() {
+  read_xkb_file "$system_file" || return 0
+  [ -n "$k_variant" ] || return 0
+  valid_layouts "$k_layout" || return 0
+  case "$k_variant" in
+    *[!A-Za-z0-9_.,-]*) return 0 ;;
+  esac
+  layouts=$(count_items "$k_layout")
+  variants=$(count_items "$k_variant")
+  [ "$variants" -lt "$layouts" ] || return 0
+  padded=$k_variant
+  while [ "$variants" -lt "$layouts" ]; do
+    padded=",$padded"
+    variants=$((variants + 1))
+  done
+  sed -i "s/^\([[:space:]]*XKBVARIANT=\).*/\1\"$padded\"/" "$system_file"
+  if [ -f "$x11_file" ]; then
+    sed -i "s/\(Option[[:space:]]*\"XkbVariant\"[[:space:]]*\)\"[^\"]*\"/\1\"$padded\"/" "$x11_file"
+  fi
+  warn "layouts '$k_layout' with variant '$k_variant': wrote variant '$padded' so it pairs with the right layout"
+}
+
+do_show() {
+  resolve
+  printf 'source: %s\n' "$layout_source"
+  printf 'XKBMODEL="%s"\nXKBLAYOUT="%s"\nXKBVARIANT="%s"\nXKBOPTIONS="%s"\n' \
+    "$k_model" "$k_layout" "$k_variant" "$k_options"
+}
+
+command="${1:-}"
+[ $# -gt 0 ] && shift
+case "$command" in
+  apply) do_apply ;;
+  set) do_set "$@" ;;
+  show) do_show ;;
+  repair) do_repair ;;
+  -h | --help | help) usage ;;
+  *)
+    usage >&2
+    exit 2
+    ;;
+esac

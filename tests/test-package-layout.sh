@@ -386,6 +386,8 @@ for f in \
   usr/lib/sddm/sddm.conf.d/90-shinobi-theme.conf \
   usr/lib/systemd/system/sddm.service.d/10-shinobi-plymouth.conf \
   etc/xdg/xdg-desktop-portal/hyprland-portals.conf \
+  usr/share/shinobi-dotfiles/etc/skel/.config/hypr/input.conf \
+  usr/lib/shinobi/shinobi-keyboard \
   usr/lib/shinobi/shinobi-desktop-check
 do
   check "shinobi-desktop ships $f" \
