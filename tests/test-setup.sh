@@ -159,6 +159,14 @@ else
   dest="${src%/}/"
 fi
 mkdir -p "$dest"
+# What real rsync does and this stub used to leave out: with a trailing slash on the
+# source, `rsync -a` copies the source directory's own mode onto the destination
+# directory as well as onto its contents (also with --ignore-existing, and --chown does
+# not change it). A stub without this made the engine's habit of leaving /root and the
+# operator's home at 0755 invisible to every check in this file.
+case "$src" in
+  */) chmod "$(stat -c %a "$src")" "$dest" ;;
+esac
 # --ignore-existing is implemented here rather than passed to cp, because busybox
 # cp has no -n and would either error or ignore the flag -- and a stub that
 # overwrote anyway would make the engine's non-destructive default untestable.
@@ -187,6 +195,11 @@ stage=$(mktemp -d)
 "$ROOT/packaging/build-deb.sh" desktop --stage "$stage"
 mkdir -p "$R/usr/share/shinobi"
 cp -a "$stage/usr/share/shinobi-dotfiles" "$R/usr/share/"
+# The package ships its directories 0755. The staged copy has whatever mode the
+# checkout's umask gave it, and the mode-preservation checks below only mean something
+# when the source is the mode the real package has: a 0700 source makes rsync's habit
+# of copying the source directory's own mode onto the destination invisible.
+chmod 0755 "$R/usr/share/shinobi-dotfiles/etc/skel"
 rm -rf "$stage"
 printf '0.1.0-test\n' >"$R/usr/share/shinobi/version"
 printf 'ID=kali\nVERSION_ID="2026.7"\n' >"$R/etc/os-release"
@@ -256,6 +269,9 @@ check "and with --rename-from" "$?|$(grep -c 'cannot be combined' <<<"$out" || t
 rm -rf "$B"
 
 add_user shinobi 1000
+# Stock Kali: /root and an account's home are 0700.
+mkdir -p "$R/root"
+chmod 0700 "$R/root" "$R/home/shinobi"
 
 section "applying the layer"
 out=$(chroot "$R" /engine apply --skip-fonts 2>&1)
@@ -289,6 +305,26 @@ check "a dotfile in it too" \
   "$(chroot "$R" stat -c %U /home/shinobi/.config/hypr/hyprland.conf)" "shinobi"
 check "and /etc/skel does as well" \
   "$(chroot "$R" stat -c %U /etc/skel/.config/wofi/config)" "shinobi"
+
+section "a private home stays private"
+# rsync -a copies the source directory's mode onto the destination directory itself,
+# and the dotfiles tree is 0755: /root and the operator's home came out world-readable
+# after every apply. The layer is applied by the ISO build hook (to /root) and by the
+# wizard (to the new account's home), so this was on every install.
+check "root's home keeps its mode" "$(chroot "$R" stat -c %a /root)" "700"
+check "and the account's home" "$(chroot "$R" stat -c %a /home/shinobi)" "700"
+chroot "$R" /engine apply --force --skip-fonts >/dev/null 2>&1
+check "also after --force" "$(chroot "$R" stat -c %a /home/shinobi)" "700"
+check "and /etc/skel, which is meant to be readable, still is" \
+  "$(chroot "$R" stat -c %a /etc/skel)" "755"
+rm -rf "$R/home/newbie"
+add_user newbie 1001
+rm -rf "$R/home/newbie"
+chroot "$R" /engine apply --account newbie --skip-fonts >/dev/null 2>&1
+check "a home the engine has to create is private too" "$(chroot "$R" stat -c %a /home/newbie)" "700"
+# Leave the fixture as the sections below expect it: one login account.
+sed -i '/^newbie:/d' "$R/etc/passwd" "$R/etc/group"
+rm -rf "$R/home/newbie"
 
 section "running it twice changes nothing"
 before=$(find "$R/home/shinobi" "$R/etc/skel" -type f | sort | md5sum)

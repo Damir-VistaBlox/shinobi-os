@@ -66,6 +66,20 @@ EOF
 # dotfiles
 # ---------------------------------------------------------------------------
 
+# rsync -a with a trailing slash on the source also copies the source directory's own
+# mode onto the destination directory itself, not only onto what is inside it. The
+# dotfiles tree is 0755, so /root (0700 on Kali) and an account's home (0700, from
+# HOME_MODE in login.defs) came out 0755 after every apply: readable by every other
+# account on the machine, on a system whose purpose is holding an engagement's
+# evidence. The directory keeps the mode it had.
+sync_dotfiles_into() {
+  _dest="$1"
+  shift
+  _dest_mode=$(stat -c %a "$_dest" 2>/dev/null || true)
+  rsync -a "$@" "$DOTFILES_ROOT/" "$_dest/"
+  [ -z "$_dest_mode" ] || chmod "$_dest_mode" "$_dest"
+}
+
 apply_dotfiles() {
   _account="$1"
   _force="$2"
@@ -78,10 +92,12 @@ apply_dotfiles() {
   # /etc/skel is authoritative: it is the template for accounts created later,
   # and nothing in it is anybody's working configuration yet. Homes are not --
   # those get only what is missing unless --force was asked for.
-  rsync -a "$DOTFILES_ROOT/" /etc/skel/
+  sync_dotfiles_into /etc/skel
   log "dotfiles: /etc/skel updated"
 
-  rsync -a "$DOTFILES_ROOT/" /root/
+  # Absent in a minimal chroot; made the way Kali has it, not with the tree's mode.
+  [ -d /root ] || { mkdir -p /root && chmod 0700 /root; }
+  sync_dotfiles_into /root
   log "dotfiles: /root updated"
 
   # --skel-only: no account yet, so there is no home to complete and nothing to
@@ -97,13 +113,17 @@ apply_dotfiles() {
     warn "account '$_account' has no home directory; skipping its dotfiles"
     return 1
   fi
-  mkdir -p "$_home"
+  if [ ! -d "$_home" ]; then
+    # A home made here, not by useradd, gets what useradd would have given it.
+    mkdir -p "$_home"
+    chmod 0700 "$_home"
+  fi
 
   if [ "$_force" = true ]; then
-    rsync -a --chown="$_account:$_account" "$DOTFILES_ROOT/" "$_home/"
+    sync_dotfiles_into "$_home" --chown="$_account:$_account"
     log "dotfiles: $_account's home overwritten from skel (--force)"
   else
-    rsync -a --ignore-existing --chown="$_account:$_account" "$DOTFILES_ROOT/" "$_home/"
+    sync_dotfiles_into "$_home" --ignore-existing --chown="$_account:$_account"
     log "dotfiles: $_account's home completed from skel"
   fi
 
