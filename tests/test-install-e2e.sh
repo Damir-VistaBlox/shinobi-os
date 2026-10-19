@@ -34,6 +34,8 @@
 #                            not /tmp, which is often a RAM disk with a quota: a 20 GB disk
 #                            filled one and made the installer fail with a missing directory)
 #   SHINOBI_E2E_KEEP=1       keep the work directory (kept anyway on a failure)
+#   SHINOBI_E2E_INSTALLED_DISK  a qcow2 disk from an earlier run, to run only the second half
+#                            (boot, log in, check) against, read-only; for working on this file
 #   SHINOBI_E2E_MENU_DOWN    how many entries to move down the BIOS boot menu to reach
 #                            "Install Shinobi OS" (default 5)
 #
@@ -210,6 +212,7 @@ start_agent() {
   agent_wait "$session" 1 "$timeout"
 }
 
+if [[ -z ${SHINOBI_E2E_INSTALLED_DISK:-} ]]; then
 section "installing from the image, as a person would"
 start_qemu live.log -cdrom "$ISO" -boot d -drive "file=$disk,if=virtio,format=qcow2"
 sleep 15
@@ -267,10 +270,14 @@ shot installing
 section "the install runs to the end"
 waited=0
 state=RUNNING
-while ((waited < ${SHINOBI_E2E_INSTALL_TIMEOUT:-1500})); do
+while ((waited < ${SHINOBI_E2E_INSTALL_TIMEOUT:-1200})); do
   sleep 20
   waited=$((waited + 20))
-  agent live 'f=$(find /home/shinobi/.cache -name session.log 2>/dev/null | head -1); if grep -q "Installation failed" "$f"; then echo FAILED; grep -m3 -E "ERROR|WARNING.*(grub|unpackfs)" "$f"; elif grep -q "Starting job \"umount\"" "$f" && ! mount | grep -q calamares-root; then echo DONE; else echo RUNNING; fi' 30
+  # Done is: the last real job, the bootloader, has started, nothing of the target is mounted
+  # any more (the unmount is the job after it), and nothing failed. The unmount job's own name
+  # is not matched: Calamares prints a pretty name for it, and matching that waited out the
+  # whole timeout on an install that had finished.
+  agent live 'f=$(find /home/shinobi/.cache -name session.log 2>/dev/null | head -1); if grep -q "Installation failed" "$f"; then echo FAILED; grep -m3 -E "ERROR|WARNING.*(grub|unpackfs)" "$f"; elif grep -q "Starting job \"bootloader\"" "$f" && ! mount | grep -q calamares-root; then echo DONE; else echo RUNNING; fi' 30
   state="$(head -1 <<<"$agent_out")"
   [[ $state == DONE || $state == FAILED ]] && break
 done
@@ -283,9 +290,17 @@ agent_n=$((agent_n + 1))
 printf 'sudo poweroff\n' >"$WORK/serve/live/cmd.$agent_n.sh"
 for _ in $(seq 1 60); do kill -0 "$qemu_pid" 2>/dev/null || break; sleep 1; done
 stop_qemu
+fi # the install
 
 section "what was installed: the login screen takes the password typed in the wizard"
-start_qemu installed.log -drive "file=$disk,if=virtio,format=qcow2"
+# A disk from an earlier run can be tried again without installing (SHINOBI_E2E_INSTALLED_DISK),
+# read-only: the guest's writes are discarded, so it can be used again. It must have been
+# installed with this layout and the test password.
+if [[ -n ${SHINOBI_E2E_INSTALLED_DISK:-} ]]; then
+  start_qemu installed.log -snapshot -drive "file=$SHINOBI_E2E_INSTALLED_DISK,if=virtio,format=qcow2"
+else
+  start_qemu installed.log -drive "file=$disk,if=virtio,format=qcow2"
+fi
 sleep 75
 shot greeter
 typed "$LAYOUT" "$PASSWORD"
