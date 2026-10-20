@@ -19,9 +19,12 @@ grep -Eqi 'El Torito|Boot catalog|boot image' "$report" || {
 }
 
 echo "== The medium is labelled as Shinobi =="
-# `Volume id` is what a file manager and blkid show for the stick, and Kali's build
-# configuration names it "Kali Live".
-volume_id="$(grep -E '^Volume id' "$report" | sed -e "s/^[^']*'//" -e "s/'.*$//")"
+# The volume id is what a file manager and blkid show for the stick, and Kali's build
+# configuration names it "Kali Live". It is read with -pvd_info, which prints it on
+# stdout: the "Volume id" line of the -indev status that the report above comes with is
+# written to stderr, so reading the report for it finds nothing (and under pipefail that
+# ended the script without a word).
+volume_id="$(xorriso -indev "$ISO" -pvd_info 2>/dev/null | sed -n 's/^Volume Id *: *//p' || true)"
 if [[ -z "$volume_id" || "$volume_id" == *[Kk]ali* ]]; then
   echo "iso-test: the ISO's volume id is '${volume_id}', not Shinobi's" >&2
   exit 1
