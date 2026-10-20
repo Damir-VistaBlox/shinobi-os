@@ -146,6 +146,18 @@ check "the BIOS template keeps the placeholders live-build fills in (it generate
   "$(menu_code "$live_in" | grep -c '@LINUX@' || true)" "5"
 check "the ISO is labelled as Shinobi, not as Kali Live (build.sh patches Kali's auto/config)" \
   "$(grep -c -- 's|--iso-volume "Kali Live"|--iso-volume "Shinobi OS"|' "$ROOT/distro/build.sh" || true)" "1"
+# The check above only proves the patch is still written in build.sh. It rewrites three
+# options of Kali's auto/config by their exact text; if a submodule bump changes the
+# quoting or the order, the sed turns into a silent no-op and only a finished ISO shows it.
+kali_auto_config="$ROOT/distro/kali-live/auto/config"
+if [[ -f $kali_auto_config ]]; then
+  check "Kali's auto/config still has the three options build.sh rewrites, each once" \
+    "$(grep -cE '^[[:space:]]*--iso-(application "Kali Linux"|publisher "Kali"|volume "Kali Live") \\$' "$kali_auto_config" || true)" "3"
+  check "and build.sh patches the application and the publisher as well as the volume" \
+    "$(grep -cF -e 's|--iso-application "Kali Linux"|--iso-application "Shinobi OS"|' -e 's|--iso-publisher "Kali"|--iso-publisher "Shinobi OS' "$ROOT/distro/build.sh" || true)" "2"
+else
+  echo "  skip: distro/kali-live is not checked out, so Kali's auto/config was not compared with the label patch."
+fi
 check "the installed system's GRUB background is Shinobi's, and the picture ships in shinobi-desktop" \
   "$(bg=$(sed -n 's/^[[:space:]]*GRUB_BACKGROUND:[[:space:]]*"\(.*\)"/\1/p' "$ROOT/packaging/shinobi-installer/etc/calamares/modules/grubcfg.conf"); [[ -n $bg && -s $ROOT/packaging/shinobi-desktop$bg ]] && echo yes || echo no)" "yes"
 check "the GRUB menu keeps the live entry" \
@@ -162,8 +174,17 @@ check "our syslinux entry names the account" \
   "$(grep -c 'username=shinobi hostname=shinobi' "$syslinux" || true)" "2"
 check "live-config is configured to create it too, as a second path" \
   "$(grep -qE '^[[:space:]]*LIVE_USERNAME="shinobi"' "$ROOT/distro/overlay/includes.chroot/etc/live/config.conf.d/shinobi.conf" && echo yes || echo no)" "yes"
-check "our file is the one that wins" \
-  "$([[ distro/overlay/includes.chroot/etc/live/config.conf.d/shinobi.conf > distro/kali-live/kali-config/common/includes.chroot/etc/live/config.conf.d/kali.conf ]] && echo yes || echo no)" "yes"
+# live-config reads the files of config.conf.d in name order, so the later name wins. This
+# used to compare the two whole paths as strings, which is decided by "overlay" against
+# "kali-live" and says yes whatever the files are called.
+ours_conf="$ROOT/distro/overlay/includes.chroot/etc/live/config.conf.d/shinobi.conf"
+kalis_dir="$ROOT/distro/kali-live/kali-config/common/includes.chroot/etc/live/config.conf.d"
+check "our file is the one that wins (it exists, and its name sorts after Kali's kali.conf)" \
+  "$([[ -f $ours_conf && $(basename "$ours_conf") > kali.conf ]] && echo yes || echo no)" "yes"
+if [[ -d $kalis_dir ]]; then
+  check "and Kali's file is still called kali.conf (the comparison above names it)" \
+    "$([[ -f $kalis_dir/kali.conf ]] && echo yes || echo no)" "yes"
+fi
 # The hook does not rename anything. A build chroot has no login account (Kali
 # creates its own at boot), so a hook that asked the engine to apply the layer to
 # "the" account exited 1 and aborted the build; and the account is created under
