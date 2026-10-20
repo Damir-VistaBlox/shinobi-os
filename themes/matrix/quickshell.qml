@@ -4,6 +4,7 @@ QtObject {
   readonly property color background: "#000000"
   readonly property color foreground: "#00ff41"
   readonly property color accent: "#00ff41"
+  readonly property color warn: "#e0b000"
   readonly property color good: "#00ff41"
   readonly property color muted: "#4d805b"
   readonly property color border: "#0a3d1c"

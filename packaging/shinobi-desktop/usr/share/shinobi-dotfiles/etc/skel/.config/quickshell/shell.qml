@@ -4,6 +4,7 @@ import Quickshell
 import Quickshell.Hyprland
 import Quickshell.Io
 import Quickshell.Wayland
+import "ProviderStatus.js" as ProviderStatus
 
 // Shinobi's intentionally small Quickshell surface. It replaces Waybar, but
 // leaves application picking to wofi and notifications to mako. Keeping the
@@ -23,6 +24,11 @@ ShellRoot {
   property string agentState: "offline"
   property string contextState: "offline"
   property string trustProfile: "observer"
+  // What the default LLM provider could do right now, from `shinobi provider
+  // readiness --json` (ProviderStatus.js shortens it). Unknown until the first answer.
+  property string providerLabel: "LLM ?"
+  property string providerTone: "muted"
+  property bool providerAnswered: false
 
   function run(command) {
     // Process has one mutable command slot. Ignore an accidental rapid
@@ -34,7 +40,11 @@ ShellRoot {
 
   function setEngagement(value) {
     var normalized = String(value).trim()
-    engagement = normalized.length > 0 ? normalized : "no engagement"
+    var next = normalized.length > 0 ? normalized : "no engagement"
+    var changed = next !== engagement
+    engagement = next
+    // Clearance is per engagement, so the provider's readiness changes with it.
+    if (changed) refreshProvider()
   }
 
   function refreshEngagement() {
@@ -47,6 +57,19 @@ ShellRoot {
 
   function refreshControlPlane() {
     if (!controlProbe.running) controlProbe.running = true
+  }
+
+  function refreshProvider() {
+    if (providerProbe.running) return
+    root.providerAnswered = false
+    providerProbe.running = true
+  }
+
+  function updateProvider(text) {
+    var summary = ProviderStatus.summarize(text)
+    root.providerAnswered = true
+    root.providerLabel = summary.label
+    root.providerTone = summary.tone
   }
 
   function updateControlPlane(line) {
@@ -74,6 +97,7 @@ ShellRoot {
     root.refreshEngagement()
     root.refreshActiveWindow()
     root.refreshControlPlane()
+    root.refreshProvider()
   }
 
   Timer {
@@ -89,7 +113,10 @@ ShellRoot {
     interval: 10000
     running: true
     repeat: true
-    onTriggered: root.refreshControlPlane()
+    onTriggered: {
+      root.refreshControlPlane()
+      root.refreshProvider()
+    }
   }
 
   // FileView gives immediate updates for normal engagement changes. The slow
@@ -119,6 +146,16 @@ ShellRoot {
     id: controlProbe
     command: ["sh", "-c", "shinobi agent status 2>/dev/null | tr -d '\\n'"]
     stdout: SplitParser { onRead: function(line) { root.updateControlPlane(line) } }
+  }
+
+  Process {
+    id: providerProbe
+    // One line, newline-terminated, so the parser hands it over whole. A failed
+    // command prints only the newline (stderr is dropped): the exit handler turns
+    // "no answer" into "unknown" instead of leaving the last good answer on screen.
+    command: ["sh", "-c", "shinobi provider readiness --json 2>/dev/null | tr -d '\\n'; echo"]
+    stdout: SplitParser { onRead: function(line) { if (String(line).length > 0) root.updateProvider(line) } }
+    onExited: function(exitCode, exitStatus) { if (!root.providerAnswered) root.updateProvider("") }
   }
 
   Process {
@@ -186,6 +223,8 @@ ShellRoot {
     property string label: ""
     property color ink: theme.foreground
     property color fill: "transparent"
+    // Optional: what a click runs. A pill with none is only a readout.
+    property string command: ""
     implicitWidth: pillText.implicitWidth + 18
     implicitHeight: 26
     radius: 3
@@ -201,6 +240,10 @@ ShellRoot {
       font.family: "JetBrainsMono Nerd Font Mono"
       font.pixelSize: 12
       font.bold: true
+    }
+    TapHandler {
+      enabled: pill.command.length > 0
+      onTapped: root.run(pill.command)
     }
   }
 
@@ -233,6 +276,14 @@ ShellRoot {
             label: root.agentState === "ready" ? "󰚩  AI " + root.trustProfile : "󰚩  AI " + root.agentState
             ink: root.agentState === "ready" ? theme.good : theme.muted
             fill: root.agentState === "ready" ? theme.safeSurface : theme.inactiveSurface
+          }
+          // Which LLM the agent would use and, if it could not, the first thing in
+          // the way. A click opens the provider menu, where the fix is.
+          StatusPill {
+            label: root.providerLabel
+            ink: root.providerTone === "good" ? theme.good : (root.providerTone === "warn" ? theme.warn : theme.muted)
+            fill: root.providerTone === "good" ? theme.safeSurface : theme.inactiveSurface
+            command: "shinobi-menu provider"
           }
           StatusPill {
             label: "CTX " + root.contextState

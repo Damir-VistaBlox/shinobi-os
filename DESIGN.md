@@ -750,8 +750,14 @@ an operator's configuration either — homes are completed rather than synced, a
   removed, or the file is malformed) has no row to be the default of, so the
   reason is shown when the list opens and "Clear my default" is offered on every
   provider; a default from the system or the package is explained but not offered
-  for clearing, since clearing would change nothing. The bar and a panel do not
-  surface any of this yet.
+  for clearing, since clearing would change nothing. The bar surfaces it as
+  an LLM pill (`quickshell/ProviderStatus.js`, tested without a compositor in
+  `tests/test-bar-provider.sh`): the default provider when it could be used
+  right now, otherwise the first thing in its way, in the report's own order
+  (no engagement, not permitted, cloud not cleared, below operator, no key). A
+  click opens the same menu. It shortens the report and decides nothing, and a
+  report it cannot read is shown as unknown, not as the last good answer. A
+  panel does not surface it yet.
 - **Response streaming is deferred.** Requests are non-streaming, so a provider
   that only streams is not supported yet. Nothing in the gate depends on it.
 - **The image builds, and this branch's first build ever is the one that proved
