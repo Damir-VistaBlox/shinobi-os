@@ -43,14 +43,18 @@ function reason(blocker) {
 // command failed). Returns { label, tone }, tone being "good" (the default could be
 // used right now), "warn" (something can be done about it) or "muted" (nothing is set
 // up, or the report cannot be read).
-function summarize(text) {
-  var report
+function parse(text) {
   try {
-    report = JSON.parse(String(text))
+    var report = JSON.parse(String(text))
+    return report && typeof report === "object" ? report : null
   } catch (error) {
-    return UNKNOWN
+    return null
   }
-  if (!report || typeof report !== "object") return UNKNOWN
+}
+
+function summarize(text) {
+  var report = parse(text)
+  if (report === null) return UNKNOWN
   var chosen = report["default"]
   if (!chosen || typeof chosen !== "object") return UNKNOWN
 
@@ -70,4 +74,27 @@ function summarize(text) {
   var blockers = Array.isArray(chosen.blockers) ? chosen.blockers : []
   var first = blockers.length > 0 ? blockers[0] : (chosen.problem || "")
   return { label: "LLM " + name + " · " + reason(first), tone: "warn" }
+}
+
+// rows(text): one row per provider for the panel, or null when the report cannot be read.
+// The default comes first (it is the one the agent would use), then what could be used,
+// then the rest by name. `right` says where the model runs and, when it cannot be used, the
+// first thing in the way -- the same short reasons as the pill.
+function rows(text) {
+  var report = parse(text)
+  if (report === null || !Array.isArray(report.providers)) return null
+  var chosen = report["default"] && typeof report["default"].id === "string" ? report["default"].id : null
+  var list = report.providers.filter(function (p) { return p && typeof p === "object" && typeof p.id === "string" })
+  function rank(p) { return p.id === chosen ? 0 : (p.usable === true ? 1 : 2) }
+  list.sort(function (a, b) { return rank(a) - rank(b) || (a.id < b.id ? -1 : (a.id > b.id ? 1 : 0)) })
+  return list.map(function (p) {
+    var blockers = Array.isArray(p.blockers) ? p.blockers : []
+    var where = p.egress === "cloud" ? "cloud" : (p.egress === "local" ? "local" : "?")
+    var usable = p.usable === true
+    return {
+      left: (p.id === chosen ? "● " : "○ ") + shown(p.id),
+      right: where + " · " + (usable ? "ready" : reason(blockers.length > 0 ? blockers[0] : "")),
+      tone: usable ? "good" : (p.id === chosen ? "warn" : "muted")
+    }
+  })
 }

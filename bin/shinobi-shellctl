@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # shinobi:summary=Control the logged-in Shinobi desktop shell
-# shinobi:args=<status|reload|open-menu|close-menu|toggle-menu>
-# shinobi:examples=shinobi shellctl status | shinobi shellctl reload
+# shinobi:args=<status|reload|open-menu|close-menu|toggle-menu|toggle-panel|open-panel|close-panel>
+# shinobi:examples=shinobi shellctl status | shinobi shellctl reload | shinobi shellctl toggle-panel
 set -euo pipefail
 runtime="${XDG_RUNTIME_DIR:-/tmp}/shinobi"
 socket="$runtime/shell.sock"
@@ -24,6 +24,14 @@ case "$action" in
       exit 78
     fi
     ;;
-  -h|--help|help) echo 'Usage: shinobi shellctl <status|reload|open-menu|close-menu|toggle-menu>' ;;
+  toggle-panel|open-panel|close-panel)
+    # The panel (engagement, LLM providers, approvals, activity) lives in the shell and is
+    # reached through Quickshell's IPC; the shell is started from this config directory.
+    # The key bound to toggle-panel runs this, so it must say so when there is no shell
+    # to talk to rather than do nothing.
+    command -v quickshell >/dev/null 2>&1 || { echo "shinobi-shellctl: quickshell is not installed" >&2; exit 127; }
+    exec quickshell ipc --path "${XDG_CONFIG_HOME:-$HOME/.config}/quickshell" call panel "${action%-panel}"
+    ;;
+  -h|--help|help) echo 'Usage: shinobi shellctl <status|reload|open-menu|close-menu|toggle-menu|toggle-panel|open-panel|close-panel>' ;;
   *) echo "shinobi-shellctl: unknown action '$action'" >&2; exit 2 ;;
 esac

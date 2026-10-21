@@ -5,6 +5,7 @@ import Quickshell.Hyprland
 import Quickshell.Io
 import Quickshell.Wayland
 import "ProviderStatus.js" as ProviderStatus
+import "PanelModel.js" as PanelModel
 
 // Shinobi's intentionally small Quickshell surface. It replaces Waybar, but
 // leaves application picking to wofi and notifications to mako. Keeping the
@@ -29,6 +30,14 @@ ShellRoot {
   property string providerLabel: "LLM ?"
   property string providerTone: "muted"
   property bool providerAnswered: false
+  // The panel (Panel.qml): closed until asked for. Its content is rebuilt from the two
+  // reports below whenever either arrives, and while it is open from the clock too, since
+  // "3m ago" moves without a new report.
+  property bool panelOpen: false
+  property var panelContent: ({ sections: [], footer: "" })
+  property string readinessText: ""
+  property string panelStatusText: ""
+  property bool panelAnswered: false
 
   function run(command) {
     // Process has one mutable command slot. Ignore an accidental rapid
@@ -70,6 +79,33 @@ ShellRoot {
     root.providerAnswered = true
     root.providerLabel = summary.label
     root.providerTone = summary.tone
+    root.readinessText = String(text)
+    if (root.panelOpen) root.rebuildPanel()
+  }
+
+  function rebuildPanel() {
+    root.panelContent = PanelModel.build(root.panelStatusText, ProviderStatus.rows(root.readinessText), Date.now())
+  }
+
+  function refreshPanel() {
+    if (panelProbe.running) return
+    root.panelAnswered = false
+    panelProbe.running = true
+  }
+
+  function updatePanel(text) {
+    root.panelStatusText = String(text)
+    root.rebuildPanel()
+  }
+
+  function setPanel(open) {
+    root.panelOpen = open
+    if (open) {
+      // Show what is known at once and bring it up to date: opening must not wait on a probe.
+      root.rebuildPanel()
+      root.refreshPanel()
+      root.refreshProvider()
+    }
   }
 
   function updateControlPlane(line) {
@@ -107,6 +143,17 @@ ShellRoot {
     running: true
     repeat: true
     onTriggered: root.clockText = Qt.formatDateTime(new Date(), "ddd · dd MMM · HH:mm")
+  }
+
+  // Only while the panel is open: a closed panel costs nothing.
+  Timer {
+    interval: 4000
+    running: root.panelOpen
+    repeat: true
+    onTriggered: {
+      root.refreshPanel()
+      root.refreshProvider()
+    }
   }
 
   Timer {
@@ -156,6 +203,38 @@ ShellRoot {
     command: ["sh", "-c", "shinobi provider readiness --json 2>/dev/null | tr -d '\\n'; echo"]
     stdout: SplitParser { onRead: function(line) { if (String(line).length > 0) root.updateProvider(line) } }
     onExited: function(exitCode, exitStatus) { if (!root.providerAnswered) root.updateProvider("") }
+  }
+
+  Process {
+    id: panelProbe
+    // Same shape as the provider probe above: one newline-terminated line, and "no answer"
+    // is reported as such (an empty line) so the panel says unavailable instead of keeping
+    // what it showed before.
+    command: ["sh", "-c", "shinobi panel status --json 2>/dev/null | tr -d '\\n'; echo"]
+    stdout: SplitParser {
+      onRead: function(line) {
+        if (String(line).length === 0) return
+        root.panelAnswered = true
+        root.updatePanel(line)
+      }
+    }
+    onExited: function(exitCode, exitStatus) { if (!root.panelAnswered) root.updatePanel("") }
+  }
+
+  // `shinobi shellctl toggle-panel` (and the key bound to it) reach the shell through here.
+  IpcHandler {
+    target: "panel"
+    function toggle(): void { root.setPanel(!root.panelOpen) }
+    function open(): void { root.setPanel(true) }
+    function close(): void { root.setPanel(false) }
+  }
+
+  Panel {
+    colors: theme
+    visible: root.panelOpen
+    content: root.panelContent
+    onCloseRequested: root.setPanel(false)
+    onCommandRequested: function(command) { root.run(command) }
   }
 
   Process {
@@ -225,6 +304,7 @@ ShellRoot {
     property color fill: "transparent"
     // Optional: what a click runs. A pill with none is only a readout.
     property string command: ""
+    signal activated()
     implicitWidth: pillText.implicitWidth + 18
     implicitHeight: 26
     radius: 3
@@ -242,8 +322,10 @@ ShellRoot {
       font.bold: true
     }
     TapHandler {
-      enabled: pill.command.length > 0
-      onTapped: root.run(pill.command)
+      onTapped: {
+        if (pill.command.length > 0) root.run(pill.command)
+        pill.activated()
+      }
     }
   }
 
@@ -271,7 +353,12 @@ ShellRoot {
           anchors.rightMargin: 8
           spacing: 6
 
-          StatusPill { label: "󰣇  SHINOBI"; ink: theme.accent; fill: theme.surface }
+          StatusPill {
+            label: "󰣇  SHINOBI"
+            ink: theme.accent
+            fill: theme.surface
+            onActivated: root.setPanel(!root.panelOpen)
+          }
           StatusPill {
             label: root.agentState === "ready" ? "󰚩  AI " + root.trustProfile : "󰚩  AI " + root.agentState
             ink: root.agentState === "ready" ? theme.good : theme.muted
@@ -305,6 +392,7 @@ ShellRoot {
             label: root.engagement === "no engagement" ? "󱊖  NO SCOPE" : "󰯢  " + root.engagement
             ink: root.engagement === "no engagement" ? theme.muted : theme.good
             fill: root.engagement === "no engagement" ? theme.inactiveSurface : theme.safeSurface
+            onActivated: root.setPanel(!root.panelOpen)
           }
 
           Text {

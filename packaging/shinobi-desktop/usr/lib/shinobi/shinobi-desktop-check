@@ -43,6 +43,8 @@ for required in \
   .config/quickshell/shell.qml \
   .config/quickshell/Theme.qml \
   .config/quickshell/ProviderStatus.js \
+  .config/quickshell/Panel.qml \
+  .config/quickshell/PanelModel.js \
   .config/wofi/config \
   .config/wofi/style.css \
   .config/kitty/kitty.conf

@@ -756,8 +756,22 @@ an operator's configuration either — homes are completed rather than synced, a
   right now, otherwise the first thing in its way, in the report's own order
   (no engagement, not permitted, cloud not cleared, below operator, no key). A
   click opens the same menu. It shortens the report and decides nothing, and a
-  report it cannot read is shown as unknown, not as the last good answer. A
-  panel does not surface it yet.
+  report it cannot read is shown as unknown, not as the last good answer.
+
+  The panel (`SUPER+A`, or a click on the SHINOBI or engagement pill) is the
+  fuller view: the engagement and whether its scope can be used, every provider
+  with where it runs and what blocks it, the approvals waiting for a human, and
+  what the agent's tools last did. It is somewhere to look, not to decide.
+  Approving, clearing egress or choosing a provider stay in the CLI and the wofi
+  menu, where the thing being decided is printed in full; the panel names the
+  command. `shinobi panel status --json` is the one report it reads: it writes
+  nothing (opening the panel leaves no trace and cannot consume an approval),
+  reads the scope as the gate does so a scope the gate would refuse is shown as a
+  problem and not as a list of targets, leaves approval arguments and log
+  arguments and detail off the screen, and will not follow a link out of the
+  engagement directory to read a "log". Its window check is for display only; the
+  recon server's scope module is what authorizes. It reaches the shell through
+  Quickshell's IPC (`shinobi shellctl toggle-panel`), the same route the key uses.
 - **Response streaming is deferred.** Requests are non-streaming, so a provider
   that only streams is not supported yet. Nothing in the gate depends on it.
 - **The image builds, and this branch's first build ever is the one that proved

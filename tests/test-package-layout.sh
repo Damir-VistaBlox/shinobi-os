@@ -376,6 +376,8 @@ for f in \
   usr/share/shinobi-dotfiles/etc/skel/.config/hypr/hyprland.conf \
   usr/share/shinobi-dotfiles/etc/skel/.config/quickshell/shell.qml \
   usr/share/shinobi-dotfiles/etc/skel/.config/quickshell/ProviderStatus.js \
+  usr/share/shinobi-dotfiles/etc/skel/.config/quickshell/Panel.qml \
+  usr/share/shinobi-dotfiles/etc/skel/.config/quickshell/PanelModel.js \
   usr/share/shinobi-dotfiles/etc/skel/.config/wofi/config \
   usr/share/backgrounds/shinobi-os/shinobi-night.png \
   usr/share/plymouth/themes/shinobi/shinobi.plymouth \
