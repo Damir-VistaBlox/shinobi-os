@@ -65,9 +65,15 @@ shinobi_defaults_home() {
   echo "${SHINOBI_DEFAULTS_DIR:-/usr/share/shinobi/default}"
 }
 
+# Where live-boot mounts the medium: /run/live/medium since live-boot 3 (every Debian and
+# Kali this targets), /lib/live/mount/medium before that. This used to name the first path
+# twice, which looks like one check and is half of one.
 shinobi_is_live() {
-  [[ -f /run/live/medium/live/filesystem.squashfs || -f /run/live/medium/live/filesystem.squashfs ]] \
-    || [[ "${SHINOBI_LIVE_MODE:-}" == "1" ]]
+  local medium
+  for medium in /run/live/medium /lib/live/mount/medium; do
+    [[ -f "$medium/live/filesystem.squashfs" ]] && return 0
+  done
+  [[ "${SHINOBI_LIVE_MODE:-}" == "1" ]]
 }
 
 shinobi_require_installed() {
