@@ -11,7 +11,16 @@ case "$action" in
     shinobi_require_installed; shinobi_lock update
     transaction="$(shinobi_transaction_start update.check apt-metadata)"
     set +e
-    if [[ "${2:-}" == "--dry-run" || "${SHINOBI_DRY_RUN:-}" == 1 ]]; then apt-get -s dist-upgrade; else command -v pkexec >/dev/null 2>&1 && pkexec apt-get update || sudo apt-get update; fi
+    # An if/else, as `apply` below has: `A && pkexec ... || sudo ...` runs sudo whenever pkexec
+    # fails, including when apt itself fails or the operator dismisses the prompt, so a failed
+    # update was run a second time, as a different user, after the person had said no.
+    if [[ "${2:-}" == "--dry-run" || "${SHINOBI_DRY_RUN:-}" == 1 ]]; then
+      apt-get -s dist-upgrade
+    elif command -v pkexec >/dev/null 2>&1; then
+      pkexec apt-get update
+    else
+      sudo apt-get update
+    fi
     result=$?
     set -e
     shinobi_transaction_finish "$transaction" "$([[ "$result" -eq 0 ]] && echo completed || echo failed)" apt-metadata
