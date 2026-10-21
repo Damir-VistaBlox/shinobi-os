@@ -3,7 +3,9 @@
 id = "anthropic"
 name = "Anthropic"
 api = "anthropic"
-base_url = "https://api.anthropic.com"
+# The client appends /messages to this, and Anthropic serves the Messages API at
+# /v1/messages: without the /v1 every request went to a path that does not exist.
+base_url = "https://api.anthropic.com/v1"
 egress = "cloud"
 requires_key = true
 default_model = "claude-sonnet-4-5"

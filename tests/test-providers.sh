@@ -685,6 +685,29 @@ locals_ = [pid for pid, data in locals_by_id.items() if data["egress"] == "local
 for wanted in ("ollama", "vllm"):
     if wanted not in locals_:
         problems.append(f"{wanted} ships no local manifest")
+# A manifest that parses is not a manifest that works: the client appends the API's path to
+# base_url, and a base_url missing its /v1 sent every Anthropic request to a URL that does
+# not exist (and no other check here could notice, because the loader accepts it). So the
+# URL each shipped manifest produces is held to the vendor's documented endpoint.
+sys.path.insert(0, str(root / "libexec" / "shinobi"))
+from shinobi_control.llm import wire
+documented = {
+    "openai": "https://api.openai.com/v1/chat/completions",
+    "anthropic": "https://api.anthropic.com/v1/messages",
+    "xai": "https://api.x.ai/v1/chat/completions",
+    "deepseek": "https://api.deepseek.com/v1/chat/completions",
+    "mistral": "https://api.mistral.ai/v1/chat/completions",
+    "groq": "https://api.groq.com/openai/v1/chat/completions",
+    "ollama": "http://127.0.0.1:11434/v1/chat/completions",
+    "vllm": "http://127.0.0.1:8000/v1/chat/completions",
+}
+for pid, data in locals_by_id.items():
+    path = wire.build(data["api"], "model", "", [], [])[0]
+    url = data["base_url"].rstrip("/") + path
+    if pid not in documented:
+        problems.append(f"{pid} has no documented endpoint in this test; add it")
+    elif url != documented[pid]:
+        problems.append(f"{pid} sends requests to {url}, not {documented[pid]}")
 if problems:
     print("; ".join(problems))
     sys.exit(1)
