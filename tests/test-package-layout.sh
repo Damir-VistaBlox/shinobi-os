@@ -394,6 +394,15 @@ do
     "$([[ -f $desktop_stage/$f ]] && echo yes || echo no)" "yes"
 done
 
+hypr_conf="$desktop_stage/usr/share/shinobi-dotfiles/etc/skel/.config/hypr/hyprland.conf"
+for dir in l r u d; do
+  check "the session can move focus '$dir' from the keyboard (a tiling desktop with only mouse focus cannot be driven from a terminal)" \
+    "$(grep -cE "^bind[e]?[[:space:]]*=[[:space:]]*SUPER,[[:space:]]*[A-Za-z]+,[[:space:]]*movefocus,[[:space:]]*$dir\$" "$hypr_conf" || true)" "1"
+done
+check "and cycle through windows with one key" \
+  "$(grep -cE '^bind[[:space:]]*=[[:space:]]*SUPER,[[:space:]]*Tab,[[:space:]]*cyclenext$' "$hypr_conf" || true)" "1"
+check "no key is bound twice, so none of these shadows another binding" \
+  "$(grep -E '^bind[elm]*[[:space:]]*=' "$hypr_conf" | sed -E 's/^bind[elm]*[[:space:]]*=[[:space:]]*//' | awk -F, '{gsub(/ /,"",$1); gsub(/ /,"",$2); print toupper($1)","tolower($2)}' | sort | uniq -d | wc -l)" "0"
 check "its version matches the core package it depends on" \
   "$(grep -h '^Version:' "$desktop_stage/DEBIAN/control" "$stage/DEBIAN/control" | sort -u | wc -l)" "1"
 check "and it depends on the core package at that version" \
