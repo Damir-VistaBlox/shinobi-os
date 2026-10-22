@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+# shinobi:summary=What the desktop panel shows: the engagement, approvals waiting, and recent tool activity
+# shinobi:args=<status> [--json]
+# shinobi:examples=shinobi panel status | shinobi panel status --json
+set -euo pipefail
+bin_dir="$(dirname -- "$(readlink -f -- "${BASH_SOURCE[0]}")")"
+root="$bin_dir/../libexec/shinobi"
+# Packaged, bin/ is /usr/bin and libexec/shinobi/ is /usr/lib/shinobi.
+[[ -d "$root" ]] || root="$bin_dir/../lib/shinobi"
+export PYTHONPATH="$root${PYTHONPATH:+:$PYTHONPATH}"
+# -P: without it `python3 -m` puts the current directory first on sys.path, so an operator
+# standing in a directory they did not write (a cloned repository, something extracted from
+# a target) would import its json.py in this process. PYTHONPATH, set above, is still honoured.
+exec python3 -P -m shinobi_control.panelctl "$@"

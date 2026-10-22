@@ -19,7 +19,7 @@
 #   * that shell.qml is wired to it and that every colour it asks the theme for exists in
 #     every theme, because a theme that lacks one makes that part of the bar invisible.
 #
-# Needs node for the logic half (skipped, loudly, without it).
+# Needs node for the logic half: skipped, loudly, without it, unless SHINOBI_REQUIRE_NODE=1 (CI sets it).
 set -uo pipefail
 
 ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -80,6 +80,11 @@ check "the packaged Theme.qml is the default theme's file (shinobi theme set lin
   "$(cmp -s "$QS/Theme.qml" "$ROOT/themes/kali-dark/quickshell.qml" && echo same || echo different)" "same"
 
 if ! command -v node >/dev/null 2>&1; then
+  if [[ ${SHINOBI_REQUIRE_NODE:-} == 1 ]]; then
+    echo "  FAIL node is not installed, and SHINOBI_REQUIRE_NODE=1 says the pill's logic must run"
+    printf '\nbar-provider-test: FAIL (node required)\n'
+    exit 1
+  fi
   echo
   echo "  skip: node is not installed, so the pill's logic was not run."
   echo "        The wiring checks above ran; the report-to-label checks did not."

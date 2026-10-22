@@ -81,6 +81,10 @@ jobs:
           exit "$status"
 
       - name: Run source test suite
+        # The bar and panel suites run their logic with node. GitHub's ubuntu image has it, and
+        # this makes a runner that does not fail the suites instead of skipping half of them.
+        env:
+          SHINOBI_REQUIRE_NODE: "1"
         run: ./tests/run-all.sh
 
       - name: Verify the Python package is installable

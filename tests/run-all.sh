@@ -56,6 +56,7 @@ SOURCE_TESTS=(
   tests/test-provider-default.sh
   tests/test-menu-provider.sh
   tests/test-bar-provider.sh
+  tests/test-panel.sh
   tests/test-repo.sh
   tests/test-egress.sh
   tests/test-llm.sh
