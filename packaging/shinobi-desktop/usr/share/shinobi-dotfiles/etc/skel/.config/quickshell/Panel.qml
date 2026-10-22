@@ -8,6 +8,11 @@ import Quickshell.Wayland
 // use, the approvals waiting for a human, and what the tools last did. It only shows. What
 // it shows is built in PanelModel.js; this file lays it out.
 //
+// Every Text here is PlainText. The strings come from a log and from files an agent can
+// influence (a target it was refused, an approval's reason), and Qt's default format treats a
+// string that looks like markup as rich text: an <img> in a refused target made the shell
+// fetch the URL when the panel was opened, which is network traffic outside the gate.
+//
 // It floats over the windows instead of making room for itself (exclusionMode Ignore), so
 // opening it never reflows the engagement's terminals, and it asks for the keyboard only when
 // clicked (OnDemand), so it never takes keys from the window being worked in.
@@ -26,7 +31,8 @@ PanelWindow {
   anchors { top: true; right: true }
   margins { top: 46; right: 8 }
   implicitWidth: 440
-  implicitHeight: body.implicitHeight + 24
+  // As tall as the content, up to what the screen leaves under the bar; past that it scrolls.
+  implicitHeight: Math.min(body.implicitHeight + 24, (screen ? screen.height : 800) - 70)
   color: "transparent"
   exclusionMode: ExclusionMode.Ignore
   WlrLayershell.namespace: "shinobi-panel"
@@ -51,12 +57,18 @@ PanelWindow {
     border.color: panel.colors.border
     border.width: 1
 
+    Flickable {
+      id: scroller
+      anchors.fill: parent
+      anchors.margins: 12
+      contentWidth: width
+      contentHeight: body.implicitHeight
+      clip: true
+      boundsBehavior: Flickable.StopAtBounds
+
     ColumnLayout {
       id: body
-      anchors.left: parent.left
-      anchors.right: parent.right
-      anchors.top: parent.top
-      anchors.margins: 12
+      width: scroller.width
       spacing: 10
 
       Repeater {
@@ -68,6 +80,7 @@ PanelWindow {
 
           Text {
             text: modelData.title
+            textFormat: Text.PlainText
             color: panel.colors.accent
             font.family: "JetBrainsMono Nerd Font Mono"
             font.pixelSize: 11
@@ -86,6 +99,7 @@ PanelWindow {
                 Layout.fillWidth: true
                 Layout.preferredWidth: 1
                 text: modelData.left
+                textFormat: Text.PlainText
                 color: panel.toneColor(modelData.tone)
                 wrapMode: Text.WrapAnywhere
                 font.family: "JetBrainsMono Nerd Font Mono"
@@ -94,6 +108,7 @@ PanelWindow {
               Text {
                 visible: modelData.right.length > 0
                 text: modelData.right
+                textFormat: Text.PlainText
                 color: panel.toneColor(modelData.tone)
                 font.family: "JetBrainsMono Nerd Font Mono"
                 font.pixelSize: 12
@@ -121,7 +136,9 @@ PanelWindow {
         color: panel.colors.muted
         font.family: "JetBrainsMono Nerd Font Mono"
         font.pixelSize: 11
+        textFormat: Text.PlainText
       }
+    }
     }
   }
 }

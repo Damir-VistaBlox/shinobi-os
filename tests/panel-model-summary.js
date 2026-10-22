@@ -18,4 +18,6 @@ const [, , panelFile, providerFile, statusFile, readinessFile, now] = process.ar
 const panel = load(panelFile, ["build"])
 const providers = load(providerFile, ["rows"])
 const read = (file) => fs.readFileSync(file, "utf8")
-process.stdout.write(JSON.stringify(panel.build(read(statusFile), providers.rows(read(readinessFile)), Number(now))) + "\n")
+// A status file named "null" stands for a probe that has not answered yet (loading).
+const status = statusFile === "null" ? null : read(statusFile)
+process.stdout.write(JSON.stringify(panel.build(status, providers.rows(read(readinessFile)), Number(now))) + "\n")

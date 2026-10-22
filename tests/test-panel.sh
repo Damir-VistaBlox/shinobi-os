@@ -4,7 +4,8 @@
 #
 # The panel is somewhere to look, not somewhere to decide, and that is what most of this holds:
 #
-#   * `shinobi panel status --json` (the one report the panel reads) in every state an engagement
+#   * `shinobi panel status --json` (the report behind the panel's engagement, approvals and activity
+#     sections; the providers come from the readiness report the bar polls) in every state an engagement
 #     can be in, including the ones where showing a list of targets would be a lie: a scope file
 #     the gate would refuse (writable by others, a link, bad YAML, no file), a window that has
 #     ended or never began. It must not write anything, must not put an approval's arguments or a
@@ -12,11 +13,17 @@
 #     engagement directory to read a "log";
 #   * the panel's logic (PanelModel.js), run with node against the real report: a report it
 #     cannot read is shown as unavailable and never as an empty, reassuring section;
+#   * what it cannot be made to do by what it reads: hang on a pipe where a log or a record should
+#     be, balloon on a YAML alias, show an unreadable log or approval as "nothing" (a section it cannot
+#     read is unavailable, in that section only), or disagree with the gate about which engagement is
+#     active;
 #   * the wiring: the key, the IPC route `shinobi shellctl toggle-panel` takes into the shell, the
-#     files the desktop check requires, and the colours the panel asks for in every theme.
+#     files the desktop check requires, the colours the panel asks for in every theme, and that every
+#     Text is plain text (the strings come from logs an agent can influence).
 #
 # Quickshell itself needs a compositor and is not run here; the layout was looked at on a booted
-# image. Needs node for the logic half (skipped, loudly, without it).
+# image. Needs node for the logic half: skipped, loudly, without it, unless SHINOBI_REQUIRE_NODE=1
+# (CI sets it, so a runner without node fails instead of quietly not running half the test).
 set -uo pipefail
 
 ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -143,6 +150,32 @@ check "and what is wrong never lists targets or activity" "$(report | jq_py '(d[
 scope acme 2020-01-01 2099-12-31 '["10.0.0.0/24"]'
 use acme
 
+section "what a hostile or odd scope file cannot do"
+# Each alias holds nine of the one before: eleven levels is far more than memory if printed. YAML
+# loads it in an instant (the references are shared); turning it into text would not.
+python3 - "$eng/acme/scope.yaml" <<'PYEOF'
+import sys
+lines = ['window: {start: "2020-01-01", end: "2099-12-31"}', 'bomb0: &b0 [x, x, x, x, x, x, x, x, x]']
+for i in range(1, 12):
+    lines.append(f"bomb{i}: &b{i} [" + ", ".join([f"*b{i - 1}"] * 9) + "]")
+lines.append("targets: [*b11, plain.example]")
+open(sys.argv[1], "w").write("\n".join(lines) + "\n")
+PYEOF
+chmod 600 "$eng/acme/scope.yaml"
+check "an alias that expands to gigabytes is answered at once, and a target that is not text is shown as such" \
+  "$(timeout 20 shinobi-panel status --json | jq_py '(d["engagement"]["state"], d["engagement"]["targets"])')" "('ready', ['(not text)', 'plain.example'])"
+printf 'window: {start: [a, b], end: {c: d}}\ntargets: [x.example]\n' >"$eng/acme/scope.yaml"
+check "a window whose dates are not dates is invalid, not an error" "$(report | jq_py 'd["engagement"]["window"]["state"]')" "invalid"
+scope acme 2020-01-01 2099-12-31 '["10.0.0.0/24"]'
+
+section "which engagement it means"
+scope other 2020-01-01 2099-12-31 '["other.example"]'
+use acme
+check "with the state file alone: that engagement" "$(report | jq_py '(d["engagement"]["name"], d["engagement"]["targets"])')" "('acme', ['10.0.0.0/24'])"
+check "with SHINOBI_ENGAGEMENT set it wins for the name AND the scope, as it does for the gate" \
+  "$(SHINOBI_ENGAGEMENT=other shinobi-panel status --json | jq_py '(d["engagement"]["name"], d["engagement"]["targets"])')" "('other', ['other.example'])"
+rm -rf "$eng/other"
+
 section "the session profile"
 printf 'operator' >"$state/profile"
 check "an operator session says so" "$(report | jq_py 'd["profile"]')" "operator"
@@ -151,7 +184,7 @@ check "a profile nobody defined is read as observer, as the gate reads it" "$(re
 rm -f "$state/profile"
 
 section "approvals waiting for a human"
-check "none to begin with" "$(report | jq_py 'd["approvals"]')" "{'pending': [], 'pending_count': 0}"
+check "none to begin with" "$(report | jq_py 'd["approvals"]')" "{'pending': [], 'pending_count': 0, 'unreadable': 0}"
 approval_file aaaa1111 pending 600 2026-10-21T09:00:01+00:00
 approval_file bbbb2222 pending 600 2026-10-21T09:00:00+00:00
 approval_file cccc3333 approved 600
@@ -168,8 +201,26 @@ check "but never the arguments, which are one 'shinobi approval show' away" \
 for i in 1 2 3 4 5 6 7; do approval_file "seven000$i" pending 600 "2026-10-21T08:00:0$i+00:00"; done
 check "more than fit are cut, and the count stays honest" "$(report | jq_py '(len(d["approvals"]["pending"]), d["approvals"]["pending_count"])')" "(5, 9)"
 printf 'not json' >"$state/approvals/broken.json"
-check "a record that is not JSON is skipped, not an error" "$(shinobi-panel status --json >/dev/null 2>&1; echo $?)" "0"
+check "a record that is not JSON is not an error, and is counted as unreadable (it might be the pending one)" \
+  "$(report | jq_py '(d["approvals"]["unreadable"], d["approvals"]["pending_count"])')" "(1, 9)"
+mkfifo "$state/approvals/pipe.json"
+check "a pipe among the records does not hang the report, and counts as unreadable" \
+  "$(timeout 10 shinobi-panel status --json | jq_py 'd["approvals"]["unreadable"]')" "2"
+rm -f "$state/approvals/pipe.json" "$state/approvals/broken.json"
+python3 - "$state/approvals/naive0001.json" <<'PYEOF'
+import datetime as dt, json, sys
+soon = (dt.datetime.now(dt.timezone.utc) + dt.timedelta(minutes=5)).replace(tzinfo=None)
+json.dump({"approval_id": "naive0001", "capability": "nmap.scan", "arguments": {}, "profile": "operator", "reason": "naive deadline",
+           "state": "pending", "live_mode": False, "created_at": "2026-10-21T07:00:00+00:00", "expires_at": soon.isoformat()}, open(sys.argv[1], "w"))
+PYEOF
+check "a deadline with no time zone is read as UTC, as the gate reads it: an approval the gate honours is counted" \
+  "$(report | jq_py 'd["approvals"]["pending_count"]')" "10"
 rm -rf "$state/approvals"
+printf 'a file where the directory should be' >"$state/approvals"
+check "an approvals directory that cannot be read is unavailable, not none waiting" "$(report | jq_py 'd["approvals"]')" "None"
+check "and only that section: the engagement and the activity are still reported" \
+  "$(report | jq_py '(d["engagement"]["state"], d["activity"])')" "('ready', [])"
+rm -f "$state/approvals"
 
 section "what the agent's tools last did"
 check "an engagement with an empty log has nothing yet" "$(report | jq_py 'd["activity"]')" "[]"
@@ -207,13 +258,32 @@ PYEOF
 started="$(date +%s)"
 check "a log of several megabytes still ends with its newest record" "$(report | jq_py 'd["activity"][0]["target"]')" "last.example"
 check "and is answered in a moment, not after reading all of it" "$(((($(date +%s) - started) < 5)) && echo yes || echo no)" "yes"
+# What is read of a big log is bounded, not just what is shown.
+check "the tail of a multi-megabyte log is read to a bound, not whole" "$(python3 -P - "$eng/acme/log.jsonl" <<'PYEOF'
+import sys
+from pathlib import Path
+from shinobi_control import panelctl
+lines = panelctl._tail_lines(Path(sys.argv[1]))
+total = sum(len(line.encode()) + 1 for line in lines)
+print("bounded" if 0 < total <= panelctl.LOG_TAIL_BYTES else f"read {total} bytes")
+PYEOF
+)" "bounded"
 mv "$eng/acme/log.jsonl" "$work/real-log.jsonl"
+check "a log that does not exist yet is nothing yet" "$(report | jq_py 'd["activity"]')" "[]"
 ln -s "$work/real-log.jsonl" "$eng/acme/log.jsonl"
-check "a log that is a link is not followed" "$(report | jq_py 'd["activity"]')" "[]"
+check "a log that is a link is not followed, and is unavailable rather than empty" "$(report | jq_py 'd["activity"]')" "None"
+check "and only that section: the engagement is still shown" "$(report | jq_py 'd["engagement"]["state"]')" "ready"
 rm "$eng/acme/log.jsonl"
+mkfifo "$eng/acme/log.jsonl"
+check "a pipe where the log should be does not hang the report (it is unavailable)" \
+  "$(timeout 10 shinobi-panel status --json | jq_py 'd["activity"]')" "None"
+rm "$eng/acme/log.jsonl"
+cp "$work/real-log.jsonl" "$eng/acme/log.jsonl"
 
 section "it only reads"
-snapshot() { (cd "$work" && find home config state data engagements -type f -printf '%p %s %T@\n' | sort | md5sum); }
+# Every entry under the test's whole tree (directories, links, modes, sizes and times, not only
+# files), so a created directory or a changed mode shows too.
+snapshot() { (cd "$work" && find . -printf '%p %y %m %s %T@\n' | sort | md5sum); }
 log_record acme r1 result dns_lookup example.com allowed
 approval_file readonly1 pending 600
 before="$(snapshot)"
@@ -249,6 +319,29 @@ PYEOF
 )" | tail -c 1 | od -An -c | tr -d ' \n')" '\n'
 check "a failed probe is shown as unavailable (the exit handler), not left as the last answer" \
   "$(grep -c 'onExited:.*root.panelAnswered.*updatePanel("")' "$shell" || true)" "1"
+check "the probe has a deadline" "$(grep -c 'timeout 8 shinobi panel status --json' "$shell" || true)" "1"
+probe_cmd="$(python3 - "$shell" <<'PYEOF'
+import json, re, sys
+text = open(sys.argv[1]).read()
+block = text[text.index("id: panelProbe"):]
+print(json.loads(re.search(r'command:\s*(\[[^\]]*\])', block).group(1))[2])
+PYEOF
+)"
+mkdir -p "$work/hangbin"
+printf '#!/bin/sh\nsleep 30\n' >"$work/hangbin/shinobi"
+chmod +x "$work/hangbin/shinobi"
+hang_started="$(date +%s)"
+hang_out="$(PATH="$work/hangbin:$PATH" sh -c "${probe_cmd/timeout 8/timeout 1}")"
+check "and it fires: a command that never answers ends as an empty line (unavailable), not never" \
+  "[$hang_out]:$((($(date +%s) - hang_started) < 6 ? 1 : 0))" "[]:1"
+check "a closed-then-opened panel starts from loading, not from what it showed last time" \
+  "$(grep -c 'root.panelStatusText = null' "$shell" || true)" "1"
+for f in "$shell" "$panel_qml"; do
+  check "every Text in ${f##*/} is plain text (a string that looks like markup is otherwise fetched)" \
+    "$(grep -cE '^[[:space:]]*Text \{' "$f" || true)" "$(grep -c 'textFormat: Text.PlainText' "$f" || true)"
+done
+check "Panel.qml scrolls and is capped to the screen, so a tall panel is not cut off" \
+  "$(grep -cE 'Flickable \{|\(screen \? screen.height' "$panel_qml" || true)" "2"
 check "the shell answers the IPC route the key uses" "$(grep -c 'target: "panel"' "$shell" || true)" "1"
 for fn in toggle open close; do
   check "and has $fn" "$(grep -c "function $fn(): void" "$shell" || true)" "1"
@@ -274,9 +367,20 @@ EOF
 chmod +x "$work/fakebin/quickshell"
 for action in toggle open close; do
   FAKE_QS_LOG="$work/qs.log" PATH="$work/fakebin:$PATH" "$ROOT/bin/shinobi-shellctl" "$action-panel"
-  check "shellctl ${action}-panel calls the shell's IPC with exactly that function" \
-    "$(cat "$work/qs.log")" "ipc --path $XDG_CONFIG_HOME/quickshell call panel $action"
+  check "shellctl ${action}-panel calls the shell's IPC with exactly that function, at the path the unit starts it with" \
+    "$(cat "$work/qs.log")" "ipc --any-display --path $HOME/.config/quickshell call panel $action"
 done
+mkdir -p "$work/failbin"
+printf '#!/bin/sh\nexit 1\n' >"$work/failbin/quickshell"
+cat >"$work/failbin/notify-send" <<'FAKEEOF'
+#!/bin/sh
+printf '%s\n' "$*" >>"$FAKE_NOTIFY_LOG"
+FAKEEOF
+chmod +x "$work/failbin/quickshell" "$work/failbin/notify-send"
+rc=0
+FAKE_NOTIFY_LOG="$work/notify.log" PATH="$work/failbin:$PATH" "$ROOT/bin/shinobi-shellctl" toggle-panel || rc=$?
+check "when the shell does not answer it fails, and says so on the screen (the key runs where errors go nowhere)" \
+  "$rc:$(grep -c 'did not answer' "$work/notify.log" 2>/dev/null || true)" "1:1"
 check "and says so, rather than doing nothing, when there is no Quickshell" \
   "$(PATH="/usr/bin-none:/bin-none" /bin/bash "$ROOT/bin/shinobi-shellctl" toggle-panel 2>&1 | head -1)" "shinobi-shellctl: quickshell is not installed"
 
@@ -296,6 +400,11 @@ done
 
 # --- the panel's logic ---------------------------------------------------------------------------
 if ! command -v node >/dev/null 2>&1; then
+  if [[ ${SHINOBI_REQUIRE_NODE:-} == 1 ]]; then
+    echo "  FAIL node is not installed, and SHINOBI_REQUIRE_NODE=1 says the panel's logic must run"
+    printf '\npanel-test: FAIL (node required)\n'
+    exit 1
+  fi
   echo
   echo "  skip: node is not installed, so the panel's logic was not run."
   echo "        The report, the wiring and the colour checks above ran; the report-to-rows checks did not."
@@ -378,6 +487,16 @@ for what in empty garbage other-version no-activity; do
 done
 check "a provider report that cannot be read is unavailable too, not an empty list" \
   "$(model "$work/status.json" "$work/garbage" "$now_ms" | jq_py '(d["sections"][1]["rows"][0]["left"], d["sections"][1]["rows"][0]["tone"])')" "('provider report unavailable', 'warn')"
+printf '{"version":1,"profile":"observer","engagement":{"state":"none"},"approvals":null,"activity":null}' >"$work/sections-null"
+check "a section the report marks unavailable is unavailable on its own, and the rest is shown" \
+  "$(model "$work/sections-null" "$work/readiness.json" "$now_ms" | jq_py '[(s["title"], s["rows"][0]["left"]) for s in d["sections"]][2:]')" \
+  "[('APPROVALS', 'approvals unavailable'), ('ACTIVITY', 'activity unavailable')]"
+printf '{"version":1,"profile":"observer","engagement":{"state":"none"},"approvals":{"pending_count":0,"pending":[],"unreadable":2},"activity":[]}' >"$work/unreadable"
+check "approval records that could not be read are said so, never 'none waiting'" \
+  "$(model "$work/unreadable" "$work/readiness.json" "$now_ms" | jq_py '(d["sections"][2]["rows"][0]["left"], d["sections"][2]["rows"][0]["tone"])')" "('2 approval records could not be read', 'warn')"
+check "a report that has been asked for and has not come is loading, in every section" \
+  "$(model null "$work/readiness.json" "$now_ms" | jq_py '[(s["title"], s["rows"][0]["left"]) for s in d["sections"] if s["title"] != "LLM"]')" \
+  "[('ENGAGEMENT', 'loading…'), ('APPROVALS', 'loading…'), ('ACTIVITY', 'loading…')]"
 printf '{"default":{"id":null},"providers":[]}' >"$work/no-providers"
 check "a readable report with no providers says so" \
   "$(model "$work/status.json" "$work/no-providers" "$now_ms" | jq_py 'd["sections"][1]["rows"][0]["left"]')" "no providers installed"

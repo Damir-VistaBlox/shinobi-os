@@ -26,11 +26,19 @@ case "$action" in
     ;;
   toggle-panel|open-panel|close-panel)
     # The panel (engagement, LLM providers, approvals, activity) lives in the shell and is
-    # reached through Quickshell's IPC; the shell is started from this config directory.
-    # The key bound to toggle-panel runs this, so it must say so when there is no shell
-    # to talk to rather than do nothing.
+    # reached through Quickshell's IPC. The shell is found by the path it was started with,
+    # and shinobi-shell.service starts it with %h/.config/quickshell: spelled the same here
+    # (not from XDG_CONFIG_HOME, which the unit does not read), with --any-display so a
+    # caller without the session's WAYLAND_DISPLAY (ssh, a service, an agent's shell) finds it.
+    # The key bound to this runs from Hyprland, where an error goes nowhere, so a failure is
+    # also shown as a notification rather than leaving a key that silently does nothing.
     command -v quickshell >/dev/null 2>&1 || { echo "shinobi-shellctl: quickshell is not installed" >&2; exit 127; }
-    exec quickshell ipc --path "${XDG_CONFIG_HOME:-$HOME/.config}/quickshell" call panel "${action%-panel}"
+    if ! quickshell ipc --any-display --path "$HOME/.config/quickshell" call panel "${action%-panel}"; then
+      if command -v notify-send >/dev/null 2>&1; then
+        notify-send -u low "Shinobi panel" "The desktop shell did not answer. Try: shinobi shellctl reload" || true
+      fi
+      exit 1
+    fi
     ;;
   -h|--help|help) echo 'Usage: shinobi shellctl <status|reload|open-menu|close-menu|toggle-menu|toggle-panel|open-panel|close-panel>' ;;
   *) echo "shinobi-shellctl: unknown action '$action'" >&2; exit 2 ;;

@@ -7,6 +7,11 @@ import Quickshell.Wayland
 import "ProviderStatus.js" as ProviderStatus
 import "PanelModel.js" as PanelModel
 
+// Every Text below is PlainText (and so is every one in Panel.qml). Qt's default format treats
+// a string that looks like markup as rich text and fetches what it points at, and the strings
+// shown here are not all ours: the active window's title is whatever a web page or a terminal
+// says it is, and an <img> in one would make the shell make a network request on its own.
+//
 // Shinobi's intentionally small Quickshell surface. It replaces Waybar, but
 // leaves application picking to wofi and notifications to mako. Keeping the
 // shell focused makes it fast to start and easy to reason about on a live ISO.
@@ -36,7 +41,7 @@ ShellRoot {
   property bool panelOpen: false
   property var panelContent: ({ sections: [], footer: "" })
   property string readinessText: ""
-  property string panelStatusText: ""
+  property var panelStatusText: null
   property bool panelAnswered: false
 
   function run(command) {
@@ -101,7 +106,10 @@ ShellRoot {
   function setPanel(open) {
     root.panelOpen = open
     if (open) {
-      // Show what is known at once and bring it up to date: opening must not wait on a probe.
+      // Whatever was shown when it was last closed is old: forget it, show "loading" (the
+      // providers are known already) and ask again. null, not "", because "" means the probe
+      // answered nothing.
+      root.panelStatusText = null
       root.rebuildPanel()
       root.refreshPanel()
       root.refreshProvider()
@@ -210,7 +218,9 @@ ShellRoot {
     // Same shape as the provider probe above: one newline-terminated line, and "no answer"
     // is reported as such (an empty line) so the panel says unavailable instead of keeping
     // what it showed before.
-    command: ["sh", "-c", "shinobi panel status --json 2>/dev/null | tr -d '\\n'; echo"]
+    // A deadline, so a report that never comes (a pipe where a log should be, a stuck disk)
+    // ends as "unavailable" instead of leaving the last answer on screen for good.
+    command: ["sh", "-c", "timeout 8 shinobi panel status --json 2>/dev/null | tr -d '\\n'; echo"]
     stdout: SplitParser {
       onRead: function(line) {
         if (String(line).length === 0) return
@@ -288,6 +298,7 @@ ShellRoot {
       id: text
       anchors.centerIn: parent
       text: button.label
+      textFormat: Text.PlainText
       color: hover.hovered ? theme.background : button.foreground
       font.family: "JetBrainsMono Nerd Font Mono"
       font.pixelSize: 13
@@ -316,6 +327,7 @@ ShellRoot {
       id: pillText
       anchors.centerIn: parent
       text: pill.label
+      textFormat: Text.PlainText
       color: pill.ink
       font.family: "JetBrainsMono Nerd Font Mono"
       font.pixelSize: 12
@@ -382,6 +394,7 @@ ShellRoot {
           Text {
             Layout.fillWidth: true
             text: "󰆍  " + root.activeWindow
+            textFormat: Text.PlainText
             color: theme.foreground
             elide: Text.ElideRight
             font.family: "JetBrainsMono Nerd Font Mono"
@@ -397,12 +410,14 @@ ShellRoot {
 
           Text {
             text: "•"
+            textFormat: Text.PlainText
             color: theme.border
             font.pixelSize: 16
           }
 
           Text {
             text: root.clockText
+            textFormat: Text.PlainText
             color: theme.foreground
             font.family: "JetBrainsMono Nerd Font Mono"
             font.pixelSize: 12

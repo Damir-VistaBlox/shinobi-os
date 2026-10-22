@@ -764,7 +764,9 @@ an operator's configuration either — homes are completed rather than synced, a
   what the agent's tools last did. It is somewhere to look, not to decide.
   Approving, clearing egress or choosing a provider stay in the CLI and the wofi
   menu, where the thing being decided is printed in full; the panel names the
-  command. `shinobi panel status --json` is the one report it reads: it writes
+  command. `shinobi panel status --json` is the report for its engagement,
+  approvals and activity sections (the providers come from the readiness report
+  the bar already polls). It writes
   nothing (opening the panel leaves no trace and cannot consume an approval),
   reads the scope as the gate does so a scope the gate would refuse is shown as a
   problem and not as a list of targets, leaves approval arguments and log
