@@ -6,6 +6,12 @@ import Quickshell.Io
 import Quickshell.Wayland
 import "ProviderStatus.js" as ProviderStatus
 
+// Every Text in this shell is PlainText. Qt's default format treats a string that looks like
+// markup as rich text and fetches what it points at, and the strings shown here are not all
+// ours: the active window's title is whatever a web page or a terminal says it is (a target's
+// output can set a terminal's title), and an <img> in one would make the shell make a network
+// request on its own, outside the gate, from the operator's workstation.
+//
 // Shinobi's intentionally small Quickshell surface. It replaces Waybar, but
 // leaves application picking to wofi and notifications to mako. Keeping the
 // shell focused makes it fast to start and easy to reason about on a live ISO.
@@ -209,6 +215,7 @@ ShellRoot {
       id: text
       anchors.centerIn: parent
       text: button.label
+      textFormat: Text.PlainText
       color: hover.hovered ? theme.background : button.foreground
       font.family: "JetBrainsMono Nerd Font Mono"
       font.pixelSize: 13
@@ -236,6 +243,7 @@ ShellRoot {
       id: pillText
       anchors.centerIn: parent
       text: pill.label
+      textFormat: Text.PlainText
       color: pill.ink
       font.family: "JetBrainsMono Nerd Font Mono"
       font.pixelSize: 12
@@ -295,6 +303,7 @@ ShellRoot {
           Text {
             Layout.fillWidth: true
             text: "󰆍  " + root.activeWindow
+            textFormat: Text.PlainText
             color: theme.foreground
             elide: Text.ElideRight
             font.family: "JetBrainsMono Nerd Font Mono"
@@ -309,12 +318,14 @@ ShellRoot {
 
           Text {
             text: "•"
+            textFormat: Text.PlainText
             color: theme.border
             font.pixelSize: 16
           }
 
           Text {
             text: root.clockText
+            textFormat: Text.PlainText
             color: theme.foreground
             font.family: "JetBrainsMono Nerd Font Mono"
             font.pixelSize: 12
