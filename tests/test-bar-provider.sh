@@ -55,6 +55,16 @@ check "a failed probe is shown as unknown (the exit handler), not left as the la
 check "the report is refreshed when the engagement changes, since clearance is per engagement" \
   "$(grep -c 'if (changed) refreshProvider()' "$QS/shell.qml" || true)" "1"
 
+section "the bar shows text as text"
+# Qt renders a string that looks like markup as rich text by default and fetches what it points at.
+# The active window's title is shown in the bar, and a web page or a target's terminal output can
+# set it: `<img src="http://attacker/...">` would make the shell request it from the operator's
+# workstation, outside the gate. Every Text has to be PlainText.
+for qml in "$QS"/*.qml; do
+  check "every Text in ${qml##*/} is plain text" \
+    "$(grep -cE '^[[:space:]]*Text \{' "$qml" || true)" "$(grep -c 'textFormat: Text.PlainText' "$qml" || true)"
+done
+
 section "every colour the bar asks for exists in every theme"
 used="$(grep -oE 'theme\.[A-Za-z]+' "$QS/shell.qml" | sort -u | sed 's/^theme\.//')"
 check "shell.qml uses colours (the check below would pass on an empty list)" \
