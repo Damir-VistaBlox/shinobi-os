@@ -18,6 +18,34 @@ grep -Eqi 'El Torito|Boot catalog|boot image' "$report" || {
   exit 1
 }
 
+echo "== The medium is labelled as Shinobi =="
+# The volume id is what a file manager and blkid show for the stick, and Kali's build
+# configuration names it "Kali Live". It is read with -pvd_info, which prints it on
+# stdout: the "Volume id" line of the -indev status that the report above comes with is
+# written to stderr, so reading the report for it finds nothing (and under pipefail that
+# ended the script without a word).
+pvd="$(xorriso -indev "$ISO" -pvd_info 2>/dev/null || true)"
+volume_id="$(sed -n 's/^Volume Id *: *//p' <<<"$pvd")"
+if [[ -z "$volume_id" || "$volume_id" == *[Kk]ali* ]]; then
+  echo "iso-test: the ISO's volume id is '${volume_id}', not Shinobi's" >&2
+  exit 1
+fi
+echo "volume id: $volume_id"
+# The application and the publisher are patched by the same sed as the volume. ISO 9660
+# stores them upper-case; the publisher names Kali on purpose ("built on Kali Linux"), so
+# it is only the bare base-distribution name that is wrong.
+app_id="$(sed -n 's/^App Id *: *//p' <<<"$pvd")"
+publisher_id="$(sed -n 's/^Publisher Id *: *//p' <<<"$pvd")"
+if [[ -z "$app_id" || "${app_id,,}" == *kali* ]]; then
+  echo "iso-test: the ISO's application id is '${app_id}', not Shinobi's" >&2
+  exit 1
+fi
+if [[ -z "$publisher_id" || "${publisher_id,,}" == kali ]]; then
+  echo "iso-test: the ISO's publisher id is '${publisher_id}', not Shinobi's" >&2
+  exit 1
+fi
+echo "application id: $app_id; publisher id: $publisher_id"
+
 echo "== Boot menus carry no unsubstituted placeholder =="
 # live-build fills @LINUX@, @INITRD@, @APPEND_LIVE@ and friends into the boot menu
 # files it generates from its templates, and only those. A placeholder in an overlay

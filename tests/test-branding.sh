@@ -76,7 +76,7 @@ allowlist() {
 # label, a hostname, an account name or a package description.
 strip_comments() {
   case "$1" in
-    *.cfg | *grub.cfg | *.conf | *.desc | *.desktop)
+    *.cfg | *.cfg.in | *grub.cfg | *.conf | *.desc | *.desktop)
       # Whole-line comments first, then trailing ones: a boot menu and a QML
       # file are mostly comments, and requiring whitespace before the marker
       # misses every one of them.
@@ -89,15 +89,9 @@ strip_comments() {
 # Operator-visible mentions that are correct, with the reason. These are printed
 # when the audit runs, so the list cannot rot unnoticed: an allowance nobody
 # reads is how a list of exceptions turns into a list of things nobody checks.
-allowed_mentions=(
-  # Kali's own installer, in the Advanced submenu, labelled as what it is. It is
-  # kept as a fallback for a machine the wizard cannot handle, and it installs
-  # Kali without any of Shinobi's layer -- calling it "Start installer" beside
-  # ours is how somebody ends up with the wrong system and no idea why.
-  'menuentry "Kali installer'
-  # The same, named on the speech-synthesis entry.
-  'menuentry "Kali installer with speech synthesis'
-)
+# There are none. Kali's own installer used to be allowed here, as a labelled fallback
+# on the UEFI menu; it is not on either menu now.
+allowed_mentions=()
 
 section "no operator-visible text presents Kali as the product"
 for dir in "${audited[@]}"; do
@@ -120,8 +114,8 @@ for dir in "${audited[@]}"; do
 done
 
 echo
-echo "  allowed operator-visible mentions:"
-for allowance in "${allowed_mentions[@]}"; do
+echo "  allowed operator-visible mentions: ${#allowed_mentions[@]}"
+for allowance in ${allowed_mentions[@]+"${allowed_mentions[@]}"}; do
   echo "    $allowance"
 done
 section "the boot menu leads with Shinobi"
@@ -137,6 +131,35 @@ check "the syslinux menu includes our entries" \
   "$(grep -c 'include shinobi-installer.cfg' "$menu" || true)" "1"
 check "the syslinux installer entry is labelled as Shinobi's" \
   "$(grep -c 'menu label \^Install Shinobi OS' "$syslinux" || true)" "1"
+live_in="$ROOT/distro/overlay/bootloaders/bootloaders/syslinux_common/live.cfg.in"
+# Executable lines only: these files explain at length why the Kali entries are gone.
+menu_code() { grep -vE '^[[:space:]]*#' "$@"; }
+check "neither menu offers Kali's own installer (it installs plain Kali, without the layer)" \
+  "$(menu_code "$grub" "$menu" | grep -ciE 'kali installer|install_start|install\.cfg|ENABLE_INSTALL_MENU|OPTIONAL_INSTALLER_INCLUDE|Advanced install' || true)" "0"
+check "the BIOS live entries are ours, so none boots an account called kali" \
+  "$(menu_code "$live_in" | grep -c 'username=kali' || true)" "0"
+check "and the persistence and forensic entries name the account Shinobi's way" \
+  "$(menu_code "$live_in" | grep -c 'username=shinobi hostname=shinobi' || true)" "3"
+check "and no menu points the operator at the base distribution's website" \
+  "$(menu_code "$live_in" "$grub" "$menu" "$syslinux" | grep -ci 'kali\.org' || true)" "0"
+check "the BIOS template keeps the placeholders live-build fills in (it generates live.cfg from this file)" \
+  "$(menu_code "$live_in" | grep -c '@LINUX@' || true)" "5"
+check "the ISO is labelled as Shinobi, not as Kali Live (build.sh patches Kali's auto/config)" \
+  "$(grep -c -- 's|--iso-volume "Kali Live"|--iso-volume "Shinobi OS"|' "$ROOT/distro/build.sh" || true)" "1"
+# The check above only proves the patch is still written in build.sh. It rewrites three
+# options of Kali's auto/config by their exact text; if a submodule bump changes the
+# quoting or the order, the sed turns into a silent no-op and only a finished ISO shows it.
+kali_auto_config="$ROOT/distro/kali-live/auto/config"
+if [[ -f $kali_auto_config ]]; then
+  check "Kali's auto/config still has the three options build.sh rewrites, each once" \
+    "$(grep -cE '^[[:space:]]*--iso-(application "Kali Linux"|publisher "Kali"|volume "Kali Live") \\$' "$kali_auto_config" || true)" "3"
+  check "and build.sh patches the application and the publisher as well as the volume" \
+    "$(grep -cF -e 's|--iso-application "Kali Linux"|--iso-application "Shinobi OS"|' -e 's|--iso-publisher "Kali"|--iso-publisher "Shinobi OS' "$ROOT/distro/build.sh" || true)" "2"
+else
+  echo "  skip: distro/kali-live is not checked out, so Kali's auto/config was not compared with the label patch."
+fi
+check "the installed system's GRUB background is Shinobi's, and the picture ships in shinobi-desktop" \
+  "$(bg=$(sed -n 's/^[[:space:]]*GRUB_BACKGROUND:[[:space:]]*"\(.*\)"/\1/p' "$ROOT/packaging/shinobi-installer/etc/calamares/modules/grubcfg.conf"); [[ -n $bg && -s $ROOT/packaging/shinobi-desktop$bg ]] && echo yes || echo no)" "yes"
 check "the GRUB menu keeps the live entry" \
   "$(grep -c 'menuentry "Live system (@FLAVOUR_LIVE@ forensic mode)"' "$grub" || true)" "1"
 
@@ -151,8 +174,17 @@ check "our syslinux entry names the account" \
   "$(grep -c 'username=shinobi hostname=shinobi' "$syslinux" || true)" "2"
 check "live-config is configured to create it too, as a second path" \
   "$(grep -qE '^[[:space:]]*LIVE_USERNAME="shinobi"' "$ROOT/distro/overlay/includes.chroot/etc/live/config.conf.d/shinobi.conf" && echo yes || echo no)" "yes"
-check "our file is the one that wins" \
-  "$([[ distro/overlay/includes.chroot/etc/live/config.conf.d/shinobi.conf > distro/kali-live/kali-config/common/includes.chroot/etc/live/config.conf.d/kali.conf ]] && echo yes || echo no)" "yes"
+# live-config reads the files of config.conf.d in name order, so the later name wins. This
+# used to compare the two whole paths as strings, which is decided by "overlay" against
+# "kali-live" and says yes whatever the files are called.
+ours_conf="$ROOT/distro/overlay/includes.chroot/etc/live/config.conf.d/shinobi.conf"
+kalis_dir="$ROOT/distro/kali-live/kali-config/common/includes.chroot/etc/live/config.conf.d"
+check "our file is the one that wins (it exists, and its name sorts after Kali's kali.conf)" \
+  "$([[ -f $ours_conf && $(basename "$ours_conf") > kali.conf ]] && echo yes || echo no)" "yes"
+if [[ -d $kalis_dir ]]; then
+  check "and Kali's file is still called kali.conf (the comparison above names it)" \
+    "$([[ -f $kalis_dir/kali.conf ]] && echo yes || echo no)" "yes"
+fi
 # The hook does not rename anything. A build chroot has no login account (Kali
 # creates its own at boot), so a hook that asked the engine to apply the layer to
 # "the" account exited 1 and aborted the build; and the account is created under

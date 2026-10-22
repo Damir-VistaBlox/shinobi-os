@@ -1,0 +1,43 @@
+# The live entries of the BIOS boot menu.
+#
+# This replaces Kali's template of the same name. Kali's carried three things a Shinobi
+# menu cannot: a "(check kali.org/prst)" pointer on the persistence entry, which sends an
+# operator to the base distribution's website from a boot menu whose job is not to; and
+# `username=kali hostname=kali` on the forensic and persistence entries, which live-config
+# prefers to anything in /etc/live/config.conf.d, so those three entries booted an
+# account called kali on a machine called kali while every other entry booted shinobi.
+# The UEFI menu (grub-pc/grub.cfg) already has the same entries without either.
+#
+# live-build fills the @...@ placeholders in this file when it generates live.cfg from it,
+# exactly as it does for Kali's. (It does not fill them in any other file in this
+# directory: see shinobi-installer.cfg for what that cost.)
+label live-@FLAVOUR@
+        menu label ^Live system (@FLAVOUR@)
+        menu default
+        linux @LINUX@
+        initrd @INITRD@
+        append @APPEND_LIVE@
+
+label live-@FLAVOUR@-failsafe
+        menu label Live system (@FLAVOUR@ fail-safe mode)
+        linux @LINUX@
+        initrd @INITRD@
+        append @APPEND_LIVE_FAILSAFE@
+
+label live-forensic
+        menu label Live system (@FLAVOUR@ ^forensic mode)
+        linux @LINUX@
+        initrd @INITRD@
+        append boot=live username=shinobi hostname=shinobi systemd.swap=no noautomount
+
+label live-persistence
+        menu label Live system with ^USB persistence
+        linux @LINUX@
+        initrd @INITRD@
+        append boot=live username=shinobi hostname=shinobi persistence
+
+label live-encrypted-persistence
+        menu label Live system with USB ^Encrypted persistence
+        linux @LINUX@
+        initrd @INITRD@
+        append boot=live persistent=cryptsetup persistence-encryption=luks username=shinobi hostname=shinobi persistence
