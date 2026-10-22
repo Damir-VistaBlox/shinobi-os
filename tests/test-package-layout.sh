@@ -375,6 +375,7 @@ trap "$desktop_trap" RETURN
 for f in \
   usr/share/shinobi-dotfiles/etc/skel/.config/hypr/hyprland.conf \
   usr/share/shinobi-dotfiles/etc/skel/.config/quickshell/shell.qml \
+  usr/share/shinobi-dotfiles/etc/skel/.config/quickshell/ProviderStatus.js \
   usr/share/shinobi-dotfiles/etc/skel/.config/wofi/config \
   usr/share/backgrounds/shinobi-os/shinobi-night.png \
   usr/share/plymouth/themes/shinobi/shinobi.plymouth \
@@ -456,6 +457,13 @@ check "and rejects a session whose commands nothing depends on" \
 check "and rejects one whose shell config is missing" \
   "$(copy="$(mktemp -d)"; cp -a "$desktop_stage/." "$copy/"; \
      rm -f "$copy/usr/share/shinobi-dotfiles/etc/skel/.config/quickshell/shell.qml"; \
+     "$copy/usr/lib/shinobi/shinobi-desktop-check" >/dev/null 2>&1 && echo passed || echo rejected)" "rejected"
+
+# shell.qml imports ProviderStatus.js. A QML file whose import cannot be found does not load
+# at all, so without the helper the whole bar is blank, not just its LLM pill.
+check "and one that lacks the helper the bar imports" \
+  "$(copy="$(mktemp -d)"; cp -a "$desktop_stage/." "$copy/"; \
+     rm -f "$copy/usr/share/shinobi-dotfiles/etc/skel/.config/quickshell/ProviderStatus.js"; \
      "$copy/usr/lib/shinobi/shinobi-desktop-check" >/dev/null 2>&1 && echo passed || echo rejected)" "rejected"
 
 echo

@@ -4,7 +4,14 @@ import Quickshell
 import Quickshell.Hyprland
 import Quickshell.Io
 import Quickshell.Wayland
+import "ProviderStatus.js" as ProviderStatus
 
+// Every Text in this shell is PlainText. Qt's default format treats a string that looks like
+// markup as rich text and fetches what it points at, and the strings shown here are not all
+// ours: the active window's title is whatever a web page or a terminal says it is (a target's
+// output can set a terminal's title), and an <img> in one would make the shell make a network
+// request on its own, outside the gate, from the operator's workstation.
+//
 // Shinobi's intentionally small Quickshell surface. It replaces Waybar, but
 // leaves application picking to wofi and notifications to mako. Keeping the
 // shell focused makes it fast to start and easy to reason about on a live ISO.
@@ -23,6 +30,11 @@ ShellRoot {
   property string agentState: "offline"
   property string contextState: "offline"
   property string trustProfile: "observer"
+  // What the default LLM provider could do right now, from `shinobi provider
+  // readiness --json` (ProviderStatus.js shortens it). Unknown until the first answer.
+  property string providerLabel: "LLM ?"
+  property string providerTone: "muted"
+  property bool providerAnswered: false
 
   function run(command) {
     // Process has one mutable command slot. Ignore an accidental rapid
@@ -34,7 +46,11 @@ ShellRoot {
 
   function setEngagement(value) {
     var normalized = String(value).trim()
-    engagement = normalized.length > 0 ? normalized : "no engagement"
+    var next = normalized.length > 0 ? normalized : "no engagement"
+    var changed = next !== engagement
+    engagement = next
+    // Clearance is per engagement, so the provider's readiness changes with it.
+    if (changed) refreshProvider()
   }
 
   function refreshEngagement() {
@@ -47,6 +63,19 @@ ShellRoot {
 
   function refreshControlPlane() {
     if (!controlProbe.running) controlProbe.running = true
+  }
+
+  function refreshProvider() {
+    if (providerProbe.running) return
+    root.providerAnswered = false
+    providerProbe.running = true
+  }
+
+  function updateProvider(text) {
+    var summary = ProviderStatus.summarize(text)
+    root.providerAnswered = true
+    root.providerLabel = summary.label
+    root.providerTone = summary.tone
   }
 
   function updateControlPlane(line) {
@@ -74,6 +103,7 @@ ShellRoot {
     root.refreshEngagement()
     root.refreshActiveWindow()
     root.refreshControlPlane()
+    root.refreshProvider()
   }
 
   Timer {
@@ -89,7 +119,10 @@ ShellRoot {
     interval: 10000
     running: true
     repeat: true
-    onTriggered: root.refreshControlPlane()
+    onTriggered: {
+      root.refreshControlPlane()
+      root.refreshProvider()
+    }
   }
 
   // FileView gives immediate updates for normal engagement changes. The slow
@@ -119,6 +152,16 @@ ShellRoot {
     id: controlProbe
     command: ["sh", "-c", "shinobi agent status 2>/dev/null | tr -d '\\n'"]
     stdout: SplitParser { onRead: function(line) { root.updateControlPlane(line) } }
+  }
+
+  Process {
+    id: providerProbe
+    // One line, newline-terminated, so the parser hands it over whole. A failed
+    // command prints only the newline (stderr is dropped): the exit handler turns
+    // "no answer" into "unknown" instead of leaving the last good answer on screen.
+    command: ["sh", "-c", "shinobi provider readiness --json 2>/dev/null | tr -d '\\n'; echo"]
+    stdout: SplitParser { onRead: function(line) { if (String(line).length > 0) root.updateProvider(line) } }
+    onExited: function(exitCode, exitStatus) { if (!root.providerAnswered) root.updateProvider("") }
   }
 
   Process {
@@ -172,6 +215,7 @@ ShellRoot {
       id: text
       anchors.centerIn: parent
       text: button.label
+      textFormat: Text.PlainText
       color: hover.hovered ? theme.background : button.foreground
       font.family: "JetBrainsMono Nerd Font Mono"
       font.pixelSize: 13
@@ -186,6 +230,8 @@ ShellRoot {
     property string label: ""
     property color ink: theme.foreground
     property color fill: "transparent"
+    // Optional: what a click runs. A pill with none is only a readout.
+    property string command: ""
     implicitWidth: pillText.implicitWidth + 18
     implicitHeight: 26
     radius: 3
@@ -197,10 +243,15 @@ ShellRoot {
       id: pillText
       anchors.centerIn: parent
       text: pill.label
+      textFormat: Text.PlainText
       color: pill.ink
       font.family: "JetBrainsMono Nerd Font Mono"
       font.pixelSize: 12
       font.bold: true
+    }
+    TapHandler {
+      enabled: pill.command.length > 0
+      onTapped: root.run(pill.command)
     }
   }
 
@@ -234,6 +285,14 @@ ShellRoot {
             ink: root.agentState === "ready" ? theme.good : theme.muted
             fill: root.agentState === "ready" ? theme.safeSurface : theme.inactiveSurface
           }
+          // Which LLM the agent would use and, if it could not, the first thing in
+          // the way. A click opens the provider menu, where the fix is.
+          StatusPill {
+            label: root.providerLabel
+            ink: root.providerTone === "good" ? theme.good : (root.providerTone === "warn" ? theme.warn : theme.muted)
+            fill: root.providerTone === "good" ? theme.safeSurface : theme.inactiveSurface
+            command: "shinobi-menu provider"
+          }
           StatusPill {
             label: "CTX " + root.contextState
             ink: root.contextState === "ready" ? theme.good : theme.muted
@@ -244,6 +303,7 @@ ShellRoot {
           Text {
             Layout.fillWidth: true
             text: "󰆍  " + root.activeWindow
+            textFormat: Text.PlainText
             color: theme.foreground
             elide: Text.ElideRight
             font.family: "JetBrainsMono Nerd Font Mono"
@@ -258,12 +318,14 @@ ShellRoot {
 
           Text {
             text: "•"
+            textFormat: Text.PlainText
             color: theme.border
             font.pixelSize: 16
           }
 
           Text {
             text: root.clockText
+            textFormat: Text.PlainText
             color: theme.foreground
             font.family: "JetBrainsMono Nerd Font Mono"
             font.pixelSize: 12

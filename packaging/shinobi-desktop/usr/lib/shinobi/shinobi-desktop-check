@@ -42,6 +42,7 @@ for required in \
   .config/hypr/hypridle.conf \
   .config/quickshell/shell.qml \
   .config/quickshell/Theme.qml \
+  .config/quickshell/ProviderStatus.js \
   .config/wofi/config \
   .config/wofi/style.css \
   .config/kitty/kitty.conf
